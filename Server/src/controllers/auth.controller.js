@@ -1,4 +1,5 @@
 import * as authService from "../services/auth.service.js";
+import User from "../db/models/user.model.js";
 
 export const register = async (req, res, next) => {
   try {
@@ -90,6 +91,17 @@ export const getCurrentUser = async (req, res, next) => {
       return res.status(401).json({
         status: "fail",
         message: "No hay sesión activa",
+      });
+    }
+
+    // Verificar que el usuario exista en la base de datos para prevenir sesiones huérfanas
+    const userExists = await User.findById(req.session.user.id);
+    if (!userExists) {
+      req.session.destroy();
+      res.clearCookie("connect.sid");
+      return res.status(401).json({
+        status: "fail",
+        message: "El usuario ya no existe o su cuenta fue eliminada",
       });
     }
 
