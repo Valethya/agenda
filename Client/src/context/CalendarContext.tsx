@@ -55,7 +55,7 @@ export const CalendarProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       // Authenticate
       const userRes = await api.getCurrentUser();
       if (!userRes || userRes.status !== "success") {
-        window.location.href = "/admin/login";
+        window.location.href = "/login";
         return;
       }
       const loggedUser = userRes.payload || userRes.user;
@@ -91,7 +91,7 @@ export const CalendarProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       setError("Ocurrió un error al cargar la información del panel.");
       // If unauthorized, redirect to login
       if (err.message?.includes("401")) {
-        window.location.href = "/admin/login";
+        window.location.href = "/login";
       }
     } finally {
       setLoading(false);
@@ -159,7 +159,7 @@ export const CalendarProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     try {
       const res = await api.logout();
       if (res && res.status === "success") {
-        window.location.href = "/admin/login";
+        window.location.href = "/login";
       }
     } catch (err) {
       console.error("Error logging out:", err);
