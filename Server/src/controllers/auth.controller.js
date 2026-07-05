@@ -1,5 +1,6 @@
 import * as authService from "../services/auth.service.js";
 import User from "../db/models/user.model.js";
+import Membership from "../db/models/membership.model.js";
 
 export const register = async (req, res, next) => {
   try {
@@ -18,22 +19,70 @@ export const login = async (req, res, next) => {
   try {
     const { email, password } = req.body;
     const user = await authService.login(email, password);
-    req.session.user = {
+
+    // Si es superadmin
+    if (user.role === "superadmin") {
+      req.session.user = {
+        id: user.id,
+        firstName: user.firstName,
+        lastName: user.lastName,
+        email: user.email,
+        role: "superadmin",
+      };
+      return req.session.save((err) => {
+        if (err) return next(err);
+        res.status(201).json({
+          status: "success",
+          message: "Login exitoso como superadmin",
+          user: req.session.user,
+          payload: req.session.user,
+        });
+      });
+    }
+
+    if (!user.memberships || user.memberships.length === 0) {
+      throw new UnauthorizedError("Tu cuenta no tiene ningún negocio asociado");
+    }
+
+    // Si tiene exactamente 1 negocio
+    if (user.memberships.length === 1) {
+      const active = user.memberships[0];
+      req.session.user = {
+        id: user.id,
+        firstName: user.firstName,
+        lastName: user.lastName,
+        email: user.email,
+        role: active.role,
+        businessId: active.businessId,
+        businessSlug: active.businessSlug,
+      };
+      return req.session.save((err) => {
+        if (err) return next(err);
+        res.status(201).json({
+          status: "success",
+          message: "Login exitoso",
+          user: req.session.user,
+          payload: req.session.user,
+        });
+      });
+    }
+
+    // Si tiene múltiples negocios, guardamos en sesión temporal para selección posterior
+    req.session.tempUser = {
       id: user.id,
       firstName: user.firstName,
       lastName: user.lastName,
       email: user.email,
       role: user.role,
-      businessId: user.business?._id || user.business,
-      businessSlug: user.business?.slug,
+      memberships: user.memberships,
     };
+
     req.session.save((err) => {
       if (err) return next(err);
-      res.status(201).json({
-        status: "succes",
-        message: "login exitoso",
-        user,
-        payload: user,
+      res.status(200).json({
+        status: "needs_selection",
+        message: "Se requiere seleccionar un negocio",
+        memberships: user.memberships,
       });
     });
   } catch (error) {
@@ -61,21 +110,161 @@ export const googleLogin = async (req, res, next) => {
     const { idToken } = req.body;
     const user = await authService.loginWithGoogle(idToken);
 
-    req.session.user = {
+    // Si es superadmin
+    if (user.role === "superadmin") {
+      req.session.user = {
+        id: user.id,
+        firstName: user.firstName,
+        lastName: user.lastName,
+        email: user.email,
+        role: "superadmin",
+      };
+      return req.session.save((err) => {
+        if (err) return next(err);
+        res.status(200).json({
+          status: "success",
+          message: "Login con Google exitoso como superadmin",
+          user: req.session.user,
+          payload: req.session.user,
+        });
+      });
+    }
+
+    if (!user.memberships || user.memberships.length === 0) {
+      throw new UnauthorizedError("Tu cuenta no tiene ningún negocio asociado");
+    }
+
+    // Si tiene exactamente 1 negocio
+    if (user.memberships.length === 1) {
+      const active = user.memberships[0];
+      req.session.user = {
+        id: user.id,
+        firstName: user.firstName,
+        lastName: user.lastName,
+        email: user.email,
+        role: active.role,
+        businessId: active.businessId,
+        businessSlug: active.businessSlug,
+      };
+      return req.session.save((err) => {
+        if (err) return next(err);
+        res.status(200).json({
+          status: "success",
+          message: "Login con Google exitoso",
+          user: req.session.user,
+          payload: req.session.user,
+        });
+      });
+    }
+
+    // Si tiene múltiples negocios
+    req.session.tempUser = {
       id: user.id,
       firstName: user.firstName,
       lastName: user.lastName,
       email: user.email,
       role: user.role,
-      businessId: user.business?._id || user.business,
-      businessSlug: user.business?.slug,
+      memberships: user.memberships,
     };
 
     req.session.save((err) => {
       if (err) return next(err);
       res.status(200).json({
+        status: "needs_selection",
+        message: "Se requiere seleccionar un negocio",
+        memberships: user.memberships,
+      });
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const selectMembership = async (req, res, next) => {
+  try {
+    const { membershipId } = req.body;
+    if (!req.session.tempUser) {
+      throw new UnauthorizedError("No hay una sesión temporal activa. Inicia sesión nuevamente.");
+    }
+
+    const selected = req.session.tempUser.memberships.find(m => m.id.toString() === membershipId);
+    if (!selected) {
+      throw new ValidationError("La membresía seleccionada es inválida para este usuario");
+    }
+
+    req.session.user = {
+      id: req.session.tempUser.id,
+      firstName: req.session.tempUser.firstName,
+      lastName: req.session.tempUser.lastName,
+      email: req.session.tempUser.email,
+      role: selected.role,
+      businessId: selected.businessId,
+      businessSlug: selected.businessSlug,
+    };
+
+    delete req.session.tempUser; // Limpiar sesión temporal
+
+    req.session.save((err) => {
+      if (err) return next(err);
+      res.status(200).json({
         status: "success",
-        message: "Login con Google exitoso",
+        message: "Negocio seleccionado con éxito",
+        user: req.session.user,
+        payload: req.session.user,
+      });
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const switchBusiness = async (req, res, next) => {
+  try {
+    const { businessId } = req.body;
+    if (!req.session.user) {
+      throw new UnauthorizedError("Inicia sesión para cambiar de negocio");
+    }
+
+    // Si es superadmin, tiene acceso a cualquier negocio
+    if (req.session.user.role === "superadmin") {
+      const BusinessModel = (await import("../db/models/business.model.js")).default;
+      const targetBusiness = await BusinessModel.findById(businessId);
+      if (!targetBusiness) {
+        throw new ValidationError("El negocio especificado no existe");
+      }
+      req.session.user.businessId = targetBusiness._id;
+      req.session.user.businessSlug = targetBusiness.slug;
+      
+      return req.session.save((err) => {
+        if (err) return next(err);
+        res.status(200).json({
+          status: "success",
+          message: "Cambiado de negocio como superadmin",
+          user: req.session.user,
+          payload: req.session.user,
+        });
+      });
+    }
+
+    const membership = await Membership.findOne({
+      user: req.session.user.id,
+      business: businessId,
+      isActive: true,
+    }).populate("business");
+
+    if (!membership) {
+      throw new UnauthorizedError("No tienes acceso a este negocio");
+    }
+
+    req.session.user.businessId = membership.business._id;
+    req.session.user.businessSlug = membership.business.slug;
+    req.session.user.role = membership.role;
+
+    req.session.save((err) => {
+      if (err) return next(err);
+      res.status(200).json({
+        status: "success",
+        message: "Cambiado de negocio exitosamente",
         user: req.session.user,
         payload: req.session.user,
       });
@@ -105,10 +294,28 @@ export const getCurrentUser = async (req, res, next) => {
       });
     }
 
+    // Buscar membresías para inyectarlas al frontend (para el switch de negocio)
+    let membershipsPayload = [];
+    if (req.session.user.role !== "superadmin") {
+      const memberships = await Membership.find({ user: req.session.user.id, isActive: true }).populate("business");
+      membershipsPayload = memberships.map((m) => ({
+        id: m._id,
+        businessId: m.business?._id,
+        businessName: m.business?.name,
+        businessSlug: m.business?.slug,
+        role: m.role,
+      }));
+    }
+
+    const userPayload = {
+      ...req.session.user,
+      memberships: membershipsPayload
+    };
+
     res.status(200).json({
       status: "success",
-      user: req.session.user,
-      payload: req.session.user,
+      user: userPayload,
+      payload: userPayload,
     });
   } catch (error) {
     next(error);

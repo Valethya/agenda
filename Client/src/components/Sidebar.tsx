@@ -23,7 +23,19 @@ const ALL_NAV_ITEMS: NavItemDef[] = [
 const SECTIONS = ['Agenda', 'Clientes', 'Negocio', 'Sistema'] as const;
 
 export const Sidebar: React.FC = () => {
-  const { viewType, setViewType, businessConfig, currentUser, logoutUser } = useCalendar();
+  const { viewType, setViewType, businessConfig, currentUser, logoutUser, switchWorkspace } = useCalendar();
+  const [showWorkspaceDropdown, setShowWorkspaceDropdown] = React.useState(false);
+  const dropdownRef = React.useRef<HTMLDivElement>(null);
+
+  React.useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
+        setShowWorkspaceDropdown(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
 
   const handleNavClick = (id: string) => {
     if (id === 'calendario') {
@@ -42,9 +54,43 @@ export const Sidebar: React.FC = () => {
 
   return (
     <aside className={styles.sidebar}>
-      <div className={styles.logo}>
+      <div className={styles.logo} ref={dropdownRef}>
         <span className={styles.logoText}>{businessConfig.businessName}</span>
         <small className={styles.logoSub}>Panel de gestión</small>
+        
+        {currentUser?.memberships && currentUser.memberships.length > 1 && (
+          <div className={styles.workspaceSelectorContainer}>
+            <span 
+              className={styles.changeBusinessLink} 
+              onClick={() => setShowWorkspaceDropdown(!showWorkspaceDropdown)}
+            >
+              Cambiar negocio ▾
+            </span>
+            
+            {showWorkspaceDropdown && (
+              <div className={styles.workspaceDropdownMenu}>
+                {currentUser.memberships.map((m: any) => {
+                  const isActive = m.businessId === businessConfig.business?._id;
+                  return (
+                    <div 
+                      key={m.businessId}
+                      className={`${styles.workspaceDropdownItem} ${isActive ? styles.activeItem : ''}`}
+                      onClick={() => {
+                        if (!isActive) switchWorkspace(m.businessId);
+                        setShowWorkspaceDropdown(false);
+                      }}
+                    >
+                      <span className={styles.workspaceName}>{m.businessName}</span>
+                      <small className={styles.workspaceRole}>
+                        {m.role === 'admin' ? 'Admin' : 'Especialista'}
+                      </small>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       <nav className={styles.nav}>

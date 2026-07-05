@@ -7,7 +7,7 @@ import paymentRoutes from "./payment.routes.js";
 import userRoutes from "./user.routes.js";
 import businessConfigRoutes from "./businessConfig.routes.js";
 import superadminRoutes from "./superadmin.routes.js";
-import { register, login, logout, googleLogin, getCurrentUser, forgotPassword, resetPassword, changePassword } from "../controllers/auth.controller.js";
+import { register, login, logout, googleLogin, getCurrentUser, forgotPassword, resetPassword, changePassword, selectMembership, switchBusiness } from "../controllers/auth.controller.js";
 import { isAuthenticated } from "../middleware/auth.middleware.js";
 import { isAdmin } from "../middleware/role.middleware.js";
 import { validate } from "../middleware/validate.middleware.js";
@@ -37,6 +37,8 @@ const router = Router();
 
 router.post("/register", validate(registerSchema), register);
 router.post("/login", authLimiter, validate(loginSchema), login);
+router.post("/select-membership", selectMembership);
+router.post("/switch-business", isAuthenticated, switchBusiness);
 router.post("/google", googleLogin);
 router.post("/logout", isAuthenticated, logout);
 router.get("/me", getCurrentUser);

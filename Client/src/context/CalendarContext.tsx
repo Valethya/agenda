@@ -23,6 +23,7 @@ interface CalendarContextType {
   cancelApp: (id: string) => Promise<boolean>;
   logoutUser: () => Promise<void>;
   refreshData: () => Promise<void>;
+  switchWorkspace: (businessId: string) => Promise<void>;
 }
 
 const CalendarContext = createContext<CalendarContextType | undefined>(undefined);
@@ -177,6 +178,28 @@ export const CalendarProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     }
   };
 
+  const switchWorkspace = async (businessId: string) => {
+    try {
+      setLoading(true);
+      const res = await api.switchBusiness(businessId);
+      if (res && res.status === "success") {
+        const user = res.payload || res.user;
+        if (user.businessSlug) {
+          window.location.href = `/admin?slug=${user.businessSlug}`;
+        } else {
+          window.location.href = "/admin";
+        }
+      } else {
+        alert("Error al cambiar de negocio");
+        setLoading(false);
+      }
+    } catch (err) {
+      console.error("Error switching workspace:", err);
+      alert("Error al intentar cambiar de negocio");
+      setLoading(false);
+    }
+  };
+
   return (
     <CalendarContext.Provider value={{
       currentDate,
@@ -198,7 +221,8 @@ export const CalendarProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       completeApp,
       cancelApp,
       logoutUser,
-      refreshData
+      refreshData,
+      switchWorkspace
     }}>
       {children}
     </CalendarContext.Provider>

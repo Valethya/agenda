@@ -74,6 +74,13 @@ export async function cancelAppointment(id: string) {
   return apiFetch<{ status: string; message: string }>(`/appointments/${id}/cancel`, { method: "PATCH" });
 }
 
+export async function switchBusiness(businessId: string) {
+  return apiFetch<{ status: string; message: string; user: any; payload: any }>("/switch-business", {
+    method: "POST",
+    body: JSON.stringify({ businessId })
+  });
+}
+
 export async function getBusinessConfigData(): Promise<BusinessConfig> {
   try {
     const data = await apiFetch<{ status: string; payload: any }>("/business-settings");
@@ -107,7 +114,8 @@ export async function getBusinessConfigData(): Promise<BusinessConfig> {
       businessName: configPayload?.businessName || "Atmósfera",
       professionalRoleLabel,
       professionalRoleLabelPlural,
-      enabledNavItems
+      enabledNavItems,
+      business: configPayload?.business
     };
   } catch (err) {
     // Fallback

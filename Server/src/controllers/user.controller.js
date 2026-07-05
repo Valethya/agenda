@@ -21,7 +21,7 @@ export const deleteWorker = async (req, res, next) => {
     const { id } = req.params;
     const hardDelete = req.query.hard === "true"; // ?hard=true para eliminación física (no recomendado)
 
-    await userService.deleteWorker(id, !hardDelete);
+    await userService.deleteWorker(id, req.businessId, !hardDelete);
 
     res.status(200).json({
       status: "success",

@@ -65,6 +65,11 @@ export interface BusinessConfig {
   professionalRoleLabel: string;
   professionalRoleLabelPlural: string;
   enabledNavItems: string[];
+  business?: {
+    _id: string;
+    name: string;
+    slug: string;
+  };
   appointmentSettings?: {
     slotDuration: number;
     bufferTime: number;

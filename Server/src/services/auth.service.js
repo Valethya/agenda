@@ -12,6 +12,7 @@ import {
 import { isValidPassword, createHash } from "../utils/password.js";
 import { ConflictError, UnauthorizedError, NotFoundError, ValidationError } from "../utils/appError.js";
 import * as mailer from "../utils/mailer.js";
+import Membership from "../db/models/membership.model.js";
 
 const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 
@@ -56,13 +57,22 @@ export const login = async (email, password) => {
     throw new UnauthorizedError("Credenciales inválidas");
   }
 
+  // Buscar membresías asociadas al usuario
+  const memberships = await Membership.find({ user: user._id, isActive: true }).populate("business");
+
   return {
     id: user._id,
     firstName: user.firstName,
     lastName: user.lastName,
     email: Array.isArray(user.email) ? user.email[0] : user.email,
     role: user.role,
-    business: user.business,
+    memberships: memberships.map((m) => ({
+      id: m._id,
+      businessId: m.business?._id,
+      businessName: m.business?.name,
+      businessSlug: m.business?.slug,
+      role: m.role,
+    })),
   };
 };
 
@@ -84,12 +94,22 @@ export const loginWithGoogle = async (idToken) => {
       avatar: picture || "",
     });
   }
+
+  const memberships = await Membership.find({ user: user._id, isActive: true }).populate("business");
+
   return {
     id: user._id,
     firstName: user.firstName,
     lastName: user.lastName,
     email: Array.isArray(user.email) ? user.email[0] : user.email,
     role: user.role,
+    memberships: memberships.map((m) => ({
+      id: m._id,
+      businessId: m.business?._id,
+      businessName: m.business?.name,
+      businessSlug: m.business?.slug,
+      role: m.role,
+    })),
   };
 };
 

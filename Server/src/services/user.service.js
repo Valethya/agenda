@@ -2,90 +2,124 @@ import * as userRepository from "../repositories/user.repository.js";
 import * as shiftRepository from "../repositories/shift.repository.js";
 import { createHash } from "../utils/password.js";
 import { ConflictError, NotFoundError } from "../utils/appError.js";
+import Membership from "../db/models/membership.model.js";
 
-// 1. Crear Cuenta de Trabajador
+// 1. Crear Cuenta de Trabajador (o agregar membresía a un usuario existente)
 export const createWorker = async (workerData, businessId) => {
   const { firstName, lastName, email, password, phone } = workerData;
 
-  // A. Verificar que el correo electrónico no esté registrado
+  // A. Verificar si el usuario ya existe en el sistema
   const existingUser = await userRepository.findByEmail(email);
+  let workerUser = existingUser;
+
   if (existingUser) {
-    throw new ConflictError("El correo electrónico ingresado ya está registrado");
+    // Si ya existe, verificar si ya tiene una membresía en este negocio
+    const existingMembership = await Membership.findOne({ user: existingUser._id, business: businessId });
+    if (existingMembership) {
+      throw new ConflictError("El profesional ya está registrado en este negocio");
+    }
+  } else {
+    // B. Encriptar contraseña del trabajador
+    const hashedPassword = await createHash(password);
+
+    // C. Crear el usuario en base de datos con rol 'worker' por defecto
+    workerUser = await userRepository.createUser({
+      firstName,
+      lastName,
+      email: [email],
+      password: hashedPassword,
+      phone: phone ? [phone] : [],
+      role: "worker",
+      isActive: true,
+      business: businessId,
+    });
   }
 
-  // B. Encriptar contraseña del trabajador
-  const hashedPassword = await createHash(password);
-
-  // C. Crear el usuario en base de datos con rol 'worker' y asociado a su negocio
-  const newWorker = await userRepository.createUser({
-    firstName,
-    lastName,
-    email: [email],
-    password: hashedPassword,
-    phone: phone ? [phone] : [],
+  // D. Crear la membresía de tipo 'worker' para asociar el usuario al negocio
+  await Membership.create({
+    user: workerUser._id,
+    business: businessId,
     role: "worker",
     isActive: true,
-    business: businessId,
   });
 
-  // D. PRESTACIÓN PREMIUM: Inicializar horarios semanales estándar por defecto (Lunes a Viernes de 09:00 a 18:00)
-  // Esto ahorra tiempo al administrador al no tener que configurar cada día de forma manual.
-  const defaultBreaks = [{ startTime: "13:00", endTime: "14:00" }]; // Almuerzo
-  for (let day = 1; day <= 5; day++) {
-    await shiftRepository.upsert(newWorker._id, day, {
-      isOpen: true,
-      startTime: "09:00",
-      endTime: "18:00",
-      breaks: defaultBreaks,
-    });
-  }
+  // E. PRESTACIÓN PREMIUM: Inicializar horarios semanales estándar por defecto (Lunes a Viernes de 09:00 a 18:00)
+  // Solo los creamos si el usuario no poseía turnos previamente configurados
+  const existingShifts = await shiftRepository.findByWorker(workerUser._id);
+  if (!existingShifts || existingShifts.length === 0) {
+    const defaultBreaks = [{ startTime: "13:00", endTime: "14:00" }]; // Almuerzo
+    for (let day = 1; day <= 5; day++) {
+      await shiftRepository.upsert(workerUser._id, day, {
+        isOpen: true,
+        startTime: "09:00",
+        endTime: "18:00",
+        breaks: defaultBreaks,
+      });
+    }
 
-  // Inicializar fin de semana como CERRADO
-  for (let day of [0, 6]) {
-    await shiftRepository.upsert(newWorker._id, day, {
-      isOpen: false,
-      startTime: "09:00",
-      endTime: "18:00",
-      breaks: [],
-    });
+    // Inicializar fin de semana como CERRADO
+    for (let day of [0, 6]) {
+      await shiftRepository.upsert(workerUser._id, day, {
+        isOpen: false,
+        startTime: "09:00",
+        endTime: "18:00",
+        breaks: [],
+      });
+    }
   }
 
   return {
-    id: newWorker._id,
-    firstName: newWorker.firstName,
-    lastName: newWorker.lastName,
-    email: Array.isArray(newWorker.email) ? newWorker.email[0] : newWorker.email,
-    phone: Array.isArray(newWorker.phone) ? newWorker.phone[0] : newWorker.phone,
-    role: newWorker.role,
+    id: workerUser._id,
+    firstName: workerUser.firstName,
+    lastName: workerUser.lastName,
+    email: Array.isArray(workerUser.email) ? workerUser.email[0] : workerUser.email,
+    phone: Array.isArray(workerUser.phone) ? workerUser.phone[0] : workerUser.phone,
+    role: "worker",
   };
 };
 
-// 2. Dar de baja a un trabajador (Soft Delete)
-export const deleteWorker = async (workerId, softDelete = true) => {
-  const worker = await userRepository.findAll({ _id: workerId, role: "worker" });
+// 2. Dar de baja a un trabajador (Soft Delete en membresía)
+export const deleteWorker = async (workerId, businessId, softDelete = true) => {
+  const membership = await Membership.findOne({ user: workerId, business: businessId, role: "worker" });
   
-  if (!worker || worker.length === 0) {
-    throw new NotFoundError("El trabajador especificado no existe o no tiene ese rol");
+  if (!membership) {
+    throw new NotFoundError("El trabajador especificado no existe o no tiene ese rol en este negocio");
   }
 
   if (softDelete) {
-    // Desactivamos la cuenta del trabajador (baja lógica)
-    // De este modo se protegen los registros históricos de las citas ya realizadas con él
-    await userRepository.updateUser(workerId, { isActive: false });
+    // Desactivamos la membresía en este negocio
+    membership.isActive = false;
+    await membership.save();
   } else {
-    // Eliminación física e invalidación de sus turnos
-    await userRepository.updateUser(workerId, { isActive: false }); // Opcional
-    await shiftRepository.deleteByWorker(workerId);
-    // Nota: Es mejor desaconsejar el hard delete por integridad referencial en MongoDB
+    // Eliminación física de la membresía
+    await membership.deleteOne();
+    
+    // Si no tiene más membresías activas en ningún otro negocio, desactivamos el usuario global
+    const otherMembershipsCount = await Membership.countDocuments({ user: workerId });
+    if (otherMembershipsCount === 0) {
+      await userRepository.updateUser(workerId, { isActive: false });
+      await shiftRepository.deleteByWorker(workerId);
+    }
   }
 };
 
-// 3. Obtener listado de trabajadores
+// 3. Obtener listado de trabajadores de un negocio mediante membresías
 export const getWorkersList = async (businessId, onlyActive = true) => {
-  const query = { role: "worker", business: businessId };
+  const query = { business: businessId, role: "worker" };
   if (onlyActive) {
     query.isActive = true;
   }
   
-  return await userRepository.findAll(query);
+  const memberships = await Membership.find(query).populate("user");
+  
+  return memberships
+    .filter(m => m.user && (!onlyActive || m.user.isActive))
+    .map(m => {
+      const userObj = m.user.toObject();
+      return {
+        ...userObj,
+        id: userObj._id,
+        role: m.role, // Sobrescribir rol con el de la membresía específica de este negocio
+      };
+    });
 };

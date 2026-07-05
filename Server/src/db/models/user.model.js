@@ -34,6 +34,7 @@ const userSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: "Business",
       index: true,
+      // DEPRECADO para admins/workers (usar Membership en su lugar). Se conserva para clientes de tipo 'user'.
     },
     phone: {
       type: [String],

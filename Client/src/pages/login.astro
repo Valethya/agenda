@@ -189,6 +189,46 @@
     @keyframes spin {
       to { transform: rotate(360deg); }
     }
+
+    .workspace-list {
+      display: flex;
+      flex-direction: column;
+      gap: 0.75rem;
+      margin-top: 0.5rem;
+    }
+
+    .workspace-item {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 0.9rem 1.1rem;
+      background: var(--blanco);
+      border: 1px solid var(--borde);
+      border-radius: 4px;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      text-align: left;
+      width: 100%;
+    }
+
+    .workspace-item:hover {
+      border-color: var(--niebla);
+      background: var(--niebla-palido);
+      transform: translateY(-1px);
+    }
+
+    .workspace-name {
+      font-size: 0.82rem;
+      font-weight: 500;
+      color: var(--texto);
+    }
+
+    .workspace-role {
+      font-size: 0.58rem;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--texto-muted);
+    }
   </style>
 </head>
 <body>
@@ -222,6 +262,19 @@
       </div>
     </form>
 
+    <div id="workspaceSection" style="display: none;" class="login-body">
+      <div class="form-group">
+        <label class="form-label">Selecciona tu espacio de trabajo:</label>
+        <div id="workspaceList" class="workspace-list">
+          <!-- Se cargan dinámicamente -->
+        </div>
+      </div>
+      
+      <button class="btn-login" style="margin-top: 0.5rem; background: var(--texto-suave);" id="backToLoginBtn" type="button">
+        Volver
+      </button>
+    </div>
+
     <div class="login-footer">
       <a href="https://atmosferastudio.cl">← Volver al sitio principal</a>
     </div>
@@ -237,6 +290,10 @@
     const btnSpinner = document.getElementById("btnSpinner");
     const btnText = document.getElementById("btnText");
     const errorAlert = document.getElementById("errorAlert");
+    
+    const workspaceSection = document.getElementById("workspaceSection");
+    const workspaceList = document.getElementById("workspaceList");
+    const backToLoginBtn = document.getElementById("backToLoginBtn");
 
     loginForm.addEventListener("submit", async (e) => {
       e.preventDefault();
@@ -260,21 +317,12 @@
         });
 
         if (response && (response.status === "success" || response.status === "succes")) {
-          // Comprobar rol de usuario. Solo permitimos ingresar a admin, worker o superadmin
           const user = response.payload || response.user;
-          if (user.role === "admin" || user.role === "worker" || user.role === "superadmin") {
-            const slug = user.business?.slug;
-            if (slug) {
-              window.location.href = `/admin?slug=${slug}`;
-            } else {
-              window.location.href = "/admin";
-            }
-          } else {
-            showError("No tienes permisos de acceso para esta plataforma.");
-            setLoading(false);
-          }
+          handleSuccessfulLogin(user);
+        } else if (response && response.status === "needs_selection") {
+          showWorkspaceSelector(response.memberships);
         } else {
-          showError("Ocurrió un error inesperado al intentar iniciar sesión.");
+          showError(response?.message || "Ocurrió un error inesperado al intentar iniciar sesión.");
           setLoading(false);
         }
       } catch (err) {
@@ -282,6 +330,71 @@
         setLoading(false);
       }
     });
+
+    backToLoginBtn.addEventListener("click", () => {
+      workspaceSection.style.display = "none";
+      loginForm.style.display = "block";
+      hideError();
+    });
+
+    function showWorkspaceSelector(memberships) {
+      setLoading(false);
+      loginForm.style.display = "none";
+      workspaceSection.style.display = "flex";
+      workspaceList.innerHTML = "";
+
+      memberships.forEach(m => {
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "workspace-item";
+        
+        const roleLabel = m.role === "admin" 
+          ? "Administrador" 
+          : m.role === "superadmin" 
+            ? "Superadmin" 
+            : "Especialista";
+
+        btn.innerHTML = `
+          <span class="workspace-name">${m.businessName || 'Negocio'}</span>
+          <span class="workspace-role">${roleLabel}</span>
+        `;
+        
+        btn.addEventListener("click", async () => {
+          setLoading(true);
+          try {
+            const selectRes = await apiFetch("/select-membership", {
+              method: "POST",
+              body: JSON.stringify({ membershipId: m.id })
+            });
+            if (selectRes && selectRes.status === "success") {
+              const user = selectRes.payload || selectRes.user;
+              handleSuccessfulLogin(user);
+            } else {
+              showError(selectRes?.message || "Error al seleccionar el espacio de trabajo.");
+              setLoading(false);
+            }
+          } catch (err) {
+            showError("Error de conexión al seleccionar el espacio.");
+            setLoading(false);
+          }
+        });
+        workspaceList.appendChild(btn);
+      });
+    }
+
+    function handleSuccessfulLogin(user) {
+      if (user.role === "admin" || user.role === "worker" || user.role === "superadmin") {
+        const slug = user.businessSlug;
+        if (slug) {
+          window.location.href = `/admin?slug=${slug}`;
+        } else {
+          window.location.href = "/admin";
+        }
+      } else {
+        showError("No tienes permisos de acceso para esta plataforma.");
+        setLoading(false);
+      }
+    }
 
     function showError(msg) {
       errorAlert.textContent = msg;

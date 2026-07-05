@@ -119,3 +119,83 @@
   letter-spacing: 0.1em;
   text-transform: uppercase;
 }
+
+.workspaceSelectorContainer {
+  position: relative;
+  margin-top: 0.75rem;
+}
+
+.changeBusinessLink {
+  font-size: 0.6rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: $niebla;
+  cursor: pointer;
+  transition: color 0.2s ease;
+  font-weight: 500;
+  display: inline-block;
+  
+  &:hover {
+    color: $niebla-claro;
+    text-decoration: underline;
+  }
+}
+
+.workspaceDropdownMenu {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  background: #1b1a18; // Tono oscuro del sidebar
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 4px;
+  margin-top: 0.5rem;
+  z-index: 100;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  min-width: 180px;
+}
+
+.workspaceDropdownItem {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.75rem 1rem;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+  text-align: left;
+  
+  &:last-child {
+    border-bottom: none;
+  }
+  
+  &:hover {
+    background: rgba(255, 255, 255, 0.04);
+  }
+  
+  &.activeItem {
+    background: rgba(138, 155, 174, 0.1);
+    cursor: default;
+    
+    .workspaceName {
+      color: $niebla-claro;
+    }
+  }
+}
+
+.workspaceName {
+  font-size: 0.75rem;
+  color: rgba(184, 198, 209, 0.7);
+  font-weight: 400;
+  letter-spacing: 0.05em;
+}
+
+.workspaceRole {
+  font-size: 0.55rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: rgba(184, 198, 209, 0.3);
+}
