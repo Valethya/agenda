@@ -1,0 +1,13 @@
+{
+  "cleanUrls": true,
+  "rewrites": [
+    {
+      "source": "/agenda/:path*",
+      "destination": "/:path*"
+    },
+    {
+      "source": "/agenda",
+      "destination": "/index.html"
+    }
+  ]
+}
