@@ -259,11 +259,16 @@
           body: JSON.stringify({ email, password })
         });
 
-        if (response && response.status === "success" || response.status === "succes") {
+        if (response && (response.status === "success" || response.status === "succes")) {
           // Comprobar rol de usuario. Solo permitimos ingresar a admin, worker o superadmin
           const user = response.payload || response.user;
           if (user.role === "admin" || user.role === "worker" || user.role === "superadmin") {
-            window.location.href = "/admin";
+            const slug = user.business?.slug;
+            if (slug) {
+              window.location.href = `/admin?slug=${slug}`;
+            } else {
+              window.location.href = "/admin";
+            }
           } else {
             showError("No tienes permisos de acceso para esta plataforma.");
             setLoading(false);

@@ -23,7 +23,8 @@ export const login = async (req, res, next) => {
       lastName: user.lastName,
       email: user.email,
       role: user.role,
-      businessId: user.business,
+      businessId: user.business?._id || user.business,
+      businessSlug: user.business?.slug,
     };
     req.session.save((err) => {
       if (err) return next(err);
@@ -65,6 +66,8 @@ export const googleLogin = async (req, res, next) => {
       lastName: user.lastName,
       email: user.email,
       role: user.role,
+      businessId: user.business?._id || user.business,
+      businessSlug: user.business?.slug,
     };
 
     req.session.save((err) => {

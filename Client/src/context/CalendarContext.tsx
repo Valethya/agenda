@@ -61,6 +61,16 @@ export const CalendarProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       const loggedUser = userRes.payload || userRes.user;
       setCurrentUser(loggedUser);
 
+      // Si el usuario posee un negocio y el slug no está en la URL, redireccionar agregándolo
+      if (typeof window !== "undefined" && loggedUser.businessSlug) {
+        const params = new URLSearchParams(window.location.search);
+        if (!params.get("slug")) {
+          params.set("slug", loggedUser.businessSlug);
+          window.location.href = `${window.location.pathname}?${params.toString()}`;
+          return;
+        }
+      }
+
       // Load Config, Workers, Appointments parallelly
       const [config, workers, appointments] = await Promise.all([
         api.getBusinessConfigData(),

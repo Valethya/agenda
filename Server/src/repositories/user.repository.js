@@ -1,11 +1,11 @@
 import User from "../db/models/user.model.js";
 
 export const findByEmail = async (email) => {
-  return await User.findOne({ email });
+  return await User.findOne({ email }).populate("business");
 };
 
 export const findByEmailPassword = async (email) => {
-  return await User.findOne({ email }).select("+password");
+  return await User.findOne({ email }).select("+password").populate("business");
 };
 
 export const findByPhone = async (phone) => {

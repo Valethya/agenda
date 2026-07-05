@@ -78,7 +78,7 @@ export async function getBusinessConfigData(): Promise<BusinessConfig> {
   try {
     const data = await apiFetch<{ status: string; payload: any }>("/business-settings");
     const configPayload = data.payload;
-    const slug = getBusinessSlug();
+    const slug = configPayload?.business?.slug || getBusinessSlug();
     
     // Determine labels based on business slug
     let professionalRoleLabel = "Profesional";
