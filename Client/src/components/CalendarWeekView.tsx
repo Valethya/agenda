@@ -257,9 +257,7 @@ export const CalendarWeekView: React.FC = () => {
                   '--col-idx': colIdx,
                   '--total-cols': 7
                 } as React.CSSProperties}
-              >
-                <span>Descanso</span>
-              </div>
+              />
             );
           });
         })}

@@ -143,12 +143,7 @@ export const CalendarDayView: React.FC = () => {
                   '--col-idx': colIdx,
                   '--total-cols': activeProfs.length
                 } as React.CSSProperties}
-              >
-                <div className={styles.dayOffContent}>
-                  <span className={styles.dayOffTitle}>Día Libre</span>
-                  <span className={styles.dayOffSubtitle}>No laborable</span>
-                </div>
-              </div>
+              />
             );
         })}
 
@@ -186,9 +181,7 @@ export const CalendarDayView: React.FC = () => {
                   '--col-idx': colIdx,
                   '--total-cols': activeProfs.length
                 } as React.CSSProperties}
-              >
-                <span>Descanso</span>
-              </div>
+              />
             );
           });
         })}
