@@ -1,0 +1,197 @@
+@use '../styles/variables' as *;
+
+.card {
+  cursor: pointer;
+  transition: all 0.2s ease;
+  z-index: 2;
+  overflow: hidden;
+  border-radius: 3px;
+  
+  &:hover {
+    opacity: 0.88;
+    transform: scale(1.01);
+  }
+  
+  &.confirmada {
+    background: $niebla-suave;
+    border-left: 3px solid $niebla;
+    
+    .name, .service, .time { color: $texto; }
+  }
+  
+  &.pendiente {
+    background: $amarillo-claro;
+    border-left: 3px solid $amarillo;
+  }
+  
+  &.cancelada {
+    background: $rojo-claro;
+    border-left: 3px solid $rojo;
+    opacity: 0.7;
+  }
+  
+  &.completada {
+    background: $verde-claro;
+    border-left: 3px solid $verde;
+  }
+}
+
+// Variant Medium (Weekly View)
+.medium {
+  position: absolute;
+  left: 4px;
+  right: 4px;
+  padding: 0.35rem 0.5rem;
+  
+  .name {
+    font-size: 0.68rem;
+    font-weight: 400;
+    color: $texto;
+    line-height: 1.2;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  
+  .service {
+    font-size: 0.58rem;
+    color: $texto-suave;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    margin-top: 1px;
+  }
+  
+  .time {
+    font-size: 0.55rem;
+    color: $texto-muted;
+    margin-top: 2px;
+  }
+}
+
+// Variant Large (Daily View)
+.large {
+  position: absolute;
+  left: 1rem;
+  right: 1rem;
+  border-radius: 4px;
+  padding: 0.5rem 0.8rem;
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  
+  &:hover {
+    transform: translateX(3px) scale(1);
+  }
+  
+  .info {
+    flex: 1;
+    min-width: 0;
+  }
+  
+  .name {
+    font-size: 0.78rem;
+    font-weight: 400;
+    color: $texto;
+  }
+  
+  .service {
+    font-size: 0.65rem;
+    color: $texto-suave;
+  }
+  
+  .professional {
+    font-size: 0.62rem;
+    color: $texto-muted;
+    margin-top: 2px;
+  }
+  
+  .time {
+    font-family: $font-serif;
+    font-size: 0.85rem;
+    color: $texto-suave;
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+  
+  .actions {
+    display: flex;
+    gap: 0.4rem;
+    flex-shrink: 0;
+    opacity: 0;
+    transition: opacity 0.2s ease;
+  }
+  
+  &:hover .actions {
+    opacity: 1;
+  }
+}
+
+// Action Buttons in Large Card
+.actionBtn {
+  width: 26px;
+  height: 26px;
+  border-radius: 3px;
+  border: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.65rem;
+  transition: all 0.2s ease;
+  
+  &.confirm {
+    background: $verde-claro;
+    color: $verde;
+    &:hover { background: $verde; color: white; }
+  }
+  
+  &.complete {
+    background: $verde-claro;
+    color: $verde;
+    &:hover { background: $verde; color: white; }
+  }
+  
+  &.cancel {
+    background: $rojo-claro;
+    color: $rojo;
+    &:hover { background: $rojo; color: white; }
+  }
+}
+
+// Variant Small (Monthly Pills)
+.small {
+  font-size: 0.55rem;
+  padding: 0.15rem 0.4rem;
+  border-radius: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  letter-spacing: 0.03em;
+  display: block;
+  width: 100%;
+  
+  &.confirmada {
+    background: $niebla-suave;
+    color: $niebla;
+    border-left: none;
+  }
+  
+  &.pendiente {
+    background: $amarillo-claro;
+    color: $amarillo;
+    border-left: none;
+  }
+  
+  &.cancelada {
+    background: $rojo-claro;
+    color: $rojo;
+    border-left: none;
+  }
+  
+  &.completada {
+    background: $verde-claro;
+    color: $verde;
+    border-left: none;
+  }
+}

@@ -1,0 +1,18 @@
+@use './variables' as *;
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body {
+  height: 100%;
+  font-family: $font-sans;
+  font-weight: 300;
+  color: $texto;
+  background: $fondo;
+  overflow: hidden;
+}
+
+// Scrollbars
+::-webkit-scrollbar { width: 5px; height: 5px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: $niebla-suave; border-radius: 10px; }
+::-webkit-scrollbar-thumb:hover { background: $niebla-claro; }

@@ -1,2 +1,7 @@
 node_modules
 .env
+.astro
+dist
+build
+*.log
+.DS_Store

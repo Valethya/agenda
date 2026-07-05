@@ -1,0 +1,222 @@
+---
+// Client-side code to extract query params and display success
+---
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Pago Exitoso - LuxurBooking</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  
+  <style>
+    :root {
+      --bg-dark: #090d16;
+      --bg-card: rgba(18, 24, 38, 0.65);
+      --border-color: rgba(255, 255, 255, 0.08);
+      --primary-gradient: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%);
+      --accent-emerald: #10b981;
+      --text-main: #f3f4f6;
+      --text-muted: #9ca3af;
+      --radius-lg: 16px;
+      --radius-md: 12px;
+      --transition: all 0.3s ease;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      font-family: 'Inter', sans-serif;
+    }
+
+    body {
+      background-color: var(--bg-dark);
+      color: var(--text-main);
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 1.5rem;
+      position: relative;
+      overflow: hidden;
+    }
+
+    body::before {
+      content: '';
+      position: absolute;
+      width: 400px;
+      height: 400px;
+      background: radial-gradient(circle, rgba(16, 185, 129, 0.15) 0%, rgba(0,0,0,0) 70%);
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      z-index: -1;
+      pointer-events: none;
+    }
+
+    .card {
+      background: var(--bg-card);
+      backdrop-filter: blur(12px);
+      border: 1px solid var(--border-color);
+      border-radius: var(--radius-lg);
+      padding: 3rem 2rem;
+      max-width: 450px;
+      width: 100%;
+      box-shadow: 0 20px 40px rgba(0,0,0,0.3);
+      text-align: center;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 1.5rem;
+      animation: scaleUp 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
+    }
+
+    @keyframes scaleUp {
+      from { transform: scale(0.9); opacity: 0; }
+      to { transform: scale(1); opacity: 1; }
+    }
+
+    .success-icon {
+      width: 80px;
+      height: 80px;
+      border-radius: 50%;
+      background: rgba(16, 185, 129, 0.1);
+      border: 2px solid var(--accent-emerald);
+      color: var(--accent-emerald);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      box-shadow: 0 0 20px rgba(16, 185, 129, 0.2);
+    }
+
+    .success-icon svg {
+      width: 44px;
+      height: 44px;
+    }
+
+    h1 {
+      font-family: 'Outfit', sans-serif;
+      font-size: 2rem;
+      font-weight: 800;
+      letter-spacing: -0.5px;
+    }
+
+    p {
+      color: var(--text-muted);
+      line-height: 1.6;
+      font-size: 0.95rem;
+    }
+
+    .details-box {
+      background: rgba(255, 255, 255, 0.02);
+      border: 1px solid var(--border-color);
+      border-radius: var(--radius-md);
+      padding: 1.25rem;
+      width: 100%;
+      display: flex;
+      flex-direction: column;
+      gap: 0.75rem;
+      font-size: 0.9rem;
+      text-align: left;
+    }
+
+    .detail-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .detail-label {
+      color: var(--text-muted);
+    }
+
+    .detail-val {
+      font-weight: 600;
+    }
+
+    .btn-primary {
+      width: 100%;
+      background: var(--primary-gradient);
+      border: none;
+      color: white;
+      padding: 1rem;
+      font-size: 1rem;
+      font-weight: 700;
+      border-radius: 8px;
+      cursor: pointer;
+      text-decoration: none;
+      transition: var(--transition);
+      box-shadow: 0 4px 15px rgba(99, 102, 241, 0.3);
+      display: inline-block;
+    }
+
+    .btn-primary:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 6px 20px rgba(99, 102, 241, 0.45);
+    }
+  </style>
+</head>
+<body>
+
+  <div class="card">
+    <div class="success-icon">
+      <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2.5" stroke="currentColor">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M4.5 12.75l6 6 9-13.5" />
+      </svg>
+    </div>
+    
+    <h1>¡Pago Confirmado!</h1>
+    <p>Hemos recibido la confirmación de Transbank y tu cita está completamente asegurada. Se ha enviado un correo electrónico de confirmación con los detalles.</p>
+    
+    <div class="details-box">
+      <div class="detail-row">
+        <span class="detail-label">Nº de Cita</span>
+        <span class="detail-val" id="appId">-</span>
+      </div>
+      <div class="detail-row">
+        <span class="detail-label">Código Autorización</span>
+        <span class="detail-val" id="authCode">-</span>
+      </div>
+      <div class="detail-row">
+        <span class="detail-label">Monto Transacción</span>
+        <span class="detail-val" id="amountPaid">$0</span>
+      </div>
+      <div class="detail-row">
+        <span class="detail-label">Medio de Pago</span>
+        <span class="detail-val" style="display:flex; align-items:center; gap:0.25rem;">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" style="color:#e06600;">
+            <circle cx="15.5" cy="12" r="5" fill-opacity="0.7"></circle>
+            <circle cx="8.5" cy="12" r="5" fill-opacity="0.7"></circle>
+          </svg>
+          Webpay Plus
+        </span>
+      </div>
+    </div>
+    
+    <a href="/agenda" class="btn-primary" id="btnBack">Volver al Inicio</a>
+  </div>
+
+  <script>
+    // Extract query parameters
+    const params = new URLSearchParams(window.location.search);
+    const appointmentId = params.get("appointmentId") || "";
+    const code = params.get("code") || "";
+    const amount = params.get("amount") || "";
+    const slug = params.get("slug") || "atmosfera";
+
+    document.getElementById("appId").innerText = appointmentId ? appointmentId.substring(18).toUpperCase() : "-";
+    document.getElementById("authCode").innerText = code || "-";
+    
+    if (amount) {
+      const formattedAmount = new Intl.NumberFormat("es-CL", { style: "currency", currency: "CLP", maximumFractionDigits: 0 }).format(amount);
+      document.getElementById("amountPaid").innerText = formattedAmount;
+    }
+
+    // Actualizar enlace de retorno con el slug
+    document.getElementById("btnBack").href = `/agenda?slug=${slug}`;
+  </script>
+</body>
+</html>

@@ -1,0 +1,181 @@
+@use '../styles/variables' as *;
+
+.app {
+  display: grid;
+  grid-template-columns: 220px 1fr;
+  grid-template-rows: 100vh;
+  height: 100vh;
+  width: 100vw;
+  overflow: hidden;
+}
+
+.main {
+  display: grid;
+  grid-template-rows: 60px 1fr;
+  overflow: hidden;
+  background: $fondo;
+}
+
+.content {
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.viewContainer {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  overflow: hidden;
+  position: relative;
+}
+
+.leyenda {
+  display: flex;
+  align-items: center;
+  gap: 1.2rem;
+  padding: 0 2rem;
+  height: 36px;
+  background: $blanco;
+  border-bottom: 1px solid $borde;
+  flex-shrink: 0;
+}
+
+.leyendaItem {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.6rem;
+  letter-spacing: 0.08em;
+  color: $texto-muted;
+}
+
+.leyendaDot {
+  width: 8px;
+  height: 8px;
+  border-radius: 1px;
+  flex-shrink: 0;
+
+  &.confirmada {
+    background: $niebla;
+  }
+
+  &.pendiente {
+    background: $amarillo;
+  }
+
+  &.completada {
+    background: $verde;
+  }
+
+  &.cancelada {
+    background: $rojo;
+  }
+
+  &.diaLibre {
+    background: repeating-linear-gradient(
+      -45deg,
+      rgba(181, 168, 152, 0.25),
+      rgba(181, 168, 152, 0.25) 2px,
+      rgba(240, 237, 233, 0.8) 2px,
+      rgba(240, 237, 233, 0.8) 4px
+    );
+    border: 1px solid rgba(181, 168, 152, 0.3);
+  }
+}
+
+.loadingOverlay {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100vh;
+  width: 100vw;
+  background: $fondo;
+  gap: 1rem;
+}
+
+.spinner {
+  width: 32px;
+  height: 32px;
+  border: 3px solid $niebla-suave;
+  border-radius: 50%;
+  border-top-color: $niebla;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.loadingText {
+  font-family: $font-serif;
+  font-size: 1.2rem;
+  letter-spacing: 0.1em;
+  color: $texto-suave;
+  text-transform: uppercase;
+}
+
+.errorOverlay {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100vh;
+  width: 100vw;
+  background: $fondo;
+  gap: 1rem;
+  padding: 2rem;
+  text-align: center;
+}
+
+.errorText {
+  color: $rojo;
+  font-size: 1rem;
+}
+
+.btnRetry {
+  font-family: $font-sans;
+  font-size: 0.75rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  padding: 0.5rem 1.2rem;
+  background: $niebla;
+  color: white;
+  border: none;
+  cursor: pointer;
+  border-radius: 3px;
+  
+  &:hover {
+    background: $texto;
+  }
+}
+
+.horariosView {
+  flex: 1;
+  overflow-y: auto;
+  padding: 1.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.horariosHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.horariosTitle {
+  font-family: $font-serif;
+  font-size: 1.2rem;
+  font-weight: 400;
+  color: $texto;
+}
+
+.profCards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 1rem;
+}

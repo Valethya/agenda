@@ -1,0 +1,210 @@
+@use '../styles/variables' as *;
+
+.container {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  overflow: hidden;
+}
+
+.dayHeader {
+  display: grid;
+  border-bottom: 1px solid $borde;
+  background: $blanco;
+  flex-shrink: 0;
+  overflow-y: hidden;
+  scrollbar-gutter: stable;
+}
+
+.headerTime {
+  border-right: 1px solid $borde;
+  width: 60px;
+}
+
+.profColHeader {
+  border-right: 1px solid $borde;
+  padding: 0.6rem 1rem;
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  min-width: 0;
+  
+  &:last-child {
+    border-right: none;
+  }
+}
+
+.profAvatar {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: white;
+  font-family: $font-serif;
+  font-size: 0.75rem;
+  font-weight: 500;
+  flex-shrink: 0;
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,0.1);
+}
+
+.profInfo {
+  min-width: 0;
+}
+
+.profName {
+  font-size: 0.72rem;
+  font-weight: 500;
+  color: $texto;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.profRole {
+  font-size: 0.58rem;
+  letter-spacing: 0.08em;
+  color: $texto-muted;
+  text-transform: uppercase;
+}
+
+.dayGrid {
+  flex: 1;
+  overflow-y: auto;
+  display: grid;
+  grid-template-rows: repeat(18, 52px);
+  position: relative;
+  scrollbar-gutter: stable;
+}
+
+.timeLabel {
+  grid-column: 1;
+  border-right: 1px solid $borde;
+  border-bottom: 1px solid $fondo-alt;
+  padding: 0 0.6rem;
+  display: flex;
+  align-items: flex-start;
+  padding-top: 0.3rem;
+  font-size: 0.6rem;
+  color: $texto-muted;
+  letter-spacing: 0.05em;
+  background: $blanco;
+  position: sticky;
+  left: 0;
+  z-index: 5;
+}
+
+.dayCell {
+  border-right: 1px solid $borde;
+  border-bottom: 1px solid $fondo-alt;
+  position: relative;
+  cursor: pointer;
+  transition: background 0.15s ease;
+  
+  &:hover {
+    background: $niebla-palido;
+  }
+  
+  &.lastCol {
+    border-right: none;
+  }
+}
+
+.descanso {
+  position: absolute;
+  left: 0;
+  right: 0;
+  background: repeating-linear-gradient(
+    -45deg,
+    rgba(181, 168, 152, 0.05),
+    rgba(181, 168, 152, 0.05) 6px,
+    rgba(181, 168, 152, 0.09) 6px,
+    rgba(181, 168, 152, 0.09) 12px
+  );
+  background-color: #f6f4f1;
+  border-top: 1px dashed rgba(181, 168, 152, 0.25);
+  border-bottom: 1px dashed rgba(181, 168, 152, 0.25);
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  
+  span {
+    font-size: 0.55rem;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    color: $texto-muted;
+  }
+}
+
+.nowLine {
+  position: absolute;
+  left: 60px;
+  right: 0;
+  height: 2px;
+  background: $rojo;
+  z-index: 10;
+  pointer-events: none;
+  
+  &::before {
+    content: '';
+    position: absolute;
+    left: -4px;
+    top: -3px;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: $rojo;
+  }
+}
+
+.dayOffOverlay {
+  position: relative;
+  background: repeating-linear-gradient(
+    -45deg,
+    rgba(181, 168, 152, 0.05),
+    rgba(181, 168, 152, 0.05) 6px,
+    rgba(181, 168, 152, 0.09) 6px,
+    rgba(181, 168, 152, 0.09) 12px
+  );
+  background-color: #f6f4f1;
+  border-right: 1px solid $borde;
+  z-index: 2;
+  pointer-events: all;
+  user-select: none;
+  height: 100%;
+}
+
+.dayOffContent {
+  position: sticky;
+  top: 220px;
+  margin: 0 auto;
+  width: fit-content;
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  padding: 0.8rem 1rem;
+  background: rgba(250, 249, 247, 0.85);
+  border: 1px solid rgba(181, 168, 152, 0.15);
+  border-radius: 4px;
+  backdrop-filter: blur(2px);
+  box-shadow: 0 2px 8px rgba(44, 42, 39, 0.04);
+}
+
+.dayOffTitle {
+  font-family: $font-serif;
+  font-size: 0.72rem;
+  font-weight: 400;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  color: $texto-suave;
+}
+
+.dayOffSubtitle {
+  font-size: 0.55rem;
+  letter-spacing: 0.05em;
+  color: $texto-muted;
+  text-transform: uppercase;
+}
+
