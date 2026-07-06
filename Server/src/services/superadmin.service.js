@@ -7,6 +7,7 @@ import Business from "../db/models/business.model.js";
 import { getOrInitializeConfig } from "./businessConfig.service.js";
 import { createHash } from "../utils/password.js";
 import { ConflictError, NotFoundError } from "../utils/appError.js";
+import Membership from "../db/models/membership.model.js";
 
 export const getGlobalMetrics = async (businessId) => {
   const matchPayment = { status: "approved" };
@@ -330,6 +331,14 @@ export const createBusiness = async (businessData) => {
     business: business._id,
   });
 
+  // Crear membresía de administrador para habilitar el multi-workspace
+  await Membership.create({
+    user: owner._id,
+    business: business._id,
+    role: "admin",
+    isActive: true,
+  });
+
   // C. Vincular dueño en el negocio
   business.owner = owner._id;
   await business.save();
@@ -364,4 +373,24 @@ export const toggleBusinessStatus = async (id) => {
   await business.save();
 
   return business;
+};
+
+// 6. Obtener dueño o administrador de un negocio para impersonar
+export const impersonate = async (businessId) => {
+  const business = await Business.findById(businessId);
+  if (!business) {
+    throw new NotFoundError("El negocio especificado no existe");
+  }
+
+  const owner = await User.findById(business.owner);
+  if (!owner) {
+    // Si no está el owner, buscamos cualquier admin
+    const anyAdmin = await User.findOne({ business: businessId, role: "admin" });
+    if (!anyAdmin) {
+      throw new NotFoundError("No se encontró ningún administrador para este negocio");
+    }
+    return { user: anyAdmin, business };
+  }
+
+  return { user: owner, business };
 };

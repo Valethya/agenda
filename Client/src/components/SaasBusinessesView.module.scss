@@ -1,0 +1,712 @@
+// Variables del diseño de saas-consola.html
+$niebla:          #8A9BAE;
+$niebla-claro:    #B8C6D1;
+$niebla-suave:    #DCE4EA;
+$niebla-palido:   #EEF3F6;
+$tierra:          #B5A898;
+$tierra-claro:    #D6CDC5;
+$tierra-palido:   #F0EDE9;
+$fondo:           #F4F2EF;
+$fondo-alt:       #EEEAE7;
+$texto:           #2C2A27;
+$texto-suave:     #7A7570;
+$texto-muted:     #AAA59F;
+$blanco:          #FAF9F7;
+$verde:           #7A9E8C;
+$verde-claro:     #C5DDD3;
+$rojo:            #B5827A;
+$rojo-claro:      #EDD9D6;
+$amarillo:        #C4AA7A;
+$amarillo-claro:  #F0E6D0;
+$borde:           #E4E0DC;
+
+.container {
+  flex: 1;
+  overflow-y: auto;
+  background: $fondo;
+  display: flex;
+  flex-direction: column;
+  font-family: 'Jost', sans-serif;
+  font-weight: 300;
+  color: $texto;
+}
+
+/* ————— PAGE HEADER ————— */
+.pageHeader {
+  padding: 2rem 2.5rem 1.5rem;
+  border-bottom: 1px solid $borde;
+  background: $blanco;
+  flex-shrink: 0;
+}
+
+.pageHeaderTop {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  margin-bottom: 0.3rem;
+}
+
+.pageTitle {
+  font-family: 'Cormorant Garamond', serif;
+  font-size: 1.8rem;
+  font-weight: 300;
+  color: $texto;
+  letter-spacing: 0.03em;
+  margin: 0;
+}
+
+.pageDesc {
+  font-size: 0.78rem;
+  color: $texto-muted;
+  letter-spacing: 0.02em;
+  margin: 0.2rem 0 0;
+}
+
+/* Stats rápidas */
+.pageStats {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 1.2rem;
+}
+
+.pstat {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 1rem;
+  background: $fondo-alt;
+  border-radius: 4px;
+}
+
+.pstatNum {
+  font-family: 'Cormorant Garamond', serif;
+  font-size: 1.1rem;
+  color: $niebla;
+  line-height: 1;
+}
+
+.pstatLabel {
+  font-size: 0.62rem;
+  letter-spacing: 0.08em;
+  color: $texto-muted;
+  text-transform: uppercase;
+}
+
+.pstatDivider {
+  width: 1px;
+  height: 24px;
+  background: $borde;
+  margin: 0 0.5rem;
+}
+
+/* ————— TOOLBAR ————— */
+.toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 1rem 2.5rem;
+  gap: 1rem;
+  flex-shrink: 0;
+  background: $fondo;
+}
+
+.searchWrap {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  background: $blanco;
+  border: 1px solid $borde;
+  border-radius: 4px;
+  padding: 0.55rem 1rem;
+  width: 320px;
+  transition: border-color 0.2s;
+  
+  &:focus-within {
+    border-color: $niebla;
+  }
+  
+  svg {
+    width: 14px;
+    height: 14px;
+    stroke: $texto-muted;
+    fill: none;
+    stroke-width: 1.8;
+    stroke-linecap: round;
+    flex-shrink: 0;
+  }
+  
+  input {
+    border: none;
+    outline: none;
+    background: transparent;
+    font-family: 'Jost', sans-serif;
+    font-size: 0.78rem;
+    font-weight: 300;
+    color: $texto;
+    width: 100%;
+    
+    ::placeholder {
+      color: $texto-muted;
+    }
+  }
+}
+
+.toolbarRight {
+  display: flex;
+  align-items: center;
+  gap: 0.8rem;
+}
+
+.sortLabel {
+  font-size: 0.65rem;
+  letter-spacing: 0.1em;
+  color: $texto-muted;
+  text-transform: uppercase;
+}
+
+.sortSelect {
+  font-family: 'Jost', sans-serif;
+  font-size: 0.72rem;
+  font-weight: 300;
+  color: $texto;
+  background: $blanco;
+  border: 1px solid $borde;
+  border-radius: 4px;
+  padding: 0.45rem 0.8rem;
+  outline: none;
+  cursor: pointer;
+  transition: border-color 0.2s;
+  
+  &:focus {
+    border-color: $niebla;
+  }
+}
+
+.btnNew {
+  font-family: 'Jost', sans-serif;
+  font-size: 0.68rem;
+  font-weight: 400;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  padding: 0.5rem 1.2rem;
+  background: $niebla;
+  color: white;
+  border: none;
+  cursor: pointer;
+  border-radius: 2px;
+  transition: background 0.2s;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  outline: none;
+  
+  &:hover {
+    background: $texto;
+  }
+  
+  svg {
+    width: 13px;
+    height: 13px;
+    stroke: white;
+    fill: none;
+    stroke-width: 2;
+    stroke-linecap: round;
+  }
+}
+
+/* ————— TABLA ————— */
+.tableWrap {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0 2.5rem 2rem;
+  
+  &::-webkit-scrollbar {
+    width: 5px;
+  }
+  &::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  &::-webkit-scrollbar-thumb {
+    background: $niebla-suave;
+    border-radius: 10px;
+  }
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  background: $blanco;
+  border: 1px solid $borde;
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+thead tr {
+  border-bottom: 1px solid $borde;
+  background: $blanco;
+}
+
+thead th {
+  padding: 0.75rem 1.2rem;
+  font-size: 0.58rem;
+  font-weight: 400;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: $texto-muted;
+  text-align: left;
+  white-space: nowrap;
+}
+
+tbody tr {
+  border-bottom: 1px solid $fondo-alt;
+  transition: background 0.15s;
+  cursor: pointer;
+  
+  &:last-child {
+    border-bottom: none;
+  }
+  
+  &:hover {
+    background: $niebla-palido;
+    
+    .rowActions {
+      opacity: 1;
+      visibility: visible;
+    }
+  }
+}
+
+td {
+  padding: 0.85rem 1.2rem;
+  vertical-align: middle;
+}
+
+/* Negocio — favicon + nombre */
+.negocioCell {
+  display: flex;
+  align-items: center;
+  gap: 0.85rem;
+}
+
+.faviconWrap {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  background: $fondo-alt;
+  border: 1px solid $borde;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  overflow: hidden;
+  position: relative;
+  
+  img {
+    width: 20px;
+    height: 20px;
+    object-fit: contain;
+    border-radius: 2px;
+  }
+  
+  &.loading::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: $fondo-alt;
+    border-radius: 50%;
+    animation: shimmer 1.2s ease infinite;
+  }
+  
+  &.colored {
+    border: none;
+    .faviconFallback {
+      color: $blanco;
+      font-family: 'Cormorant Garamond', serif;
+      font-weight: 400;
+      font-size: 0.95rem;
+      letter-spacing: 0.02em;
+    }
+  }
+}
+
+@keyframes shimmer {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+.faviconFallback {
+  font-family: 'Cormorant Garamond', serif;
+  font-size: 0.95rem;
+  font-weight: 400;
+  color: $niebla;
+  letter-spacing: 0.02em;
+  line-height: 1;
+}
+
+.negocioInfo {
+  min-width: 0;
+}
+
+.negocioName {
+  font-size: 0.82rem;
+  font-weight: 400;
+  color: $texto;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.negocioId {
+  font-size: 0.58rem;
+  color: $texto-muted;
+  margin-top: 1px;
+  font-family: monospace;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 160px;
+}
+
+/* Slug */
+.slugChip {
+  display: inline-block;
+  background: $fondo-alt;
+  border: 1px solid $borde;
+  border-radius: 3px;
+  padding: 0.2rem 0.55rem;
+  font-size: 0.65rem;
+  font-family: monospace;
+  color: $texto-suave;
+  white-space: nowrap;
+}
+
+/* Dueño */
+.ownerName {
+  font-size: 0.78rem;
+  color: $texto;
+  font-weight: 400;
+}
+
+.ownerEmail {
+  font-size: 0.62rem;
+  color: $texto-muted;
+  margin-top: 1px;
+}
+
+/* Contacto */
+.contactTel {
+  font-size: 0.75rem;
+  color: $texto-suave;
+}
+
+/* Registro */
+.regDate {
+  font-size: 0.72rem;
+  color: $texto-muted;
+  letter-spacing: 0.02em;
+}
+
+/* Estado */
+.statusBadge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.58rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  padding: 0.28rem 0.65rem;
+  border-radius: 2px;
+  white-space: nowrap;
+  cursor: pointer;
+  
+  &::before {
+    content: '';
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+}
+
+.statusActivo {
+  background: $verde-claro;
+  color: $verde;
+  &::before { background: $verde; }
+}
+
+.statusInactivo {
+  background: $rojo-claro;
+  color: $rojo;
+  &::before { background: $rojo; }
+}
+
+.statusTrial {
+  background: $amarillo-claro;
+  color: $amarillo;
+  &::before { background: $amarillo; }
+}
+
+/* Acciones */
+.rowActions {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 0.15s, visibility 0.15s;
+}
+
+.actionBtn {
+  width: 28px;
+  height: 28px;
+  border-radius: 3px;
+  border: 1px solid $borde;
+  background: $blanco;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all 0.15s;
+  color: $texto-muted;
+  padding: 0;
+  outline: none;
+  
+  svg {
+    width: 13px;
+    height: 13px;
+    stroke: currentColor;
+    fill: none;
+    stroke-width: 1.8;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+  
+  &:hover {
+    border-color: $niebla-claro;
+    color: $niebla;
+  }
+  
+  &.acceder {
+    border-color: $niebla-suave;
+    background: $niebla-suave;
+    color: $niebla;
+    
+    &:hover {
+      background: $niebla;
+      color: white;
+      border-color: $niebla;
+    }
+  }
+}
+
+.noData {
+  text-align: center;
+  padding: 3rem;
+  color: $texto-muted;
+  font-style: italic;
+  font-size: 0.8rem;
+}
+
+.loading, .errorContainer {
+  padding: 3rem;
+  text-align: center;
+  color: $texto-muted;
+  font-size: 0.9rem;
+}
+
+.errorText {
+  color: $rojo;
+  margin-bottom: 1rem;
+}
+
+.btnRetry {
+  font-family: 'Jost', sans-serif;
+  font-size: 0.75rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  padding: 0.5rem 1.2rem;
+  background: #b5a898;
+  color: white;
+  border: none;
+  border-radius: 3px;
+  cursor: pointer;
+  
+  &:hover {
+    background: $texto;
+  }
+}
+
+// Estilos del Formulario Modal (Manteniendo consistencia de la plataforma)
+.modalOverlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  background: rgba(0, 0, 0, 0.4);
+  backdrop-filter: blur(2px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1100;
+}
+
+.modalContent {
+  background: $blanco;
+  width: 100%;
+  max-width: 520px;
+  border-radius: 4px;
+  box-shadow: 0 10px 25px rgba(0, 0, 0, 0.15);
+  overflow: hidden;
+  animation: modalFadeIn 0.3s ease;
+  border: 1px solid $borde;
+}
+
+@keyframes modalFadeIn {
+  from { transform: translateY(15px); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}
+
+.modalHeader {
+  background: $fondo-alt;
+  padding: 1.1rem 1.5rem;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  border-bottom: 1px solid $borde;
+  
+  h3 {
+    font-family: 'Cormorant Garamond', serif;
+    font-size: 1.3rem;
+    font-weight: 400;
+    color: $texto;
+    margin: 0;
+  }
+}
+
+.closeBtn {
+  background: none;
+  border: none;
+  font-size: 1.4rem;
+  cursor: pointer;
+  color: $texto-muted;
+  line-height: 1;
+  padding: 0;
+  
+  &:hover {
+    color: $texto;
+  }
+}
+
+.modalForm {
+  padding: 1.5rem;
+  max-height: 80vh;
+  overflow-y: auto;
+}
+
+.formSection {
+  margin-bottom: 1.5rem;
+  border-bottom: 1px solid $borde;
+  padding-bottom: 1rem;
+  
+  &:last-of-type {
+    border-bottom: none;
+    margin-bottom: 0.5rem;
+  }
+  
+  h4 {
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: $texto-muted;
+    margin: 0 0 0.85rem;
+  }
+}
+
+.formGroup {
+  margin-bottom: 0.85rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  
+  label {
+    font-size: 0.72rem;
+    font-weight: 500;
+    color: $texto;
+  }
+  
+  input {
+    padding: 0.5rem 0.65rem;
+    font-family: 'Jost', sans-serif;
+    font-size: 0.8rem;
+    border: 1px solid $borde;
+    border-radius: 4px;
+    outline: none;
+    background: $blanco;
+    color: $texto;
+    transition: border-color 0.2s ease;
+    
+    &:focus {
+      border-color: $niebla;
+    }
+  }
+}
+
+.formGrid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.85rem;
+}
+
+.modalActions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.75rem;
+  margin-top: 1rem;
+  border-top: 1px solid $borde;
+  padding-top: 1rem;
+}
+
+.btnCancel {
+  font-family: 'Jost', sans-serif;
+  font-size: 0.75rem;
+  font-weight: 500;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  background: $fondo-alt;
+  color: $texto-suave;
+  border: 1px solid $borde;
+  padding: 0.5rem 1.2rem;
+  cursor: pointer;
+  border-radius: 4px;
+  transition: all 0.2s ease;
+  
+  &:hover {
+    background: $tierra-claro;
+    color: $texto;
+  }
+}
+
+.btnSubmit {
+  font-family: 'Jost', sans-serif;
+  font-size: 0.75rem;
+  font-weight: 500;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  background: $niebla;
+  color: #fff;
+  border: none;
+  padding: 0.5rem 1.4rem;
+  cursor: pointer;
+  border-radius: 4px;
+  transition: background-color 0.2s ease;
+  
+  &:hover:not(:disabled) {
+    background: $texto;
+  }
+  
+  &:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+  }
+}

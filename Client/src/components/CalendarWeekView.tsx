@@ -203,7 +203,8 @@ export const CalendarWeekView: React.FC = () => {
           const p = profs.find(p => p._id === selectedProfessionalId);
           if (!p) return null;
 
-          const isOff = getWorkerDaysOff(p.email).includes(dayOfWeek);
+          const pShifts = shifts.filter(s => s.worker === p._id || (typeof s.worker === 'object' && s.worker._id === p._id));
+          const isOff = getWorkerDaysOff(p.email, pShifts).includes(dayOfWeek);
           if (!isOff) return null;
 
           return (
@@ -226,7 +227,8 @@ export const CalendarWeekView: React.FC = () => {
           const p = profs.find(p => p._id === selectedProfessionalId);
           if (!p) return null;
 
-          const isOff = getWorkerDaysOff(p.email).includes(dayOfWeek);
+          const pShifts = shifts.filter(s => s.worker === p._id || (typeof s.worker === 'object' && s.worker._id === p._id));
+          const isOff = getWorkerDaysOff(p.email, pShifts).includes(dayOfWeek);
           if (isOff) return null; // No breaks on days off!
 
           // Find the shift for this worker and day of the week

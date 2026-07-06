@@ -5,6 +5,7 @@ import {
   createBusiness,
   listBusinesses,
   toggleBusinessStatus,
+  impersonateBusiness,
 } from "../controllers/superadmin.controller.js";
 import { isAuthenticated } from "../middleware/auth.middleware.js";
 import { isSuperadmin } from "../middleware/role.middleware.js";
@@ -21,5 +22,6 @@ router.get("/analytics", getAdvancedPlatformAnalytics);
 router.get("/businesses", listBusinesses);
 router.post("/businesses", createBusiness);
 router.patch("/businesses/:id/status", toggleBusinessStatus);
+router.post("/businesses/:id/impersonate", impersonateBusiness);
 
 export default router;

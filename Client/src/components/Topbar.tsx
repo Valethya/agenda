@@ -78,6 +78,24 @@ export const Topbar: React.FC = () => {
     }
   }, [viewType, selectedProfessionalId, profs, currentUser]);
 
+  const isSaasView = viewType === 'saas-negocios' || viewType === 'saas-metricas';
+
+  if (isSaasView) {
+    return (
+      <div className={styles.topbar}>
+        <div className={styles.left}>
+          <span className={styles.title} style={{ fontFamily: 'Cormorant Garamond, serif', fontSize: '1.25rem', fontWeight: 300, display: 'flex', alignItems: 'center', gap: '0.75rem', textTransform: 'none', letterSpacing: 'normal' }}>
+            Consola de administración
+            <span style={{ fontSize: '0.58rem', fontWeight: 400, letterSpacing: '0.18em', padding: '0.25rem 0.65rem', background: '#DCE4EA', color: '#8A9BAE', borderRadius: '2px', textTransform: 'uppercase', fontFamily: 'Jost, sans-serif' }}>
+              SAAS ADMIN
+            </span>
+          </span>
+          <span className={styles.date}>{todayStr}</span>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className={styles.topbar}>
       <div className={styles.left}>

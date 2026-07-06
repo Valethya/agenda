@@ -127,3 +127,15 @@ export async function getBusinessConfigData(): Promise<BusinessConfig> {
     };
   }
 }
+
+export async function impersonateBusiness(businessId: string) {
+  return apiFetch<{ status: string; message: string; user: any; payload: any }>(`/superadmin/businesses/${businessId}/impersonate`, {
+    method: "POST"
+  });
+}
+
+export async function stopImpersonating() {
+  return apiFetch<{ status: string; message: string; user: any; payload: any }>("/stop-impersonating", {
+    method: "POST"
+  });
+}

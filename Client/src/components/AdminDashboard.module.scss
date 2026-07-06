@@ -179,3 +179,17 @@
   grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
   gap: 1rem;
 }
+
+.appContainer {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  width: 100vw;
+  overflow: hidden;
+  
+  .app {
+    flex: 1;
+    grid-template-rows: 100%;
+    height: auto;
+  }
+}

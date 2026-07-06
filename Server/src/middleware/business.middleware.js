@@ -56,6 +56,15 @@ export const scopeBusiness = async (req, res, next) => {
     }
 
     if (!business) {
+      // Si el usuario es superadmin, usamos el primer negocio activo como fallback en lugar de lanzar error 404
+      if (req.session?.user?.role === "superadmin") {
+        const fallbackBiz = await Business.findOne({ isActive: true });
+        if (fallbackBiz) {
+          req.business = fallbackBiz;
+          req.businessId = fallbackBiz._id;
+          return next();
+        }
+      }
       throw new NotFoundError("El negocio especificado no existe o no pudo ser encontrado.");
     }
 

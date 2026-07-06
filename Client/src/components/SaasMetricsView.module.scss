@@ -1,0 +1,213 @@
+@use '../styles/variables' as *;
+
+.container {
+  flex: 1;
+  overflow-y: auto;
+  padding: 2rem;
+  background: $fondo;
+  font-family: 'Jost', sans-serif;
+}
+
+.header {
+  margin-bottom: 2rem;
+}
+
+.title {
+  font-family: 'Cormorant Garamond', serif;
+  font-size: 1.8rem;
+  font-weight: 300;
+  letter-spacing: 0.05em;
+  color: $texto;
+  margin: 0 0 0.5rem;
+}
+
+.subtitle {
+  font-size: 0.8rem;
+  color: $texto-muted;
+  margin: 0;
+  letter-spacing: 0.02em;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 1.5rem;
+  margin-bottom: 2rem;
+}
+
+.card {
+  background: $blanco;
+  border: 1px solid $borde;
+  border-radius: 6px;
+  padding: 1.5rem;
+  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.02);
+}
+
+.cardHeader {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin-bottom: 1.2rem;
+  border-bottom: 1px solid $borde;
+  padding-bottom: 0.75rem;
+}
+
+.cardIcon {
+  font-size: 1.2rem;
+}
+
+.cardTitle {
+  font-family: 'Jost', sans-serif;
+  font-size: 0.85rem;
+  font-weight: 500;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: $texto;
+  margin: 0;
+}
+
+.cardBody {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.metricRow {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 0.8rem;
+}
+
+.label {
+  color: $texto-muted;
+}
+
+.value {
+  font-weight: 500;
+  color: $texto;
+}
+
+.valueHighlight {
+  font-size: 1.1rem;
+  font-weight: 600;
+  color: $niebla;
+}
+
+.subGrid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.6rem;
+  margin-top: 0.5rem;
+  border-top: 1px solid $borde;
+  padding-top: 0.75rem;
+}
+
+.subItem {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.subLabel {
+  font-size: 0.6rem;
+  color: $texto-muted;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.subVal {
+  font-size: 0.95rem;
+  font-weight: 600;
+  
+  &.confirmed { color: $niebla; }
+  &.completed { color: $verde; }
+  &.pending { color: $amarillo; }
+  &.cancelled { color: $rojo; }
+}
+
+.sectionTable {
+  background: $blanco;
+  border: 1px solid $borde;
+  border-radius: 6px;
+  padding: 1.5rem;
+  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.02);
+}
+
+.sectionTableTitle {
+  font-family: 'Jost', sans-serif;
+  font-size: 0.85rem;
+  font-weight: 500;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: $texto;
+  margin: 0 0 1.2rem;
+  border-bottom: 1px solid $borde;
+  padding-bottom: 0.75rem;
+}
+
+.tableWrapper {
+  overflow-x: auto;
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.8rem;
+  
+  th {
+    color: $texto-muted;
+    font-weight: 500;
+    padding: 0.5rem 0.5rem 0.75rem;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    font-size: 0.65rem;
+    border-bottom: 2px solid $borde;
+  }
+  
+  td {
+    padding: 0.85rem 0.5rem;
+    border-bottom: 1px solid $borde;
+    color: $texto;
+  }
+  
+  tr:last-child td {
+    border-bottom: none;
+  }
+}
+
+.noData {
+  text-align: center;
+  padding: 2rem;
+  color: $texto-muted;
+  font-style: italic;
+}
+
+.loading, .errorContainer {
+  padding: 3rem;
+  text-align: center;
+  color: $texto-muted;
+  font-size: 0.9rem;
+}
+
+.errorText {
+  color: $rojo;
+  margin-bottom: 1rem;
+}
+
+.btnRetry {
+  font-family: 'Jost', sans-serif;
+  font-size: 0.75rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  padding: 0.5rem 1.2rem;
+  background: $niebla;
+  color: white;
+  border: none;
+  border-radius: 3px;
+  cursor: pointer;
+  
+  &:hover {
+    background: $texto;
+  }
+}

@@ -4,7 +4,7 @@ import { useCalendar } from '../context/CalendarContext';
 import { formatLocalDateStr, getWorkerDaysOff } from '../utils/time';
 
 export const CalendarMonthView: React.FC = () => {
-  const { currentDate, setDate, setViewType, citas, selectedProfessionalId, profs } = useCalendar();
+  const { currentDate, setDate, setViewType, citas, selectedProfessionalId, profs, shifts } = useCalendar();
 
   const year = currentDate.getFullYear();
   const month = currentDate.getMonth();
@@ -100,8 +100,11 @@ export const CalendarMonthView: React.FC = () => {
 
           // Check if this day is a day off for the selected professional (only if a professional is selected)
           const selectedProf = selectedProfessionalId ? profs.find(p => p._id === selectedProfessionalId) : null;
+          const selectedProfShifts = selectedProf 
+            ? shifts.filter(s => s.worker === selectedProf._id || (typeof s.worker === 'object' && s.worker._id === selectedProf._id))
+            : [];
           const isDayOff = selectedProf 
-            ? getWorkerDaysOff(selectedProf.email).includes(d.date.getDay())
+            ? getWorkerDaysOff(selectedProf.email, selectedProfShifts).includes(d.date.getDay())
             : false;
 
           // Count appointments by category

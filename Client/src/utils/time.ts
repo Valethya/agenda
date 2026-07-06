@@ -29,7 +29,23 @@ export function formatLocalDateStr(date: Date): string {
   return `${y}-${m}-${d}`;
 }
 
-export function getWorkerDaysOff(email: string | string[]): number[] {
+export function getWorkerDaysOff(email: string | string[], workerShifts?: any[]): number[] {
+  // Si tenemos los turnos reales de la base de datos para este trabajador, los usamos de forma dinámica
+  if (workerShifts && workerShifts.length > 0) {
+    const workingDays = workerShifts
+      .filter(s => s.isOpen)
+      .map(s => s.dayOfWeek);
+    
+    const daysOff: number[] = [];
+    for (let day = 0; day <= 6; day++) {
+      if (!workingDays.includes(day)) {
+        daysOff.push(day);
+      }
+    }
+    return daysOff;
+  }
+
+  // Fallback estático basado en correos
   if (!email) return [0, 6];
   const emailStr = Array.isArray(email) ? (email[0] || '') : email;
   const eLower = emailStr.toLowerCase();
@@ -39,5 +55,5 @@ export function getWorkerDaysOff(email: string | string[]): number[] {
   if (eLower.includes('javier@barberia.com') || eLower.includes('elena@barberia.com')) {
     return [1, 2, 3]; // Lunes, Martes, Miércoles
   }
-  return [0, 6]; // Domingo, Sábado (Carlos, Mateo y nuevos trabajadores estándar)
+  return [0, 6]; // Domingo, Sábado por defecto
 }

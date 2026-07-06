@@ -309,7 +309,8 @@ export const getCurrentUser = async (req, res, next) => {
 
     const userPayload = {
       ...req.session.user,
-      memberships: membershipsPayload
+      memberships: membershipsPayload,
+      originalUser: req.session.originalUser || null
     };
 
     res.status(200).json({

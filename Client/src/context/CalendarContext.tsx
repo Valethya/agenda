@@ -4,7 +4,7 @@ import * as api from '../services/api';
 
 interface CalendarContextType {
   currentDate: Date;
-  viewType: 'semana' | 'dia' | 'mes' | 'horarios';
+  viewType: 'semana' | 'dia' | 'mes' | 'horarios' | 'saas-negocios' | 'saas-metricas';
   selectedProfessionalId: string | null;
   selectedAppointment: Appointment | null;
   citas: Appointment[];
@@ -30,7 +30,7 @@ const CalendarContext = createContext<CalendarContextType | undefined>(undefined
 
 export const CalendarProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [currentDate, setDate] = useState<Date>(new Date());
-  const [viewType, setViewType] = useState<'semana' | 'dia' | 'mes' | 'horarios'>('semana');
+  const [viewType, setViewType] = useState<'semana' | 'dia' | 'mes' | 'horarios' | 'saas-negocios' | 'saas-metricas'>('semana');
   const [selectedProfessionalId, setSelectedProfessionalId] = useState<string | null>(null);
   const [selectedAppointment, setSelectedAppointment] = useState<Appointment | null>(null);
   
@@ -89,8 +89,14 @@ export const CalendarProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       const allShifts = shiftsResults.flat();
       setShifts(allShifts);
 
-      // Set default view & filter based on role
-      if (loggedUser && loggedUser.role === 'worker') {
+      // Set default view & filter based on role, supporting URL query parameters
+      const params = new URLSearchParams(window.location.search);
+      const urlView = params.get('view');
+
+      if (urlView) {
+        setViewType(urlView as any);
+        setSelectedProfessionalId(null);
+      } else if (loggedUser && loggedUser.role === 'worker') {
         setViewType('semana');
         setSelectedProfessionalId(loggedUser._id);
       } else {

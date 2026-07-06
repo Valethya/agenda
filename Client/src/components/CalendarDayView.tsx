@@ -130,7 +130,8 @@ export const CalendarDayView: React.FC = () => {
         {/* Days Off Overlay */}
         {activeProfs.map((p, colIdx) => {
           const dayOfWeek = currentDate.getDay();
-          const isOff = getWorkerDaysOff(p.email).includes(dayOfWeek);
+          const pShifts = shifts.filter(s => s.worker === p._id || (typeof s.worker === 'object' && s.worker._id === p._id));
+          const isOff = getWorkerDaysOff(p.email, pShifts).includes(dayOfWeek);
           if (!isOff) return null;
           
             return (
@@ -150,7 +151,8 @@ export const CalendarDayView: React.FC = () => {
         {/* Descansos (Breaks) loaded dynamically from database shifts */}
         {activeProfs.map((p, colIdx) => {
           const dayOfWeek = currentDate.getDay();
-          const isOff = getWorkerDaysOff(p.email).includes(dayOfWeek);
+          const pShifts = shifts.filter(s => s.worker === p._id || (typeof s.worker === 'object' && s.worker._id === p._id));
+          const isOff = getWorkerDaysOff(p.email, pShifts).includes(dayOfWeek);
           if (isOff) return null; // No breaks on days off!
 
           // Find the shift for this worker and day of the week
