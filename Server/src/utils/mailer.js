@@ -16,6 +16,10 @@ const getTransporter = async () => {
 
   const hasSmtpConfig = smtpHost && smtpPort && smtpUser && smtpPass;
 
+  // Imprimir las llaves SMTP encontradas para depuración remota
+  const smtpKeys = Object.keys(process.env).filter(k => k.toUpperCase().includes("SMTP"));
+  logger.info(`Mailer: Llaves SMTP encontradas en process.env: ${JSON.stringify(smtpKeys)}`);
+
   if (hasSmtpConfig) {
     const isSecure = smtpSecure === 'true' || 
                      smtpSecure === '1' || 
