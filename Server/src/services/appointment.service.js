@@ -310,7 +310,7 @@ export const cancelAppointment = async (appointmentId, userId, userRole) => {
 
   const isClient = appointment.client._id.toString() === userId;
   const isWorker = appointment.worker._id.toString() === userId;
-  const isAdmin = userRole === "admin";
+  const isAdmin = userRole === "admin" || userRole === "superadmin";
 
   // Validar permisos
   if (!isClient && !isWorker && !isAdmin) {
