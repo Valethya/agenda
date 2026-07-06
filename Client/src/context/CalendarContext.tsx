@@ -99,6 +99,9 @@ export const CalendarProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       } else if (loggedUser && loggedUser.role === 'worker') {
         setViewType('semana');
         setSelectedProfessionalId(loggedUser._id);
+      } else if (loggedUser && loggedUser.role === 'superadmin') {
+        setViewType('mes');
+        setSelectedProfessionalId(null);
       } else {
         setViewType('dia');
         setSelectedProfessionalId(null);
