@@ -16,10 +16,13 @@ const getTransporter = async () => {
 
   if (hasSmtpConfig) {
     logger.info("Mailer: Configurando transportador SMTP de producción...");
+    const isSecure = process.env.SMTP_SECURE === 'true' || 
+                     process.env.SMTP_SECURE === '1' || 
+                     Number(process.env.SMTP_PORT) === 465;
     transporter = nodemailer.createTransport({
       host: process.env.SMTP_HOST,
       port: Number(process.env.SMTP_PORT),
-      secure: Number(process.env.SMTP_PORT) === 465, // true para 465, false para otros
+      secure: isSecure,
       auth: {
         user: process.env.SMTP_USER,
         pass: process.env.SMTP_PASS,
@@ -66,7 +69,7 @@ const getBrandingSettings = async (businessId) => {
       }
     }
 
-    // Recuperar el email del dueño del negocio para Reply-To
+    // Recuperar el email del dueño del negocio para Reply-To y BCC
     const Business = (await import("../db/models/business.model.js")).default;
     const business = await Business.findById(businessId).populate("owner");
     if (business && business.owner && business.owner.email) {
@@ -87,18 +90,20 @@ export const sendMail = async ({ to, subject, html, businessId = null }) => {
   try {
     const activeTransporter = await getTransporter();
 
-    let fromName = "Agenda App";
+    let fromName = process.env.SMTP_FROM_NAME || "Agenda App";
     let replyTo = null;
+    let bccEmail = null;
 
     if (businessId) {
       const branding = await getBrandingSettings(businessId);
-      fromName = branding.businessName;
+      fromName = branding.businessName || fromName;
       if (branding.contactEmail) {
         replyTo = branding.contactEmail;
+        bccEmail = branding.contactEmail; // Copia oculta al dueño del negocio
       }
     }
 
-    const fromEmail = process.env.SMTP_USER || "noreply@agendaapp.com";
+    const fromEmail = process.env.SMTP_FROM_EMAIL || process.env.SMTP_USER || "noreply@agendaapp.com";
     const mailOptions = {
       from: `"${fromName}" <${fromEmail}>`,
       to: recipient,
@@ -110,6 +115,11 @@ export const sendMail = async ({ to, subject, html, businessId = null }) => {
       mailOptions.replyTo = replyTo;
     }
 
+    // Si hay correo de copia oculta asignado y no es el mismo que recibe el email principal
+    if (bccEmail && bccEmail !== recipient) {
+      mailOptions.bcc = bccEmail;
+    }
+
     const info = await activeTransporter.sendMail(mailOptions);
     logger.info(`Email enviado con éxito a ${recipient}. MessageId: ${info.messageId}`);
 
@@ -118,6 +128,9 @@ export const sendMail = async ({ to, subject, html, businessId = null }) => {
       console.log(`\n=================== EMAIL ENVIADO (PRUEBAS) ===================`);
       console.log(`De: "${fromName}" <${fromEmail}>`);
       console.log(`Para: ${recipient}`);
+      if (mailOptions.bcc) {
+        console.log(`Copia Oculta (BCC): ${mailOptions.bcc}`);
+      }
       if (replyTo) {
         console.log(`Responder a (Reply-To): ${replyTo}`);
       }
