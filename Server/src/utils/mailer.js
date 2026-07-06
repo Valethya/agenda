@@ -8,27 +8,28 @@ let transporter;
 const getTransporter = async () => {
   if (transporter) return transporter;
 
-  const hasSmtpConfig =
-    process.env.SMTP_HOST &&
-    process.env.SMTP_PORT &&
-    process.env.SMTP_USER &&
-    process.env.SMTP_PASS;
+  const smtpHost = process.env.SMTP_HOST || process.env["SMTP-HOST"];
+  const smtpPort = process.env.SMTP_PORT || process.env["SMTP-PORT"];
+  const smtpUser = process.env.SMTP_USER || process.env["SMTP-USER"];
+  const smtpPass = process.env.SMTP_PASS || process.env["SMTP-PASS"];
+  const smtpSecure = process.env.SMTP_SECURE || process.env["SMTP-SECURE"];
+
+  const hasSmtpConfig = smtpHost && smtpPort && smtpUser && smtpPass;
 
   if (hasSmtpConfig) {
     logger.info("Mailer: Configurando transportador SMTP de producción...");
-    const isSecure = process.env.SMTP_SECURE === 'true' || 
-                     process.env.SMTP_SECURE === '1' || 
-                     Number(process.env.SMTP_PORT) === 465;
+    const isSecure = smtpSecure === 'true' || 
+                     smtpSecure === '1' || 
+                     Number(smtpPort) === 465;
     transporter = nodemailer.createTransport({
-      host: process.env.SMTP_HOST,
-      port: Number(process.env.SMTP_PORT),
+      host: smtpHost,
+      port: Number(smtpPort),
       secure: isSecure,
       auth: {
-        user: process.env.SMTP_USER,
-        pass: process.env.SMTP_PASS,
+        user: smtpUser,
+        pass: smtpPass,
       },
-    });
-  } else {
+    });  } else {
     logger.info("Mailer: Configurando transportador SMTP de prueba (Ethereal)...");
     // Crear cuenta de prueba de Ethereal Mail para desarrollo
     const testAccount = await nodemailer.createTestAccount();
@@ -90,7 +91,7 @@ export const sendMail = async ({ to, subject, html, businessId = null }) => {
   try {
     const activeTransporter = await getTransporter();
 
-    let fromName = process.env.SMTP_FROM_NAME || "Agenda App";
+    let fromName = process.env.SMTP_FROM_NAME || process.env["SMTP-FROM-NAME"] || "Agenda App";
     let replyTo = null;
     let bccEmail = null;
 
@@ -103,7 +104,7 @@ export const sendMail = async ({ to, subject, html, businessId = null }) => {
       }
     }
 
-    const fromEmail = process.env.SMTP_FROM_EMAIL || process.env.SMTP_USER || "noreply@agendaapp.com";
+    const fromEmail = process.env.SMTP_FROM_EMAIL || process.env["SMTP-FROM-EMAIL"] || process.env.SMTP_USER || process.env["SMTP-USER"] || "noreply@agendaapp.com";
     const mailOptions = {
       from: `"${fromName}" <${fromEmail}>`,
       to: recipient,
