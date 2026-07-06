@@ -45,27 +45,13 @@ app.use(
   }),
 );
 
-// CORS
-const allowedOrigins = [
-  process.env.FRONTEND_URL,
-  "http://localhost:5173",
-  "http://localhost:4321",
-].filter(Boolean);
-
+// CORS - Permitimos orígenes dinámicos para soportar widgets de reserva embebidos en sitios web externos (SaaS)
 app.use(
   cors({
     credentials: true,
     origin: (origin, callback) => {
-      if (!origin) return callback(null, true);
-      // Permitir cualquier puerto local en desarrollo
-      if (
-        allowedOrigins.includes(origin) ||
-        origin.startsWith("http://localhost:") ||
-        origin.startsWith("http://127.0.0.1:")
-      ) {
-        return callback(null, true);
-      }
-      return callback(new Error("Bloqueado por CORS"));
+      // Permitimos cualquier origen (incluyendo solicitudes locales, apps móviles, widgets de clientes, etc.)
+      return callback(null, true);
     },
   }),
 );
