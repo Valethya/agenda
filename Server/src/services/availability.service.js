@@ -4,6 +4,7 @@ import * as appointmentRepository from "../repositories/appointment.repository.j
 import * as serviceRepository from "../repositories/service.repository.js";
 import * as businessConfigRepository from "../repositories/businessConfig.repository.js";
 import User from "../db/models/user.model.js";
+import HolidayModel from "../db/models/holiday.model.js";
 import { NotFoundError, ValidationError } from "../utils/appError.js";
 
 const timeToMinutes = (timeStr) => {
@@ -22,9 +23,29 @@ const minutesToTime = (totalMinutes) => {
 const checkOverlap = (startA, endA, startB, endB) => {
   return Math.max(startA, startB) < Math.min(endA, endB);
 };
-
 export const getAvailableSlots = async (workerId, dateStr, serviceId, businessId, excludeAppointmentId = null) => {
-  const service = await serviceRepository.findById(serviceId);
+  const dateParts = dateStr.split("-").map(Number);
+  const targetDate = new Date(
+    Date.UTC(dateParts[0], dateParts[1] - 1, dateParts[2]),
+  );
+  const dayOfWeek = targetDate.getUTCDay();
+
+  // Ejecutar todas las consultas a base de datos de forma paralela concurrente
+  const [service, worker, shift, holiday, appointments, blocks, businessConfig] = await Promise.all([
+    serviceRepository.findById(serviceId),
+    User.findById(workerId),
+    shiftRepository.findByWorkerAndDay(workerId, dayOfWeek),
+    HolidayModel.findOne({
+      date: {
+        $gte: new Date(Date.UTC(dateParts[0], dateParts[1] - 1, dateParts[2], 0, 0, 0)),
+        $lte: new Date(Date.UTC(dateParts[0], dateParts[1] - 1, dateParts[2], 23, 59, 59, 999))
+      }
+    }),
+    appointmentRepository.findByWorkerAndDate(workerId, targetDate),
+    blockRepository.findByWorkerAndDateRange(workerId, targetDate, targetDate),
+    businessId ? businessConfigRepository.getConfig(businessId) : Promise.resolve(null)
+  ]);
+
   if (!service) {
     throw new NotFoundError("El servicio especificado no existe");
   }
@@ -32,7 +53,6 @@ export const getAvailableSlots = async (workerId, dateStr, serviceId, businessId
     throw new ValidationError("El servicio especificado no pertenece a este negocio");
   }
 
-  const worker = await User.findById(workerId);
   if (!worker || worker.role !== "worker") {
     throw new NotFoundError("El profesional especificado no existe");
   }
@@ -42,14 +62,6 @@ export const getAvailableSlots = async (workerId, dateStr, serviceId, businessId
 
   const serviceDuration = service.duration;
 
-  const dateParts = dateStr.split("-").map(Number);
-  const targetDate = new Date(
-    Date.UTC(dateParts[0], dateParts[1] - 1, dateParts[2]),
-  );
-  const dayOfWeek = targetDate.getUTCDay();
-
-  const shift = await shiftRepository.findByWorkerAndDay(workerId, dayOfWeek);
-  
   let shiftStart = timeToMinutes("09:00");
   let shiftEnd = timeToMinutes("19:00");
   let shiftBreaks = [{ start: timeToMinutes("13:00"), end: timeToMinutes("14:00") }];
@@ -67,52 +79,28 @@ export const getAvailableSlots = async (workerId, dateStr, serviceId, businessId
       isClosed = true;
     }
   } else {
-    // Si no hay turno configurado para ese día de la semana (ej. cerrado)
     isClosed = true;
   }
-
-  // Búsqueda de feriados configurados para esta fecha
-  const HolidayModel = (await import("../db/models/holiday.model.js")).default;
-  const holiday = await HolidayModel.findOne({
-    date: {
-      $gte: new Date(Date.UTC(dateParts[0], dateParts[1] - 1, dateParts[2], 0, 0, 0)),
-      $lte: new Date(Date.UTC(dateParts[0], dateParts[1] - 1, dateParts[2], 23, 59, 59, 999))
-    }
-  });
 
   if (holiday) {
     if (!holiday.isHalfDay) {
       isClosed = true;
     } else {
-      // Si es media jornada, limitamos el fin de turno a las 13:00
       shiftEnd = Math.min(shiftEnd, timeToMinutes("13:00"));
     }
   }
 
-  const appointments = await appointmentRepository.findByWorkerAndDate(
-    workerId,
-    targetDate,
-  );
-
-  const blocks = await blockRepository.findByWorkerAndDateRange(
-    workerId,
-    targetDate,
-    targetDate,
-  );
   const blockedIntervals = blocks.map((b) => ({
     start: timeToMinutes(b.startTime),
     end: timeToMinutes(b.endTime),
   }));
 
   let bookingInterval = 30;
-  if (businessId) {
-    const config = await businessConfigRepository.getConfig(businessId);
-    if (config && config.appointmentSettings && config.appointmentSettings.slotDuration) {
-      bookingInterval = config.appointmentSettings.slotDuration;
-    }
+  if (businessConfig && businessConfig.appointmentSettings && businessConfig.appointmentSettings.slotDuration) {
+    bookingInterval = businessConfig.appointmentSettings.slotDuration;
   }
+  
   const availableSlots = [];
-
   const today = new Date();
   const isToday =
     today.getFullYear() === targetDate.getUTCFullYear() &&
