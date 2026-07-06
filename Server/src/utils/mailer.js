@@ -17,10 +17,10 @@ const getTransporter = async () => {
   const hasSmtpConfig = smtpHost && smtpPort && smtpUser && smtpPass;
 
   if (hasSmtpConfig) {
-    logger.info("Mailer: Configurando transportador SMTP de producción...");
     const isSecure = smtpSecure === 'true' || 
                      smtpSecure === '1' || 
                      Number(smtpPort) === 465;
+    logger.info(`Mailer: Configurando transportador SMTP de producción (host=${smtpHost}, port=${smtpPort}, secure=${isSecure}, user=${smtpUser})...`);
     transporter = nodemailer.createTransport({
       host: smtpHost,
       port: Number(smtpPort),
