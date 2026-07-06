@@ -1,4 +1,5 @@
 import nodemailer from "nodemailer";
+import dns from "dns";
 import logger from "../config/logger.js";
 import BusinessConfig from "../db/models/businessConfig.model.js";
 
@@ -29,6 +30,9 @@ const getTransporter = async () => {
       host: smtpHost,
       port: Number(smtpPort),
       secure: isSecure,
+      lookup: (hostname, options, callback) => {
+        dns.lookup(hostname, { family: 4 }, callback);
+      },
       auth: {
         user: smtpUser,
         pass: smtpPass,
