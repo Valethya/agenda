@@ -49,11 +49,14 @@ export const getIO = () => {
   return io;
 };
 
-// Utilidad para notificar cambios de disponibilidad en tiempo real a una sala específica
 export const emitAvailabilityChange = (workerId, dateStr) => {
   if (io) {
     const room = `availability:${workerId}:${dateStr}`;
     io.to(room).emit("availability_changed", { workerId, date: dateStr });
     logger.info(`WS Broadcast: Cambios de disponibilidad en la sala ${room}`);
+    
+    // Emitir evento global para actualizar los paneles de administración en tiempo real
+    io.emit("calendar_update");
+    logger.info("WS Broadcast: Evento global calendar_update emitido");
   }
 };

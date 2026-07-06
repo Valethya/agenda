@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import type { Appointment, Professional, BusinessConfig, Shift } from '../types';
 import * as api from '../services/api';
+import { io } from 'socket.io-client';
 
 interface CalendarContextType {
   currentDate: Date;
@@ -128,11 +129,39 @@ export const CalendarProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       setError("Error al sincronizar datos.");
     }
   };
-
   useEffect(() => {
     loadAllData();
-  }, []);
 
+    // Sincronización en tiempo real vía WebSockets
+    const apiUrl = import.meta.env.PUBLIC_API_URL;
+    if (apiUrl) {
+      try {
+        const socketUrl = new URL(apiUrl).origin;
+        const socket = io(socketUrl, {
+          transports: ['websocket', 'polling']
+        });
+
+        socket.on('connect', () => {
+          console.log("Conectado a WebSockets para actualizaciones de calendario:", socket.id);
+        });
+
+        socket.on('calendar_update', () => {
+          console.log("Recibido evento global 'calendar_update'. Sincronizando citas...");
+          refreshData();
+        });
+
+        socket.on('disconnect', () => {
+          console.log("Desconectado de WebSockets de calendario");
+        });
+
+        return () => {
+          socket.disconnect();
+        };
+      } catch (err) {
+        console.error("Error al establecer conexión WebSocket:", err);
+      }
+    }
+  }, []);
   const confirmApp = async (id: string): Promise<boolean> => {
     try {
       const res = await api.confirmAppointment(id);
