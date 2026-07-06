@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import styles from './CalendarDayView.module.scss';
 import { useCalendar } from '../context/CalendarContext';
-import { generateHoras, timeToRowIndex, formatLocalDateStr, getWorkerDaysOff } from '../utils/time';
+import { generateHoras, timeToRowIndex, formatLocalDateStr, getWorkerDaysOff, parseUTCDateToLocal } from '../utils/time';
 import AppointmentCard from './AppointmentCard';
 
 export const CalendarDayView: React.FC = () => {
@@ -40,7 +40,7 @@ export const CalendarDayView: React.FC = () => {
   // Filter appointments for the selected date
   const selectedDateStr = formatLocalDateStr(currentDate);
   let dayAppointments = citas.filter(c => {
-    const cDate = new Date(c.date);
+    const cDate = parseUTCDateToLocal(c.date);
     return formatLocalDateStr(cDate) === selectedDateStr;
   });
 

@@ -20,15 +20,22 @@ export function timeToRowIndex(startTime: string, slotDuration: number = 60): nu
     mins = (h + 24) * 60 + m - 8 * 60;
   }
   return Math.round(mins / slotDuration) + 1;
-}
-
-export function formatLocalDateStr(date: Date): string {
+}export function formatLocalDateStr(date: Date): string {
   const y = date.getFullYear();
   const m = String(date.getMonth() + 1).padStart(2, '0');
   const d = String(date.getDate()).padStart(2, '0');
   return `${y}-${m}-${d}`;
 }
 
+export function parseUTCDateToLocal(dateInput: string | Date): Date {
+  if (!dateInput) return new Date();
+  if (dateInput instanceof Date) return dateInput;
+  const parts = dateInput.split('T')[0].split('-').map(Number);
+  if (parts.length === 3) {
+    return new Date(parts[0], parts[1] - 1, parts[2]);
+  }
+  return new Date(dateInput);
+}
 export function getWorkerDaysOff(email: string | string[], workerShifts?: any[]): number[] {
   // Si tenemos los turnos reales de la base de datos para este trabajador, los usamos de forma dinámica
   if (workerShifts && workerShifts.length > 0) {

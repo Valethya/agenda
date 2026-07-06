@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import styles from './CalendarWeekView.module.scss';
 import { useCalendar } from '../context/CalendarContext';
-import { generateHoras, timeToRowIndex, formatLocalDateStr, getWorkerDaysOff } from '../utils/time';
+import { generateHoras, timeToRowIndex, formatLocalDateStr, getWorkerDaysOff, parseUTCDateToLocal } from '../utils/time';
 import AppointmentCard from './AppointmentCard';
 import type { Appointment } from '../types';
 
@@ -58,7 +58,7 @@ export const CalendarWeekView: React.FC = () => {
 
   // Filter appointments that belong to the active week
   let weekAppointments = citas.filter(c => {
-    const cDate = new Date(c.date);
+    const cDate = parseUTCDateToLocal(c.date);
     return weekDateStrings.includes(formatLocalDateStr(cDate));
   });
 
@@ -82,7 +82,7 @@ export const CalendarWeekView: React.FC = () => {
 
   weekDateStrings.forEach((dateStr) => {
     const dayApps = weekAppointments.filter(c => {
-      const cDate = new Date(c.date);
+      const cDate = parseUTCDateToLocal(c.date);
       return formatLocalDateStr(cDate) === dateStr;
     });
 
@@ -266,7 +266,7 @@ export const CalendarWeekView: React.FC = () => {
 
         {/* Render Appointments */}
         {weekAppointments.map(c => {
-          const cDate = new Date(c.date);
+          const cDate = parseUTCDateToLocal(c.date);
           const dateStr = formatLocalDateStr(cDate);
           const colIdx = weekDateStrings.indexOf(dateStr);
           if (colIdx === -1) return null;

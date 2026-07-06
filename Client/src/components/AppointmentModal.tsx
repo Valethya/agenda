@@ -2,6 +2,7 @@ import React from 'react';
 import styles from './AppointmentModal.module.scss';
 import { useCalendar } from '../context/CalendarContext';
 import StatusBadge from './StatusBadge';
+import { parseUTCDateToLocal } from '../utils/time';
 
 export const AppointmentModal: React.FC = () => {
   const { selectedAppointment, setSelectedAppointment, confirmApp, completeApp, cancelApp, profs, businessConfig } = useCalendar();
@@ -19,7 +20,7 @@ export const AppointmentModal: React.FC = () => {
     ? `${app.worker.firstName} ${app.worker.lastName}`
     : profs.find(p => p._id === app.worker)?.firstName || 'Profesional';
 
-  const rawDateStr = new Date(app.date).toLocaleDateString('es-ES', { 
+  const rawDateStr = parseUTCDateToLocal(app.date).toLocaleDateString('es-ES', { 
     weekday: 'long', 
     day: 'numeric', 
     month: 'long' 

@@ -1,7 +1,7 @@
 import React from 'react';
 import styles from './CalendarMonthView.module.scss';
 import { useCalendar } from '../context/CalendarContext';
-import { formatLocalDateStr, getWorkerDaysOff } from '../utils/time';
+import { formatLocalDateStr, getWorkerDaysOff, parseUTCDateToLocal } from '../utils/time';
 
 export const CalendarMonthView: React.FC = () => {
   const { currentDate, setDate, setViewType, citas, selectedProfessionalId, profs, shifts } = useCalendar();
@@ -88,7 +88,7 @@ export const CalendarMonthView: React.FC = () => {
           const cellDateStr = formatLocalDateStr(d.date);
           let cellAppointments = d.other 
             ? [] 
-            : citas.filter(c => formatLocalDateStr(new Date(c.date)) === cellDateStr);
+            : citas.filter(c => formatLocalDateStr(parseUTCDateToLocal(c.date)) === cellDateStr);
 
           // Apply professional filter if selected
           if (selectedProfessionalId) {

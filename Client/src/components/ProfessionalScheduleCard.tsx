@@ -3,6 +3,7 @@ import styles from './ProfessionalScheduleCard.module.scss';
 import type { Professional, Shift } from '../types';
 import * as api from '../services/api';
 import { useCalendar } from '../context/CalendarContext';
+import { parseUTCDateToLocal } from '../utils/time';
 
 interface ProfessionalScheduleCardProps {
   professional: Professional;
@@ -91,7 +92,7 @@ export const ProfessionalScheduleCard: React.FC<ProfessionalScheduleCardProps> =
   const weeklyAppointmentsCount = citas.filter(c => {
     const cWorkerId = typeof c.worker === 'object' ? c.worker._id : c.worker;
     if (cWorkerId !== professional._id) return false;
-    const cDate = new Date(c.date);
+    const cDate = parseUTCDateToLocal(c.date);
     return cDate >= startOfWeek && cDate <= endOfWeek && c.status !== 'cancelled';
   }).length;
 
