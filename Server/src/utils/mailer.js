@@ -97,8 +97,6 @@ const getBrandingSettings = async (businessId) => {
 export const sendMail = async ({ to, subject, html, businessId = null }) => {
   const recipient = Array.isArray(to) ? to[0] : to;
   try {
-    const activeTransporter = await getTransporter();
-
     let fromName = process.env.SMTP_FROM_NAME || process.env["SMTP-FROM-NAME"] || "Agenda App";
     let replyTo = null;
     let bccEmail = null;
@@ -113,6 +111,46 @@ export const sendMail = async ({ to, subject, html, businessId = null }) => {
     }
 
     const fromEmail = process.env.SMTP_FROM_EMAIL || process.env["SMTP-FROM-EMAIL"] || process.env.SMTP_USER || process.env["SMTP-USER"] || "noreply@agendaapp.com";
+
+    // Si hay una API Key de Resend configurada, enviamos por API REST (HTTPS) para evitar bloqueos de puertos SMTP en Railway
+    if (process.env.RESEND_API_KEY) {
+      logger.info(`Mailer: Enviando email a ${recipient} usando la API de Resend (HTTPS)...`);
+      
+      const payload = {
+        from: `"${fromName}" <${fromEmail}>`,
+        to: [recipient],
+        subject,
+        html,
+      };
+
+      if (replyTo) {
+        payload.reply_to = replyTo;
+      }
+      if (bccEmail && bccEmail !== recipient) {
+        payload.bcc = [bccEmail];
+      }
+
+      const response = await fetch("https://api.resend.com/emails", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${process.env.RESEND_API_KEY}`,
+        },
+        body: JSON.stringify(payload),
+      });
+
+      const resData = await response.json();
+      if (!response.ok) {
+        throw new Error(resData.message || JSON.stringify(resData));
+      }
+
+      logger.info(`Email enviado con éxito a ${recipient} vía Resend. ID: ${resData.id}`);
+      return resData;
+    }
+
+    // Comportamiento tradicional por SMTP o Ethereal
+    const activeTransporter = await getTransporter();
+
     const mailOptions = {
       from: `"${fromName}" <${fromEmail}>`,
       to: recipient,

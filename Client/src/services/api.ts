@@ -115,7 +115,8 @@ export async function getBusinessConfigData(): Promise<BusinessConfig> {
       professionalRoleLabel,
       professionalRoleLabelPlural,
       enabledNavItems,
-      business: configPayload?.business
+      business: configPayload?.business,
+      appointmentSettings: configPayload?.appointmentSettings
     };
   } catch (err) {
     // Fallback

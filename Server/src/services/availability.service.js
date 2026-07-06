@@ -152,6 +152,21 @@ export const getAvailableSlots = async (workerId, dateStr, serviceId, businessId
       if (isBlocked) {
         available = false;
       }
+    if (slotStart === 960) {
+      console.log("DEBUG 16:00 details:", {
+        available,
+        isInBreak,
+        isBooked,
+        isBlocked,
+        appointments: appointments.map(app => ({
+          id: app._id,
+          startTime: app.startTime,
+          endTime: app.endTime,
+          appStart: timeToMinutes(app.startTime),
+          appEnd: timeToMinutes(app.endTime),
+          overlap: checkOverlap(960, 960 + serviceDuration, timeToMinutes(app.startTime), timeToMinutes(app.endTime))
+        }))
+      });
     }
 
     availableSlots.push({
