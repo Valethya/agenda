@@ -129,58 +129,60 @@ export const bookAppointment = async (appointmentData) => {
   // F. Emitir cambio de disponibilidad en tiempo real mediante WebSockets
   emitAvailabilityChange(worker, dateStr);
 
-  // G. Enviar correo de confirmación al cliente o pre-reserva + alerta al barbero
+  // G. Enviar correo de confirmación al cliente o pre-reserva + alerta al barbero (en segundo plano para evitar latencia de SMTP)
   const populated = await appointmentRepository.findById(newAppointment._id);
   if (populated && populated.client.email) {
-    try {
-      if (initialStatus === "confirmed") {
-        await mailer.sendAppointmentConfirmedEmail(populated.client.email, populated);
-        await logEvent({
-          appointmentId: newAppointment._id,
-          userId: client,
-          event: "EMAIL_NOTIFICATION_SENT",
-          level: "INFO",
-          message: `Correo de confirmación directa enviado a ${populated.client.email}.`,
-          metadata: { email: populated.client.email }
-        });
-      } else {
-        await mailer.sendAppointmentBookedEmail(populated.client.email, populated);
-        await logEvent({
-          appointmentId: newAppointment._id,
-          userId: client,
-          event: "EMAIL_NOTIFICATION_SENT",
-          level: "INFO",
-          message: `Correo de pre-reserva enviado a ${populated.client.email}.`,
-          metadata: { email: populated.client.email }
-        });
+    (async () => {
+      try {
+        if (initialStatus === "confirmed") {
+          await mailer.sendAppointmentConfirmedEmail(populated.client.email, populated);
+          await logEvent({
+            appointmentId: newAppointment._id,
+            userId: client,
+            event: "EMAIL_NOTIFICATION_SENT",
+            level: "INFO",
+            message: `Correo de confirmación directa enviado a ${populated.client.email}.`,
+            metadata: { email: populated.client.email }
+          });
+        } else {
+          await mailer.sendAppointmentBookedEmail(populated.client.email, populated);
+          await logEvent({
+            appointmentId: newAppointment._id,
+            userId: client,
+            event: "EMAIL_NOTIFICATION_SENT",
+            level: "INFO",
+            message: `Correo de pre-reserva enviado a ${populated.client.email}.`,
+            metadata: { email: populated.client.email }
+          });
 
-        // Enviar alerta al barbero asignado si hay un correo configurado
-        if (populated.worker && populated.worker.email) {
-          const workerEmail = Array.isArray(populated.worker.email) ? populated.worker.email[0] : populated.worker.email;
-          if (workerEmail) {
-            await mailer.sendWorkerPendingApprovalEmail(workerEmail, populated);
-            await logEvent({
-              appointmentId: newAppointment._id,
-              userId: client,
-              event: "EMAIL_NOTIFICATION_SENT",
-              level: "INFO",
-              message: `Correo de alerta enviado al barbero ${workerEmail}.`,
-              metadata: { email: workerEmail }
-            });
+          // Enviar alerta al barbero asignado si hay un correo configurado
+          if (populated.worker && populated.worker.email) {
+            const workerEmail = Array.isArray(populated.worker.email) ? populated.worker.email[0] : populated.worker.email;
+            if (workerEmail) {
+              await mailer.sendWorkerPendingApprovalEmail(workerEmail, populated);
+              await logEvent({
+                appointmentId: newAppointment._id,
+                userId: client,
+                event: "EMAIL_NOTIFICATION_SENT",
+                level: "INFO",
+                message: `Correo de alerta enviado al barbero ${workerEmail}.`,
+                metadata: { email: workerEmail }
+              });
+            }
           }
         }
+      } catch (mailError) {
+        await logEvent({
+          appointmentId: newAppointment._id,
+          userId: client,
+          event: "EMAIL_NOTIFICATION_FAILED",
+          level: "ERROR",
+          message: `Error al enviar correos de la reserva a ${populated.client.email}.`,
+          technicalMessage: mailError.message,
+          metadata: { email: populated.client.email }
+        });
       }
-    } catch (mailError) {
-      await logEvent({
-        appointmentId: newAppointment._id,
-        userId: client,
-        event: "EMAIL_NOTIFICATION_FAILED",
-        level: "ERROR",
-        message: `Error al enviar correos de la reserva a ${populated.client.email}.`,
-        technicalMessage: mailError.message,
-        metadata: { email: populated.client.email }
-      });
-    }
+    })();
   }
 
   return newAppointment;
