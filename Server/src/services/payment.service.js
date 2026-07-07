@@ -106,6 +106,18 @@ export const initiatePayment = async (appointmentId, paymentType = "deposit") =>
 
     // Guardamos momentáneamente el estado como "pending_payment"
     await appointmentRepository.update(appointmentId, { status: "pending_payment" });
+
+    // Registrar el pago en estado "pending" con el token de transacción para búsquedas indexadas ultra rápidas
+    await Payment.create({
+      appointment: appointmentId,
+      business: businessId,
+      amount: amountToCharge,
+      currency: "CLP",
+      gateway: "webpay",
+      transactionId: response.token,
+      status: "pending",
+      type: paymentType === "deposit" ? "deposit" : "full",
+    });
     
     await logEvent({
       appointmentId,
@@ -155,12 +167,12 @@ export const confirmPayment = async (tokenWs) => {
   const tx = getTransactionInstance();
   
   try {
-    // Buscar el appointmentId asociado a este token de logs previos
+    // Buscar el appointmentId de forma súper rápida usando la consulta indexada por transactionId en la colección Payment
     let appointmentId = null;
     try {
-      const prevLog = await AuditLog.findOne({ "metadata.token": tokenWs });
-      if (prevLog) {
-        appointmentId = prevLog.appointmentId;
+      const pendingPayment = await Payment.findOne({ transactionId: tokenWs });
+      if (pendingPayment) {
+        appointmentId = pendingPayment.appointment.toString();
       }
     } catch (dbErr) {
       // Ignorar fallos de consulta secundaria
@@ -186,6 +198,7 @@ export const confirmPayment = async (tokenWs) => {
     // Confirmar la transacción con Transbank
     const commitResponse = await tx.commit(tokenWs);
 
+    // Asegurarse de tener el appointmentId correcto del buy_order retornado
     appointmentId = commitResponse.buy_order;
 
     await logEvent({
@@ -268,19 +281,18 @@ export const confirmPayment = async (tokenWs) => {
         throw new ValidationError("El buyOrder de la transacción no coincide con la reserva.");
       }
 
-      // Registrar el pago en la base de datos (Usando el tokenWs como transactionId para evitar problemas de clave duplicada en Sandbox)
+      // Actualizar el estado del pago a aprobado (búsqueda indexada ultra rápida)
       let paymentRecord;
       try {
-        paymentRecord = await Payment.create({
-          appointment: appointmentId,
-          business: appointment.business,
-          amount: commitResponse.amount,
-          currency: "CLP",
-          gateway: "webpay",
-          transactionId: tokenWs, // Usando tokenWs que es 100% único
-          status: "approved",
-          type: isDeposit ? "deposit" : "full",
-        });
+        paymentRecord = await Payment.findOneAndUpdate(
+          { transactionId: tokenWs },
+          { 
+            status: "approved",
+            amount: commitResponse.amount, // Validado
+            type: isDeposit ? "deposit" : "full"
+          },
+          { new: true }
+        );
       } catch (dbError) {
         await logEvent({
           appointmentId,
@@ -367,6 +379,11 @@ export const confirmPayment = async (tokenWs) => {
         metadata: { status: commitResponse.status, responseCode: commitResponse.response_code }
       });
 
+      // Actualizar registro de pago a rechazado en la base de datos
+      try {
+        await Payment.findOneAndUpdate({ transactionId: tokenWs }, { status: "rejected" });
+      } catch (e) {}
+
       await appointmentRepository.update(appointmentId, { status: "cancelled" });
 
       await logEvent({
@@ -386,9 +403,9 @@ export const confirmPayment = async (tokenWs) => {
   } catch (error) {
     let appointmentId = null;
     try {
-      const prevLog = await AuditLog.findOne({ "metadata.token": tokenWs });
-      if (prevLog) {
-        appointmentId = prevLog.appointmentId;
+      const pendingPayment = await Payment.findOne({ transactionId: tokenWs });
+      if (pendingPayment) {
+        appointmentId = pendingPayment.appointment.toString();
       }
     } catch (e) {}
 

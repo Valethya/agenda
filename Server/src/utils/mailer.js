@@ -55,6 +55,9 @@ const getTransporter = async () => {
   return transporter;
 };
 
+const brandingCache = new Map();
+const CACHE_TTL = 15 * 60 * 1000; // 15 minutos en milisegundos
+
 // Obtener configuración de marca de un negocio
 const getBrandingSettings = async (businessId) => {
   const settings = {
@@ -66,6 +69,12 @@ const getBrandingSettings = async (businessId) => {
   };
 
   if (!businessId) return settings;
+
+  // Retornar desde caché si existe y no ha expirado
+  const cached = brandingCache.get(businessId.toString());
+  if (cached && (Date.now() - cached.timestamp < CACHE_TTL)) {
+    return cached.data;
+  }
 
   try {
     const config = await BusinessConfig.findOne({ business: businessId });
@@ -86,6 +95,12 @@ const getBrandingSettings = async (businessId) => {
         ? business.owner.email[0]
         : business.owner.email;
     }
+
+    // Guardar en la caché
+    brandingCache.set(businessId.toString(), {
+      data: settings,
+      timestamp: Date.now()
+    });
   } catch (error) {
     logger.error(`Error al recuperar configuración de correo para negocio ${businessId}: ${error.message}`);
   }

@@ -58,8 +58,14 @@ const appointmentSchema = new mongoose.Schema(
   }
 );
 
-// Índice compuesto para acelerar las búsquedas por trabajador y fecha, y evitar colisiones
-appointmentSchema.index({ worker: 1, date: 1, startTime: 1 }, { unique: true });
+// Índice compuesto parcial para acelerar búsquedas y evitar colisiones de citas activas (omite citas canceladas)
+appointmentSchema.index(
+  { worker: 1, date: 1, startTime: 1 },
+  { 
+    unique: true, 
+    partialFilterExpression: { status: { $ne: "cancelled" } } 
+  }
+);
 
 const AppointmentModel = mongoose.model("Appointment", appointmentSchema);
 
