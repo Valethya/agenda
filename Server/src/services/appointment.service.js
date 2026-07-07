@@ -195,8 +195,9 @@ export const confirmAppointment = async (appointmentId, userId, userRole) => {
     throw new NotFoundError("La cita especificada no existe");
   }
 
-  // Validar permisos
-  if (userRole !== "admin" && appointment.worker._id.toString() !== userId) {
+  // Validar permisos (Trabajador asignado, Admin o Superadmin)
+  const isAdmin = userRole === "admin" || userRole === "superadmin";
+  if (!isAdmin && appointment.worker._id.toString() !== userId) {
     throw new UnauthorizedError("No tiene permisos para confirmar esta cita");
   }
 
@@ -266,8 +267,9 @@ export const completeAppointment = async (appointmentId, userId, userRole) => {
     throw new NotFoundError("La cita especificada no existe");
   }
 
-  // Validar permisos
-  if (userRole !== "admin" && appointment.worker._id.toString() !== userId) {
+  // Validar permisos (Trabajador asignado, Admin o Superadmin)
+  const isAdmin = userRole === "admin" || userRole === "superadmin";
+  if (!isAdmin && appointment.worker._id.toString() !== userId) {
     throw new UnauthorizedError("No tiene permisos para completar esta cita");
   }
 
