@@ -106,7 +106,6 @@ export const sendMail = async ({ to, subject, html, businessId = null }) => {
       fromName = branding.businessName || fromName;
       if (branding.contactEmail) {
         replyTo = branding.contactEmail;
-        bccEmail = branding.contactEmail; // Copia oculta al dueño del negocio
       }
     }
 
