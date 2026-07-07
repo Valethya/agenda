@@ -101,13 +101,14 @@ export const getAvailableSlots = async (workerId, dateStr, serviceId, businessId
   }
   
   const availableSlots = [];
-  const today = new Date();
+  // Usar la zona horaria local de Chile (America/Santiago) para evitar desajustes con el servidor (ej. Railway en UTC)
+  const todaySantiago = new Date(new Date().toLocaleString("en-US", { timeZone: "America/Santiago" }));
   const isToday =
-    today.getFullYear() === targetDate.getUTCFullYear() &&
-    today.getMonth() === targetDate.getUTCMonth() &&
-    today.getDate() === targetDate.getUTCDate();
+    todaySantiago.getFullYear() === dateParts[0] &&
+    todaySantiago.getMonth() === dateParts[1] - 1 &&
+    todaySantiago.getDate() === dateParts[2];
 
-  const currentMinutes = today.getHours() * 60 + today.getMinutes();
+  const currentMinutes = todaySantiago.getHours() * 60 + todaySantiago.getMinutes();
 
   for (
     let slotStart = shiftStart;
