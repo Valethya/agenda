@@ -129,11 +129,11 @@ export const bookAppointment = async (appointmentData) => {
   // F. Emitir cambio de disponibilidad en tiempo real mediante WebSockets
   emitAvailabilityChange(worker, dateStr);
 
-  // G. Enviar correo de confirmación al cliente o pre-reserva + alerta al barbero (en segundo plano para evitar latencia de SMTP)
-  const populated = await appointmentRepository.findById(newAppointment._id);
-  if (populated && populated.client.email) {
-    (async () => {
-      try {
+  // G. Enviar correo de confirmación al cliente o pre-reserva + alerta al barbero (en segundo plano diferido para evitar latencia)
+  setImmediate(async () => {
+    try {
+      const populated = await appointmentRepository.findById(newAppointment._id);
+      if (populated && populated.client.email) {
         if (initialStatus === "confirmed") {
           await mailer.sendAppointmentConfirmedEmail(populated.client.email, populated);
           await logEvent({
@@ -171,19 +171,19 @@ export const bookAppointment = async (appointmentData) => {
             }
           }
         }
-      } catch (mailError) {
-        await logEvent({
-          appointmentId: newAppointment._id,
-          userId: client,
-          event: "EMAIL_NOTIFICATION_FAILED",
-          level: "ERROR",
-          message: `Error al enviar correos de la reserva a ${populated.client.email}.`,
-          technicalMessage: mailError.message,
-          metadata: { email: populated.client.email }
-        });
       }
-    })();
-  }
+    } catch (mailError) {
+      await logEvent({
+        appointmentId: newAppointment._id,
+        userId: client,
+        event: "EMAIL_NOTIFICATION_FAILED",
+        level: "ERROR",
+        message: `Error al enviar correos de la reserva.`,
+        technicalMessage: mailError.message,
+        metadata: { appointmentId: newAppointment._id }
+      });
+    }
+  });
 
   return newAppointment;
 };
@@ -228,11 +228,12 @@ export const confirmAppointment = async (appointmentId, userId, userRole) => {
     throw dbError;
   }
 
-  // Enviar correo de confirmación al cliente (asíncrono en segundo plano para no demorar la respuesta de la API)
-  const populated = await appointmentRepository.findById(appointmentId);
-  if (populated && populated.client.email) {
-    mailer.sendAppointmentConfirmedEmail(populated.client.email, populated)
-      .then(async () => {
+  // Enviar correo de confirmación al cliente (en segundo plano diferido para no demorar la respuesta de la API)
+  setImmediate(async () => {
+    try {
+      const populated = await appointmentRepository.findById(appointmentId);
+      if (populated && populated.client.email) {
+        await mailer.sendAppointmentConfirmedEmail(populated.client.email, populated);
         await logEvent({
           appointmentId,
           userId: populated.client._id,
@@ -241,19 +242,19 @@ export const confirmAppointment = async (appointmentId, userId, userRole) => {
           message: `Correo de confirmación enviado a ${populated.client.email}.`,
           metadata: { email: populated.client.email }
         });
-      })
-      .catch(async (mailError) => {
-        await logEvent({
-          appointmentId,
-          userId: populated.client._id,
-          event: "EMAIL_NOTIFICATION_FAILED",
-          level: "ERROR",
-          message: `Error al enviar correo de confirmación a ${populated.client.email}.`,
-          technicalMessage: mailError.message,
-          metadata: { email: populated.client.email }
-        });
+      }
+    } catch (mailError) {
+      await logEvent({
+        appointmentId,
+        userId: userId,
+        event: "EMAIL_NOTIFICATION_FAILED",
+        level: "ERROR",
+        message: `Error al enviar correo de confirmación.`,
+        technicalMessage: mailError.message,
+        metadata: { appointmentId }
       });
-  }
+    }
+  });
 
   return updatedAppointment;
 };
@@ -353,11 +354,12 @@ export const cancelAppointment = async (appointmentId, userId, userRole) => {
   const dateStr = new Date(appointment.date).toISOString().split("T")[0];
   emitAvailabilityChange(appointment.worker._id.toString(), dateStr);
 
-  // Enviar correo de cancelación al cliente (asíncrono en segundo plano para no demorar la respuesta de la API)
-  const populated = await appointmentRepository.findById(appointmentId);
-  if (populated && populated.client.email) {
-    mailer.sendAppointmentCancelledEmail(populated.client.email, populated)
-      .then(async () => {
+  // Enviar correo de cancelación al cliente (en segundo plano diferido para no demorar la respuesta de la API)
+  setImmediate(async () => {
+    try {
+      const populated = await appointmentRepository.findById(appointmentId);
+      if (populated && populated.client.email) {
+        await mailer.sendAppointmentCancelledEmail(populated.client.email, populated);
         await logEvent({
           appointmentId,
           userId: populated.client._id,
@@ -366,19 +368,19 @@ export const cancelAppointment = async (appointmentId, userId, userRole) => {
           message: `Correo de cancelación enviado a ${populated.client.email}.`,
           metadata: { email: populated.client.email }
         });
-      })
-      .catch(async (mailError) => {
-        await logEvent({
-          appointmentId,
-          userId: populated.client._id,
-          event: "EMAIL_NOTIFICATION_FAILED",
-          level: "ERROR",
-          message: `Error al enviar correo de cancelación a ${populated.client.email}.`,
-          technicalMessage: mailError.message,
-          metadata: { email: populated.client.email }
-        });
+      }
+    } catch (mailError) {
+      await logEvent({
+        appointmentId,
+        userId: userId,
+        event: "EMAIL_NOTIFICATION_FAILED",
+        level: "ERROR",
+        message: `Error al enviar correo de cancelación.`,
+        technicalMessage: mailError.message,
+        metadata: { appointmentId }
       });
-  }
+    }
+  });
 
   return updatedAppointment;
 };
