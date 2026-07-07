@@ -168,6 +168,7 @@ export const getAvailableSlots = async (workerId, dateStr, serviceId, businessId
         }))
       });
     }
+  }
 
     availableSlots.push({
       startTime: minutesToTime(slotStart),
