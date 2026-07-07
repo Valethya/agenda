@@ -88,7 +88,8 @@ export function getBusinessHoursBounds(businessConfig: any) {
     }
   }
 
-  // Ajustar límites: mostrar desde 1 hora antes de abrir hasta la hora de cierre
+  // Ajustar límites: mostrar desde 1 hora antes de abrir hasta 1 hora después de cerrar
   startHour = Math.max(0, startHour - 1);
+  endHour = Math.min(24, endHour + 1);
   return { startHour, endHour };
 }
