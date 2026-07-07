@@ -110,7 +110,7 @@ export const sendMail = async ({ to, subject, html, businessId = null }) => {
       }
     }
 
-    const fromEmail = process.env.SMTP_FROM_EMAIL || process.env["SMTP-FROM-EMAIL"] || process.env.SMTP_USER || process.env["SMTP-USER"] || "noreply@agendaapp.com";
+    const fromEmail = process.env.SMTP_FROM_EMAIL || process.env["SMTP-FROM-EMAIL"] || process.env.SMTP_USER || process.env["SMTP-USER"] || "noreply@atmosferastudio.cl";
 
     // Si hay una API Key de Resend configurada, enviamos por API REST (HTTPS) para evitar bloqueos de puertos SMTP en Railway
     if (process.env.RESEND_API_KEY) {
