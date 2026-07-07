@@ -1,9 +1,11 @@
-export function generateHoras(slotDuration: number = 60): string[] {
+export function generateHoras(slotDuration: number = 60, startHour: number = 8, endHour: number = 20): string[] {
   const horas: string[] = [];
-  // Spans 17 hours from 08:00 to 01:00 of the next day inclusive (1020 minutes)
-  const totalMins = 17 * 60;
+  const startMins = startHour * 60;
+  const endMins = endHour * 60;
+  const totalMins = endMins - startMins;
+
   for (let m = 0; m <= totalMins; m += slotDuration) {
-    const currentMins = 8 * 60 + m;
+    const currentMins = startMins + m;
     const h = Math.floor(currentMins / 60) % 24;
     const mins = currentMins % 60;
     horas.push(`${String(h).padStart(2, '0')}:${String(mins).padStart(2, '0')}`);
@@ -11,13 +13,13 @@ export function generateHoras(slotDuration: number = 60): string[] {
   return horas;
 }
 
-export function timeToRowIndex(startTime: string, slotDuration: number = 60): number {
+export function timeToRowIndex(startTime: string, slotDuration: number = 60, startHour: number = 8): number {
   if (!startTime) return 1;
   const [h, m] = startTime.split(':').map(Number);
-  let mins = h * 60 + m - 8 * 60;
-  if (h < 8) {
-    // For slots after midnight (00:00 to 01:59)
-    mins = (h + 24) * 60 + m - 8 * 60;
+  let mins = h * 60 + m - startHour * 60;
+  if (h < startHour) {
+    // For slots after midnight (00:00 to startHour - 1)
+    mins = (h + 24) * 60 + m - startHour * 60;
   }
   return Math.round(mins / slotDuration) + 1;
 }export function formatLocalDateStr(date: Date): string {
@@ -26,7 +28,7 @@ export function timeToRowIndex(startTime: string, slotDuration: number = 60): nu
   const d = String(date.getDate()).padStart(2, '0');
   return `${y}-${m}-${d}`;
 }
-
+ 
 export function parseUTCDateToLocal(dateInput: string | Date): Date {
   if (!dateInput) return new Date();
   if (dateInput instanceof Date) return dateInput;
@@ -63,4 +65,30 @@ export function getWorkerDaysOff(email: string | string[], workerShifts?: any[])
     return [1, 2, 3]; // Lunes, Martes, Miércoles
   }
   return [0, 6]; // Domingo, Sábado por defecto
+}
+
+export function getBusinessHoursBounds(businessConfig: any) {
+  let startHour = 8;
+  let endHour = 20;
+
+  if (businessConfig && businessConfig.workingHours && businessConfig.workingHours.length > 0) {
+    const openDays = businessConfig.workingHours.filter((wh: any) => wh.isOpen);
+    if (openDays.length > 0) {
+      const startTimes = openDays.map((wh: any) => {
+        const [h] = wh.startTime.split(':').map(Number);
+        return h;
+      });
+      startHour = Math.min(...startTimes);
+
+      const endTimes = openDays.map((wh: any) => {
+        const [h] = wh.endTime.split(':').map(Number);
+        return h;
+      });
+      endHour = Math.max(...endTimes);
+    }
+  }
+
+  // Ajustar límites: mostrar desde 1 hora antes de abrir hasta la hora de cierre
+  startHour = Math.max(0, startHour - 1);
+  return { startHour, endHour };
 }

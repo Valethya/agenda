@@ -1,19 +1,25 @@
 import React, { useEffect, useState } from 'react';
 import styles from './CalendarDayView.module.scss';
 import { useCalendar } from '../context/CalendarContext';
-import { generateHoras, timeToRowIndex, formatLocalDateStr, getWorkerDaysOff, parseUTCDateToLocal } from '../utils/time';
+import { generateHoras, timeToRowIndex, formatLocalDateStr, getWorkerDaysOff, parseUTCDateToLocal, getBusinessHoursBounds } from '../utils/time';
 import AppointmentCard from './AppointmentCard';
 
 export const CalendarDayView: React.FC = () => {
   const { currentDate, citas, profs, selectedProfessionalId, businessConfig, shifts } = useCalendar();
+  
+  const slotDuration = businessConfig.appointmentSettings?.slotDuration || 60;
+  const { startHour, endHour } = getBusinessHoursBounds(businessConfig);
+  const HORAS = generateHoras(slotDuration, startHour, endHour);
+
   const [minutesSinceEight, setMinutesSinceEight] = useState<number | null>(null);
 
   useEffect(() => {
     const updateTimeLine = () => {
       const now = new Date();
       if (formatLocalDateStr(currentDate) === formatLocalDateStr(now)) {
-        const mins = (now.getHours() - 8) * 60 + now.getMinutes();
-        if (mins >= 0 && mins < 18 * 60) {
+        const mins = (now.getHours() - startHour) * 60 + now.getMinutes();
+        const totalCalendarMins = (endHour - startHour) * 60;
+        if (mins >= 0 && mins < totalCalendarMins) {
           setMinutesSinceEight(mins);
           return;
         }
@@ -24,10 +30,7 @@ export const CalendarDayView: React.FC = () => {
     updateTimeLine();
     const interval = setInterval(updateTimeLine, 60000); // Update every minute
     return () => clearInterval(interval);
-  }, [currentDate]);
-
-  const slotDuration = businessConfig.appointmentSettings?.slotDuration || 60;
-  const HORAS = generateHoras(slotDuration);
+  }, [currentDate, startHour, endHour]);
 
   // Filter professionals to display as columns (based on filter dropdown)
   const activeProfs = selectedProfessionalId 
@@ -100,7 +103,7 @@ export const CalendarDayView: React.FC = () => {
         {HORAS.map((hora, rowIdx) => (
           <React.Fragment key={hora}>
             <div className={styles.timeLabel}>
-              {slotDuration < 60 && hora.endsWith(':30') ? '' : hora}
+              {hora}
             </div>
             {activeProfs.map((p, colIdx) => {
               const isLastCol = colIdx === activeProfs.length - 1;
@@ -160,7 +163,7 @@ export const CalendarDayView: React.FC = () => {
           if (!workerShift || !workerShift.isOpen || !workerShift.breaks) return null;
 
           return workerShift.breaks.map((brk, bIdx) => {
-            const breakRow = timeToRowIndex(brk.startTime, slotDuration);
+            const breakRow = timeToRowIndex(brk.startTime, slotDuration, startHour);
             
             let breakSpan = 1;
             if (brk.endTime && brk.startTime) {
@@ -194,17 +197,17 @@ export const CalendarDayView: React.FC = () => {
           const profIdx = activeProfs.findIndex(p => p._id === workerId);
           if (profIdx === -1) return null;
 
-          const rowStart = timeToRowIndex(c.startTime, slotDuration);
+          const rowStart = timeToRowIndex(c.startTime, slotDuration, startHour);
           
           let duracion = 1;
           if (c.endTime && c.startTime) {
             const [hStart, mStart] = c.startTime.split(':').map(Number);
             let startMins = hStart * 60 + mStart;
-            if (hStart < 8) startMins += 24 * 60;
+            if (hStart < startHour) startMins += 24 * 60;
             
             const [hEnd, mEnd] = c.endTime.split(':').map(Number);
             let endMins = hEnd * 60 + mEnd;
-            if (hEnd < 8) endMins += 24 * 60;
+            if (hEnd < startHour) endMins += 24 * 60;
             
             const diffMin = endMins - startMins;
             duracion = Math.max(1, Math.round(diffMin / slotDuration));

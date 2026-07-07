@@ -1,12 +1,17 @@
 import React, { useEffect, useState } from 'react';
 import styles from './CalendarWeekView.module.scss';
 import { useCalendar } from '../context/CalendarContext';
-import { generateHoras, timeToRowIndex, formatLocalDateStr, getWorkerDaysOff, parseUTCDateToLocal } from '../utils/time';
+import { generateHoras, timeToRowIndex, formatLocalDateStr, getWorkerDaysOff, parseUTCDateToLocal, getBusinessHoursBounds } from '../utils/time';
 import AppointmentCard from './AppointmentCard';
 import type { Appointment } from '../types';
 
 export const CalendarWeekView: React.FC = () => {
   const { currentDate, citas, profs, selectedProfessionalId, businessConfig, shifts } = useCalendar();
+  
+  const slotDuration = businessConfig.appointmentSettings?.slotDuration || 60;
+  const { startHour, endHour } = getBusinessHoursBounds(businessConfig);
+  const HORAS = generateHoras(slotDuration, startHour, endHour);
+
   const [minutesSinceEight, setMinutesSinceEight] = useState<number | null>(null);
 
   useEffect(() => {
@@ -18,8 +23,9 @@ export const CalendarWeekView: React.FC = () => {
       end.setDate(start.getDate() + 6);
       
       if (now >= start && now <= end) {
-        const mins = (now.getHours() - 8) * 60 + now.getMinutes();
-        if (mins >= 0 && mins < 18 * 60) {
+        const mins = (now.getHours() - startHour) * 60 + now.getMinutes();
+        const totalCalendarMins = (endHour - startHour) * 60;
+        if (mins >= 0 && mins < totalCalendarMins) {
           setMinutesSinceEight(mins);
           return;
         }
@@ -30,10 +36,7 @@ export const CalendarWeekView: React.FC = () => {
     updateTimeLine();
     const interval = setInterval(updateTimeLine, 60000); // Update every minute
     return () => clearInterval(interval);
-  }, [currentDate]);
-
-  const slotDuration = businessConfig.appointmentSettings?.slotDuration || 60;
-  const HORAS = generateHoras(slotDuration);
+  }, [currentDate, startHour, endHour]);
 
   // Helper: get start of week (Monday)
   const getStartOfWeek = (d: Date): Date => {
@@ -179,7 +182,7 @@ export const CalendarWeekView: React.FC = () => {
         {HORAS.map((hora, rowIdx) => (
           <React.Fragment key={hora}>
             <div className={styles.timeLabel}>
-              {slotDuration < 60 && hora.endsWith(':30') ? '' : hora}
+              {hora}
             </div>
             {weekDays.map((_, colIdx) => {
               const isLastCol = colIdx === 6;
@@ -236,7 +239,7 @@ export const CalendarWeekView: React.FC = () => {
           if (!workerShift || !workerShift.isOpen || !workerShift.breaks) return null;
 
           return workerShift.breaks.map((brk, bIdx) => {
-            const breakRow = timeToRowIndex(brk.startTime, slotDuration);
+            const breakRow = timeToRowIndex(brk.startTime, slotDuration, startHour);
             
             let breakSpan = 1;
             if (brk.endTime && brk.startTime) {
@@ -271,17 +274,17 @@ export const CalendarWeekView: React.FC = () => {
           const colIdx = weekDateStrings.indexOf(dateStr);
           if (colIdx === -1) return null;
 
-          const rowStart = timeToRowIndex(c.startTime, slotDuration);
+          const rowStart = timeToRowIndex(c.startTime, slotDuration, startHour);
           
           let duracion = 1;
           if (c.endTime && c.startTime) {
             const [hStart, mStart] = c.startTime.split(':').map(Number);
             let startMins = hStart * 60 + mStart;
-            if (hStart < 8) startMins += 24 * 60;
+            if (hStart < startHour) startMins += 24 * 60;
             
             const [hEnd, mEnd] = c.endTime.split(':').map(Number);
             let endMins = hEnd * 60 + mEnd;
-            if (hEnd < 8) endMins += 24 * 60;
+            if (hEnd < startHour) endMins += 24 * 60;
             
             const diffMin = endMins - startMins;
             duracion = Math.max(1, Math.round(diffMin / slotDuration));
