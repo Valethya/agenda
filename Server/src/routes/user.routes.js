@@ -6,6 +6,8 @@ import {
 } from "../controllers/user.controller.js";
 import { isAuthenticated } from "../middleware/auth.middleware.js";
 import { isAdmin } from "../middleware/role.middleware.js";
+import { validate } from "../middleware/validate.middleware.js";
+import { createWorkerSchema, objectIdParamSchema } from "../validations/common.validation.js";
 
 const router = Router();
 
@@ -13,7 +15,7 @@ const router = Router();
 router.get("/workers", getWorkers);
 
 // Rutas protegidas de administración (Solo administradores)
-router.post("/workers", isAuthenticated, isAdmin, createWorker);
-router.delete("/workers/:id", isAuthenticated, isAdmin, deleteWorker);
+router.post("/workers", isAuthenticated, isAdmin, validate(createWorkerSchema), createWorker);
+router.delete("/workers/:id", isAuthenticated, isAdmin, validate(objectIdParamSchema), deleteWorker);
 
 export default router;

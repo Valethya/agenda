@@ -10,8 +10,7 @@ import handleError from "./middleware/handleError.js";
 import session from "express-session";
 import rateLimit from "express-rate-limit";
 import MongoStore from "connect-mongo";
-import { urlMongo } from "./config/env.js";
-import { passwordMongo } from "./config/env.js";
+import { urlMongo, sessionSecret, corsOrigins, nodeEnv } from "./config/env.js";
 // EXPRESS
 
 export const app = express();
@@ -26,32 +25,37 @@ export const sessionStore = MongoStore.create({
   mongoUrl: urlMongo,
 });
 
-if (process.env.NODE_ENV === "production") {
+if (nodeEnv === "production") {
   app.set("trust proxy", 1);
 }
 
 app.use(
   session({
-    secret: passwordMongo,
+    secret: sessionSecret,
     resave: false,
     saveUninitialized: false,
     store: sessionStore,
     cookie: {
       httpOnly: true,
       maxAge: 1000 * 60 * 60 * 24,
-      secure: process.env.NODE_ENV === "production",
-      sameSite: process.env.NODE_ENV === "production" ? "none" : "lax",
+      secure: nodeEnv === "production",
+      sameSite: nodeEnv === "production" ? "none" : "lax",
     },
   }),
 );
 
-// CORS - Permitimos orígenes dinámicos para soportar widgets de reserva embebidos en sitios web externos (SaaS)
+// CORS - Whitelist de orígenes permitidos (soporta widgets SaaS embebidos)
+const allowedOrigins = corsOrigins.split(",").map((o) => o.trim());
 app.use(
   cors({
     credentials: true,
     origin: (origin, callback) => {
-      // Permitimos cualquier origen (incluyendo solicitudes locales, apps móviles, widgets de clientes, etc.)
-      return callback(null, true);
+      // Permitir requests sin origin (ej: apps móviles, Postman, server-to-server)
+      if (!origin) return callback(null, true);
+      if (allowedOrigins.includes(origin)) {
+        return callback(null, true);
+      }
+      return callback(new Error(`Origin ${origin} no permitido por CORS`));
     },
   }),
 );

@@ -1,6 +1,42 @@
 import * as authService from "../services/auth.service.js";
-import User from "../db/models/user.model.js";
-import Membership from "../db/models/membership.model.js";
+import { UnauthorizedError, ValidationError } from "../utils/appError.js";
+
+/**
+ * Helper: guarda la sesión y responde con JSON.
+ * Elimina la duplicación del patrón req.session.save + res.json.
+ */
+const saveSessionAndRespond = (req, res, next, statusCode, body) => {
+  req.session.save((err) => {
+    if (err) return next(err);
+    res.status(statusCode).json(body);
+  });
+};
+
+/**
+ * Helper: configura la sesión según el resultado de resolveSessionFromUser
+ * y envía la respuesta HTTP correspondiente.
+ */
+const handleLoginResult = (req, res, next, user, successMessage) => {
+  const result = authService.resolveSessionFromUser(user);
+
+  if (result.type === "superadmin" || result.type === "single") {
+    req.session.user = result.sessionUser;
+    return saveSessionAndRespond(req, res, next, result.type === "superadmin" ? 200 : 201, {
+      status: "success",
+      message: successMessage,
+      user: result.sessionUser,
+      payload: result.sessionUser,
+    });
+  }
+
+  // needs_selection
+  req.session.tempUser = result.tempUser;
+  saveSessionAndRespond(req, res, next, 200, {
+    status: "needs_selection",
+    message: "Se requiere seleccionar un negocio",
+    memberships: result.memberships,
+  });
+};
 
 export const register = async (req, res, next) => {
   try {
@@ -19,72 +55,7 @@ export const login = async (req, res, next) => {
   try {
     const { email, password } = req.body;
     const user = await authService.login(email, password);
-
-    // Si es superadmin
-    if (user.role === "superadmin") {
-      req.session.user = {
-        id: user.id,
-        firstName: user.firstName,
-        lastName: user.lastName,
-        email: user.email,
-        role: "superadmin",
-      };
-      return req.session.save((err) => {
-        if (err) return next(err);
-        res.status(201).json({
-          status: "success",
-          message: "Login exitoso como superadmin",
-          user: req.session.user,
-          payload: req.session.user,
-        });
-      });
-    }
-
-    if (!user.memberships || user.memberships.length === 0) {
-      throw new UnauthorizedError("Tu cuenta no tiene ningún negocio asociado");
-    }
-
-    // Si tiene exactamente 1 negocio
-    if (user.memberships.length === 1) {
-      const active = user.memberships[0];
-      req.session.user = {
-        id: user.id,
-        firstName: user.firstName,
-        lastName: user.lastName,
-        email: user.email,
-        role: active.role,
-        businessId: active.businessId,
-        businessSlug: active.businessSlug,
-      };
-      return req.session.save((err) => {
-        if (err) return next(err);
-        res.status(201).json({
-          status: "success",
-          message: "Login exitoso",
-          user: req.session.user,
-          payload: req.session.user,
-        });
-      });
-    }
-
-    // Si tiene múltiples negocios, guardamos en sesión temporal para selección posterior
-    req.session.tempUser = {
-      id: user.id,
-      firstName: user.firstName,
-      lastName: user.lastName,
-      email: user.email,
-      role: user.role,
-      memberships: user.memberships,
-    };
-
-    req.session.save((err) => {
-      if (err) return next(err);
-      res.status(200).json({
-        status: "needs_selection",
-        message: "Se requiere seleccionar un negocio",
-        memberships: user.memberships,
-      });
-    });
+    handleLoginResult(req, res, next, user, "Login exitoso");
   } catch (error) {
     next(error);
   }
@@ -109,72 +80,7 @@ export const googleLogin = async (req, res, next) => {
   try {
     const { idToken } = req.body;
     const user = await authService.loginWithGoogle(idToken);
-
-    // Si es superadmin
-    if (user.role === "superadmin") {
-      req.session.user = {
-        id: user.id,
-        firstName: user.firstName,
-        lastName: user.lastName,
-        email: user.email,
-        role: "superadmin",
-      };
-      return req.session.save((err) => {
-        if (err) return next(err);
-        res.status(200).json({
-          status: "success",
-          message: "Login con Google exitoso como superadmin",
-          user: req.session.user,
-          payload: req.session.user,
-        });
-      });
-    }
-
-    if (!user.memberships || user.memberships.length === 0) {
-      throw new UnauthorizedError("Tu cuenta no tiene ningún negocio asociado");
-    }
-
-    // Si tiene exactamente 1 negocio
-    if (user.memberships.length === 1) {
-      const active = user.memberships[0];
-      req.session.user = {
-        id: user.id,
-        firstName: user.firstName,
-        lastName: user.lastName,
-        email: user.email,
-        role: active.role,
-        businessId: active.businessId,
-        businessSlug: active.businessSlug,
-      };
-      return req.session.save((err) => {
-        if (err) return next(err);
-        res.status(200).json({
-          status: "success",
-          message: "Login con Google exitoso",
-          user: req.session.user,
-          payload: req.session.user,
-        });
-      });
-    }
-
-    // Si tiene múltiples negocios
-    req.session.tempUser = {
-      id: user.id,
-      firstName: user.firstName,
-      lastName: user.lastName,
-      email: user.email,
-      role: user.role,
-      memberships: user.memberships,
-    };
-
-    req.session.save((err) => {
-      if (err) return next(err);
-      res.status(200).json({
-        status: "needs_selection",
-        message: "Se requiere seleccionar un negocio",
-        memberships: user.memberships,
-      });
-    });
+    handleLoginResult(req, res, next, user, "Login con Google exitoso");
   } catch (error) {
     next(error);
   }
@@ -204,14 +110,11 @@ export const selectMembership = async (req, res, next) => {
 
     delete req.session.tempUser; // Limpiar sesión temporal
 
-    req.session.save((err) => {
-      if (err) return next(err);
-      res.status(200).json({
-        status: "success",
-        message: "Negocio seleccionado con éxito",
-        user: req.session.user,
-        payload: req.session.user,
-      });
+    saveSessionAndRespond(req, res, next, 200, {
+      status: "success",
+      message: "Negocio seleccionado con éxito",
+      user: req.session.user,
+      payload: req.session.user,
     });
   } catch (error) {
     next(error);
@@ -225,49 +128,24 @@ export const switchBusiness = async (req, res, next) => {
       throw new UnauthorizedError("Inicia sesión para cambiar de negocio");
     }
 
-    // Si es superadmin, tiene acceso a cualquier negocio
-    if (req.session.user.role === "superadmin") {
-      const BusinessModel = (await import("../db/models/business.model.js")).default;
-      const targetBusiness = await BusinessModel.findById(businessId);
-      if (!targetBusiness) {
-        throw new ValidationError("El negocio especificado no existe");
-      }
-      req.session.user.businessId = targetBusiness._id;
-      req.session.user.businessSlug = targetBusiness.slug;
-      
-      return req.session.save((err) => {
-        if (err) return next(err);
-        res.status(200).json({
-          status: "success",
-          message: "Cambiado de negocio como superadmin",
-          user: req.session.user,
-          payload: req.session.user,
-        });
-      });
+    const updates = await authService.switchBusiness(
+      req.session.user.id,
+      req.session.user.role,
+      businessId,
+    );
+
+    // Aplicar los campos actualizados a la sesión
+    req.session.user.businessId = updates.businessId;
+    req.session.user.businessSlug = updates.businessSlug;
+    if (updates.role) {
+      req.session.user.role = updates.role;
     }
 
-    const membership = await Membership.findOne({
-      user: req.session.user.id,
-      business: businessId,
-      isActive: true,
-    }).populate("business");
-
-    if (!membership) {
-      throw new UnauthorizedError("No tienes acceso a este negocio");
-    }
-
-    req.session.user.businessId = membership.business._id;
-    req.session.user.businessSlug = membership.business.slug;
-    req.session.user.role = membership.role;
-
-    req.session.save((err) => {
-      if (err) return next(err);
-      res.status(200).json({
-        status: "success",
-        message: "Cambiado de negocio exitosamente",
-        user: req.session.user,
-        payload: req.session.user,
-      });
+    saveSessionAndRespond(req, res, next, 200, {
+      status: "success",
+      message: "Cambiado de negocio exitosamente",
+      user: req.session.user,
+      payload: req.session.user,
     });
   } catch (error) {
     next(error);
@@ -283,9 +161,9 @@ export const getCurrentUser = async (req, res, next) => {
       });
     }
 
-    // Verificar que el usuario exista en la base de datos para prevenir sesiones huérfanas
-    const userExists = await User.findById(req.session.user.id);
-    if (!userExists) {
+    const userPayload = await authService.getCurrentUser(req.session.user);
+
+    if (!userPayload) {
       req.session.destroy();
       res.clearCookie("connect.sid");
       return res.status(401).json({
@@ -294,24 +172,8 @@ export const getCurrentUser = async (req, res, next) => {
       });
     }
 
-    // Buscar membresías para inyectarlas al frontend (para el switch de negocio)
-    let membershipsPayload = [];
-    if (req.session.user.role !== "superadmin") {
-      const memberships = await Membership.find({ user: req.session.user.id, isActive: true }).populate("business");
-      membershipsPayload = memberships.map((m) => ({
-        id: m._id,
-        businessId: m.business?._id,
-        businessName: m.business?.name,
-        businessSlug: m.business?.slug,
-        role: m.role,
-      }));
-    }
-
-    const userPayload = {
-      ...req.session.user,
-      memberships: membershipsPayload,
-      originalUser: req.session.originalUser || null
-    };
+    // Inyectar originalUser para impersonación
+    userPayload.originalUser = req.session.originalUser || null;
 
     res.status(200).json({
       status: "success",
@@ -367,3 +229,4 @@ export const changePassword = async (req, res, next) => {
     next(error);
   }
 };
+

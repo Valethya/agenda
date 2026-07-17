@@ -1,28 +1,13 @@
-import pkg from "transbank-sdk";
-const { WebpayPlus } = pkg;
 import * as appointmentRepository from "../repositories/appointment.repository.js";
-import Payment from "../db/models/payment.model.js";
-import Business from "../db/models/business.model.js";
+import * as paymentRepository from "../repositories/payment.repository.js";
+import * as businessRepository from "../repositories/business.repository.js";
+import * as transbankGateway from "../gateways/transbank.gateway.js";
 import { emitAvailabilityChange } from "../config/socket.js";
 import { NotFoundError, ValidationError } from "../utils/appError.js";
-import * as mailer from "../utils/mailer.js";
+import * as mailer from "./email/emailService.js";
 import * as availabilityService from "./availability.service.js";
 import { logEvent } from "../utils/auditLogger.js";
-import AuditLog from "../db/models/auditLog.model.js";
-
-// Webpay Plus opera por defecto en modo de Integración (Pruebas)
-// Para producción, se debe configurar utilizando los códigos de comercio reales de Transbank.
-const getTransactionInstance = () => {
-  const { Options, IntegrationCommerceCodes, IntegrationApiKeys, Environment } = pkg;
-  
-  const options = new Options(
-    IntegrationCommerceCodes.WEBPAY_PLUS,
-    IntegrationApiKeys.WEBPAY,
-    Environment.Integration
-  );
-
-  return new WebpayPlus.Transaction(options);
-};
+import { backendUrl } from "../config/env.js";
 
 // 1. Iniciar Transacción de Pago (Permitiendo elegir entre abono o total)
 export const initiatePayment = async (appointmentId, paymentType = "deposit") => {
@@ -39,7 +24,7 @@ export const initiatePayment = async (appointmentId, paymentType = "deposit") =>
     }
 
     // A. Verificar si ya existe un pago aprobado para esta cita
-    const existingPayment = await Payment.findOne({ appointment: appointmentId, status: "approved" });
+    const existingPayment = await paymentRepository.findByAppointmentAndStatus(appointmentId, "approved");
     if (existingPayment) {
       throw new ValidationError("Esta cita ya cuenta con un pago aprobado");
     }
@@ -77,11 +62,11 @@ export const initiatePayment = async (appointmentId, paymentType = "deposit") =>
     const sessionId = `${appointment.client._id.toString()}_${Date.now()}`; // sessionId único combinando el ID de cliente y timestamp
     
     // Obtener el slug del negocio asociado a la cita
-    const business = await Business.findById(businessId);
+    const business = await businessRepository.findById(businessId);
     const slug = business ? business.slug : "barberia";
     
     // URL de retorno del backend donde Transbank redirigirá al usuario tras el pago
-    const returnUrl = `${process.env.BACKEND_URL || "http://localhost:3000"}/api/payments/webpay-return?slug=${slug}`;
+    const returnUrl = `${backendUrl}/api/payments/webpay-return?slug=${slug}`;
 
     await logEvent({
       appointmentId,
@@ -92,8 +77,7 @@ export const initiatePayment = async (appointmentId, paymentType = "deposit") =>
       metadata: { buyOrder, sessionId, amountToCharge }
     });
 
-    const tx = getTransactionInstance();
-    const response = await tx.create(buyOrder, sessionId, amountToCharge, returnUrl);
+    const response = await transbankGateway.createTransaction(buyOrder, sessionId, amountToCharge, returnUrl);
 
     await logEvent({
       appointmentId,
@@ -108,7 +92,7 @@ export const initiatePayment = async (appointmentId, paymentType = "deposit") =>
     await appointmentRepository.update(appointmentId, { status: "pending_payment" });
 
     // Registrar el pago en estado "pending" con el token de transacción para búsquedas indexadas ultra rápidas
-    await Payment.create({
+    await paymentRepository.create({
       appointment: appointmentId,
       business: businessId,
       amount: amountToCharge,
@@ -164,13 +148,11 @@ export const confirmPayment = async (tokenWs) => {
     throw new ValidationError("El token de Webpay no está presente");
   }
 
-  const tx = getTransactionInstance();
-  
   try {
     // Buscar el appointmentId de forma súper rápida usando la consulta indexada por transactionId en la colección Payment
     let appointmentId = null;
     try {
-      const pendingPayment = await Payment.findOne({ transactionId: tokenWs });
+      const pendingPayment = await paymentRepository.findByTransactionId(tokenWs);
       if (pendingPayment) {
         appointmentId = pendingPayment.appointment.toString();
       }
@@ -196,7 +178,7 @@ export const confirmPayment = async (tokenWs) => {
     });
 
     // Confirmar la transacción con Transbank
-    const commitResponse = await tx.commit(tokenWs);
+    const commitResponse = await transbankGateway.commitTransaction(tokenWs);
 
     // Asegurarse de tener el appointmentId correcto del buy_order retornado
     appointmentId = commitResponse.buy_order;
@@ -284,15 +266,11 @@ export const confirmPayment = async (tokenWs) => {
       // Actualizar el estado del pago a aprobado (búsqueda indexada ultra rápida)
       let paymentRecord;
       try {
-        paymentRecord = await Payment.findOneAndUpdate(
-          { transactionId: tokenWs },
-          { 
+        paymentRecord = await paymentRepository.updateByTransactionId(tokenWs, { 
             status: "approved",
             amount: commitResponse.amount, // Validado
             type: isDeposit ? "deposit" : "full"
-          },
-          { new: true }
-        );
+          });
       } catch (dbError) {
         await logEvent({
           appointmentId,
@@ -381,7 +359,7 @@ export const confirmPayment = async (tokenWs) => {
 
       // Actualizar registro de pago a rechazado en la base de datos
       try {
-        await Payment.findOneAndUpdate({ transactionId: tokenWs }, { status: "rejected" });
+        await paymentRepository.updateByTransactionId(tokenWs, { status: "rejected" });
       } catch (e) {}
 
       await appointmentRepository.update(appointmentId, { status: "cancelled" });
@@ -403,7 +381,7 @@ export const confirmPayment = async (tokenWs) => {
   } catch (error) {
     let appointmentId = null;
     try {
-      const pendingPayment = await Payment.findOne({ transactionId: tokenWs });
+      const pendingPayment = await paymentRepository.findByTransactionId(tokenWs);
       if (pendingPayment) {
         appointmentId = pendingPayment.appointment.toString();
       }

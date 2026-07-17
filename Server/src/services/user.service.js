@@ -2,7 +2,7 @@ import * as userRepository from "../repositories/user.repository.js";
 import * as shiftRepository from "../repositories/shift.repository.js";
 import { createHash } from "../utils/password.js";
 import { ConflictError, NotFoundError } from "../utils/appError.js";
-import Membership from "../db/models/membership.model.js";
+import * as membershipRepository from "../repositories/membership.repository.js";
 
 // 1. Crear Cuenta de Trabajador (o agregar membresía a un usuario existente)
 export const createWorker = async (workerData, businessId) => {
@@ -14,7 +14,7 @@ export const createWorker = async (workerData, businessId) => {
 
   if (existingUser) {
     // Si ya existe, verificar si ya tiene una membresía en este negocio
-    const existingMembership = await Membership.findOne({ user: existingUser._id, business: businessId });
+    const existingMembership = await membershipRepository.findByUserAndBusiness(existingUser._id, businessId);
     if (existingMembership) {
       throw new ConflictError("El profesional ya está registrado en este negocio");
     }
@@ -36,7 +36,7 @@ export const createWorker = async (workerData, businessId) => {
   }
 
   // D. Crear la membresía de tipo 'worker' para asociar el usuario al negocio
-  await Membership.create({
+  await membershipRepository.create({
     user: workerUser._id,
     business: businessId,
     role: "worker",
@@ -80,7 +80,7 @@ export const createWorker = async (workerData, businessId) => {
 
 // 2. Dar de baja a un trabajador (Soft Delete en membresía)
 export const deleteWorker = async (workerId, businessId, softDelete = true) => {
-  const membership = await Membership.findOne({ user: workerId, business: businessId, role: "worker" });
+  const membership = await membershipRepository.findByUserBusinessAndRole(workerId, businessId, "worker");
   
   if (!membership) {
     throw new NotFoundError("El trabajador especificado no existe o no tiene ese rol en este negocio");
@@ -89,13 +89,13 @@ export const deleteWorker = async (workerId, businessId, softDelete = true) => {
   if (softDelete) {
     // Desactivamos la membresía en este negocio
     membership.isActive = false;
-    await membership.save();
+    await membershipRepository.save(membership);
   } else {
     // Eliminación física de la membresía
-    await membership.deleteOne();
+    await membershipRepository.deleteOne(membership);
     
     // Si no tiene más membresías activas en ningún otro negocio, desactivamos el usuario global
-    const otherMembershipsCount = await Membership.countDocuments({ user: workerId });
+    const otherMembershipsCount = await membershipRepository.countByUser(workerId);
     if (otherMembershipsCount === 0) {
       await userRepository.updateUser(workerId, { isActive: false });
       await shiftRepository.deleteByWorker(workerId);
@@ -110,7 +110,7 @@ export const getWorkersList = async (businessId, onlyActive = true) => {
     query.isActive = true;
   }
   
-  const memberships = await Membership.find(query).populate("user");
+  const memberships = await membershipRepository.findAll(query);
   
   return memberships
     .filter(m => m.user && (!onlyActive || m.user.isActive))

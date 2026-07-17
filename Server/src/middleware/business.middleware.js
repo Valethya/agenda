@@ -1,4 +1,4 @@
-import Business from "../db/models/business.model.js";
+import * as businessRepository from "../repositories/business.repository.js";
 import { NotFoundError, UnauthorizedError } from "../utils/appError.js";
 
 export const scopeBusiness = async (req, res, next) => {
@@ -15,7 +15,7 @@ export const scopeBusiness = async (req, res, next) => {
         throw new UnauthorizedError("El usuario administrador o trabajador no posee un negocio asociado");
       }
 
-      const business = await Business.findById(userBusinessId);
+      const business = await businessRepository.findById(userBusinessId);
       if (!business) {
         throw new NotFoundError("El negocio asociado a tu cuenta no existe");
       }
@@ -39,7 +39,7 @@ export const scopeBusiness = async (req, res, next) => {
 
     if (!businessId && !slug) {
       // Como fallback de desarrollo y pruebas, si no se especifica, se toma el primer negocio activo
-      const defaultBusiness = await Business.findOne({ isActive: true });
+      const defaultBusiness = await businessRepository.findFirstActive();
       if (!defaultBusiness) {
         throw new NotFoundError("No hay ningún negocio activo registrado en la plataforma.");
       }
@@ -50,15 +50,15 @@ export const scopeBusiness = async (req, res, next) => {
 
     let business;
     if (businessId) {
-      business = await Business.findById(businessId);
+      business = await businessRepository.findById(businessId);
     } else if (slug) {
-      business = await Business.findOne({ slug: slug.toLowerCase().trim() });
+      business = await businessRepository.findBySlug(slug);
     }
 
     if (!business) {
       // Si el usuario es superadmin, usamos el primer negocio activo como fallback en lugar de lanzar error 404
       if (req.session?.user?.role === "superadmin") {
-        const fallbackBiz = await Business.findOne({ isActive: true });
+        const fallbackBiz = await businessRepository.findFirstActive();
         if (fallbackBiz) {
           req.business = fallbackBiz;
           req.businessId = fallbackBiz._id;
@@ -82,3 +82,4 @@ export const scopeBusiness = async (req, res, next) => {
     next(error);
   }
 };
+

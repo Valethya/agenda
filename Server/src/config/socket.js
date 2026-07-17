@@ -1,12 +1,23 @@
+/**
+ * Servicio de notificaciones en tiempo real vía WebSockets.
+ * Abstrae Socket.IO para que los servicios no dependan directamente del transporte.
+ */
 import { Server } from "socket.io";
-import logger from "./logger.js";
+import logger from "../config/logger.js";
+import { corsOrigins } from "../config/env.js";
 
 let io;
 
+/**
+ * Inicializa el servidor de WebSockets.
+ * @param {import("http").Server} httpServer
+ */
 export const initSocket = (httpServer) => {
+  const allowedOrigins = corsOrigins.split(",").map((o) => o.trim());
+
   io = new Server(httpServer, {
     cors: {
-      origin: "*", // En producción configurar el dominio exacto del frontend
+      origin: allowedOrigins,
       methods: ["GET", "POST"],
       credentials: true,
     },
@@ -16,7 +27,6 @@ export const initSocket = (httpServer) => {
     logger.info(`Cliente WebSocket conectado: ${socket.id}`);
 
     // El cliente se suscribe a las actualizaciones de un día específico de un trabajador
-    // Ej de sala: "availability:workerId:YYYY-MM-DD"
     socket.on("join_availability", ({ workerId, date }) => {
       if (workerId && date) {
         const room = `availability:${workerId}:${date}`;
@@ -25,7 +35,6 @@ export const initSocket = (httpServer) => {
       }
     });
 
-    // Salir de la sala al cambiar de vista o fecha
     socket.on("leave_availability", ({ workerId, date }) => {
       if (workerId && date) {
         const room = `availability:${workerId}:${date}`;
@@ -42,6 +51,9 @@ export const initSocket = (httpServer) => {
   return io;
 };
 
+/**
+ * Obtiene la instancia de Socket.IO.
+ */
 export const getIO = () => {
   if (!io) {
     throw new Error("¡Socket.io no ha sido inicializado!");
@@ -49,13 +61,18 @@ export const getIO = () => {
   return io;
 };
 
+// --- API de notificaciones de alto nivel ---
+
+/**
+ * Notifica un cambio de disponibilidad a los clientes suscritos.
+ * Emite tanto al room específico como un evento global de calendario.
+ */
 export const emitAvailabilityChange = (workerId, dateStr) => {
   if (io) {
     const room = `availability:${workerId}:${dateStr}`;
     io.to(room).emit("availability_changed", { workerId, date: dateStr });
     logger.info(`WS Broadcast: Cambios de disponibilidad en la sala ${room}`);
     
-    // Emitir evento global para actualizar los paneles de administración en tiempo real
     io.emit("calendar_update");
     logger.info("WS Broadcast: Evento global calendar_update emitido");
   }

@@ -4,6 +4,8 @@ import User from "./src/db/models/user.model.js";
 import Service from "./src/db/models/service.model.js";
 import Shift from "./src/db/models/shift.model.js";
 import Business from "./src/db/models/business.model.js";
+import Membership from "./src/db/models/membership.model.js";
+import BusinessConfig from "./src/db/models/businessConfig.model.js";
 import { createHash } from "./src/utils/password.js";
 
 const MONGO_URI = process.env.MONGO_URI;
@@ -23,13 +25,15 @@ async function seed() {
     console.log("Limpiando registros antiguos de DAM...");
     const emailsToCleanup = [
       "admin@dam.com",
-      "contacto@dam.com"
+      "contacto@dam.com",
+      "damfilmscl@gmail.com"
     ];
     
     const oldWorkers = await User.find({ email: { $in: emailsToCleanup } });
     const oldWorkerIds = oldWorkers.map(w => w._id);
     
     await Shift.deleteMany({ worker: { $in: oldWorkerIds } });
+    await Membership.deleteMany({ user: { $in: oldWorkerIds } });
     await User.deleteMany({ email: { $in: emailsToCleanup } });
     await Service.deleteMany({ name: "Conversación de Proyecto", business: { $exists: true } });
     
@@ -45,6 +49,10 @@ async function seed() {
     }
     const businessId = business._id;
     console.log(`Negocio DAM creado/encontrado (ID: ${businessId})`);
+
+    // Limpiar configuración y membresías huérfanas asociadas al negocio
+    await BusinessConfig.deleteMany({ business: businessId });
+    await Membership.deleteMany({ business: businessId });
 
     // 3. Crear Usuarios
     console.log("Creando usuarios para DAM...");
@@ -67,19 +75,82 @@ async function seed() {
     const productor = await User.create({
       firstName: "Productor",
       lastName: "DAM",
-      email: ["contacto@dam.com"],
+      email: ["damfilmscl@gmail.com"],
       password: passwordHashWorker,
       role: "worker",
       phone: ["+56900002222"],
       business: businessId
     });
-    console.log("Productor DAM (Worker) creado: contacto@dam.com / dam123");
+    console.log("Productor DAM (Worker) creado: damfilmscl@gmail.com / dam123");
 
     // Asignar admin como dueño del negocio
     business.owner = admin._id;
     await business.save();
 
-    // 4. Crear Turnos (Lunes a Viernes de 09:00 a 18:00 con colación de 13:00 a 14:00)
+    // 4. Crear Membresías (Obligatorio para multi-tenancy y visibilidad en calendario)
+    console.log("Creando membresías de negocio...");
+    await Membership.create({
+      user: admin._id,
+      business: businessId,
+      role: "admin",
+      isActive: true
+    });
+    await Membership.create({
+      user: productor._id,
+      business: businessId,
+      role: "worker",
+      isActive: true
+    });
+    console.log("Membresías creadas con éxito.");
+
+    // 5. Crear Configuración del Negocio (BusinessConfig)
+    console.log("Creando configuración de marca y jornada laboral para DAM...");
+    const workingHours = [];
+    // Lunes a Viernes abierto (1 a 5)
+    for (let day = 1; day <= 5; day++) {
+      workingHours.push({
+        dayOfWeek: day,
+        isOpen: true,
+        startTime: "09:00",
+        endTime: "18:00",
+        breaks: [{ startTime: "13:00", endTime: "14:00" }],
+      });
+    }
+    // Sábado y Domingo cerrado (6 y 0)
+    for (let day of [0, 6]) {
+      workingHours.push({
+        dayOfWeek: day,
+        isOpen: false,
+        startTime: "09:00",
+        endTime: "18:00",
+        breaks: [],
+      });
+    }
+
+    await BusinessConfig.create({
+      business: businessId,
+      businessName: "DAM",
+      workingHours,
+      appointmentSettings: {
+        slotDuration: 45,
+        bufferTime: 0,
+        minAdvanceHours: 2,
+        maxAdvanceDays: 30,
+        autoConfirmLocalBookings: false,
+      },
+      cancellationSettings: {
+        allowCancellation: true,
+        limitHours: 2,
+      },
+      emailSettings: {
+        brandColor: "#0b0b0b",
+        logoUrl: "https://www.damfilms.cl/isotipo_dam.png",
+        customFooter: "DAM — Estudio Creativo Independiente"
+      }
+    });
+    console.log("Configuración del negocio DAM creada con éxito.");
+
+    // 6. Crear Turnos (Lunes a Viernes de 09:00 a 18:00 con colación de 13:00 a 14:00)
     console.log("Creando turnos de disponibilidad para el Productor...");
     const shiftPromises = [];
 
@@ -105,7 +176,7 @@ async function seed() {
     await Promise.all(shiftPromises);
     console.log("Turnos semanales creados para el Productor.");
 
-    // 5. Crear Servicio "Conversación de Proyecto"
+    // 7. Crear Servicio "Conversación de Proyecto"
     console.log("Creando servicio de Conversación de Proyecto...");
     const service = await Service.create({
       name: "Conversación de Proyecto",
@@ -119,9 +190,9 @@ async function seed() {
     console.log(`Servicio creado: ${service.name} (ID: ${service._id})`);
 
     console.log("=========================================");
-    console.log("¡SEMBRADO DE DATOS DAM EXITOSO!");
+    console.log("¡SEMBRADO DE DATOS DAM EXITOSO EN PRODUCCIÓN!");
     console.log(`Business ID (slug 'dam'): ${businessId}`);
-    console.log(`Worker ID (contacto@dam.com): ${productor._id}`);
+    console.log(`Worker ID (damfilmscl@gmail.com): ${productor._id}`);
     console.log(`Service ID: ${service._id}`);
     console.log("=========================================");
 

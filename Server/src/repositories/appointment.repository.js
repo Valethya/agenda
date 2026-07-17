@@ -43,3 +43,7 @@ export const findAll = async (query = {}) => {
     .populate("business", "name slug")
     .sort({ date: 1, startTime: 1 });
 };
+
+export const aggregate = async (pipeline) => {
+  return await Appointment.aggregate(pipeline);
+};

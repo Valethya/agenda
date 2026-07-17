@@ -9,7 +9,6 @@ export const validate = (schema) => (req, res, next) => {
       params: req.params,
     });
   } catch (error) {
-    console.error("VALIDATION ERROR CAUGHT:", error);
     if (error instanceof ZodError) {
       // Zod arroja un error estructurado si falla la validación
       const formattedErrors = (error.errors || error.issues || []).map((err) => {

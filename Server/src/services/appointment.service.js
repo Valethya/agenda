@@ -3,19 +3,11 @@ import * as serviceRepository from "../repositories/service.repository.js";
 import * as availabilityService from "./availability.service.js";
 import { ConflictError, NotFoundError, UnauthorizedError, ValidationError } from "../utils/appError.js";
 import { emitAvailabilityChange } from "../config/socket.js";
-import * as mailer from "../utils/mailer.js";
+import { notifyBookingCreated, notifyAppointmentConfirmed, notifyAppointmentCancelled } from "./appointment.notifications.js";
 import { logEvent } from "../utils/auditLogger.js";
-import AuditLog from "../db/models/auditLog.model.js";
-import BusinessConfig from "../db/models/businessConfig.model.js";
-
-// Utilidad: Añade minutos a una hora "HH:MM" y retorna "HH:MM"
-const addMinutesToTime = (timeStr, minutesToAdd) => {
-  const [hours, minutes] = timeStr.split(":").map(Number);
-  const totalMinutes = hours * 60 + minutes + minutesToAdd;
-  const newHours = Math.floor(totalMinutes / 60).toString().padStart(2, "0");
-  const newMinutes = (totalMinutes % 60).toString().padStart(2, "0");
-  return `${newHours}:${newMinutes}`;
-};
+import * as auditLogRepository from "../repositories/auditLog.repository.js";
+import * as businessConfigRepository from "../repositories/businessConfig.repository.js";
+import { addMinutesToTime } from "../utils/time.js";
 
 // 1. Crear / Reservar una Cita
 export const bookAppointment = async (appointmentData) => {
@@ -80,7 +72,7 @@ export const bookAppointment = async (appointmentData) => {
   let initialStatus = "pending";
   let autoConfirm = false;
   if (businessId) {
-    const config = await BusinessConfig.findOne({ business: businessId });
+    const config = await businessConfigRepository.getConfig(businessId);
     if (config && config.appointmentSettings && config.appointmentSettings.autoConfirmLocalBookings) {
       autoConfirm = true;
     }
@@ -112,10 +104,7 @@ export const bookAppointment = async (appointmentData) => {
   });
 
   // Asociar logs previos de esta solicitud de reserva a la cita recién creada
-  await AuditLog.updateMany(
-    { userId: client, appointmentId: { $exists: false } },
-    { appointmentId: newAppointment._id }
-  );
+  await auditLogRepository.associateOrphanedLogs(client, newAppointment._id);
 
   await logEvent({
     appointmentId: newAppointment._id,
@@ -129,61 +118,8 @@ export const bookAppointment = async (appointmentData) => {
   // F. Emitir cambio de disponibilidad en tiempo real mediante WebSockets
   emitAvailabilityChange(worker, dateStr);
 
-  // G. Enviar correo de confirmación al cliente o pre-reserva + alerta al barbero (en segundo plano diferido para evitar latencia)
-  setImmediate(async () => {
-    try {
-      const populated = await appointmentRepository.findById(newAppointment._id);
-      if (populated && populated.client.email) {
-        if (initialStatus === "confirmed") {
-          await mailer.sendAppointmentConfirmedEmail(populated.client.email, populated);
-          await logEvent({
-            appointmentId: newAppointment._id,
-            userId: client,
-            event: "EMAIL_NOTIFICATION_SENT",
-            level: "INFO",
-            message: `Correo de confirmación directa enviado a ${populated.client.email}.`,
-            metadata: { email: populated.client.email }
-          });
-        } else {
-          await mailer.sendAppointmentBookedEmail(populated.client.email, populated);
-          await logEvent({
-            appointmentId: newAppointment._id,
-            userId: client,
-            event: "EMAIL_NOTIFICATION_SENT",
-            level: "INFO",
-            message: `Correo de pre-reserva enviado a ${populated.client.email}.`,
-            metadata: { email: populated.client.email }
-          });
-
-          // Enviar alerta al barbero asignado si hay un correo configurado
-          if (populated.worker && populated.worker.email) {
-            const workerEmail = Array.isArray(populated.worker.email) ? populated.worker.email[0] : populated.worker.email;
-            if (workerEmail) {
-              await mailer.sendWorkerPendingApprovalEmail(workerEmail, populated);
-              await logEvent({
-                appointmentId: newAppointment._id,
-                userId: client,
-                event: "EMAIL_NOTIFICATION_SENT",
-                level: "INFO",
-                message: `Correo de alerta enviado al barbero ${workerEmail}.`,
-                metadata: { email: workerEmail }
-              });
-            }
-          }
-        }
-      }
-    } catch (mailError) {
-      await logEvent({
-        appointmentId: newAppointment._id,
-        userId: client,
-        event: "EMAIL_NOTIFICATION_FAILED",
-        level: "ERROR",
-        message: `Error al enviar correos de la reserva.`,
-        technicalMessage: mailError.message,
-        metadata: { appointmentId: newAppointment._id }
-      });
-    }
-  });
+  // G. Enviar correos de notificación (segundo plano diferido)
+  notifyBookingCreated(newAppointment._id, client, initialStatus);
 
   return newAppointment;
 };
@@ -229,33 +165,8 @@ export const confirmAppointment = async (appointmentId, userId, userRole) => {
     throw dbError;
   }
 
-  // Enviar correo de confirmación al cliente (en segundo plano diferido para no demorar la respuesta de la API)
-  setImmediate(async () => {
-    try {
-      const populated = await appointmentRepository.findById(appointmentId);
-      if (populated && populated.client.email) {
-        await mailer.sendAppointmentConfirmedEmail(populated.client.email, populated);
-        await logEvent({
-          appointmentId,
-          userId: populated.client._id,
-          event: "EMAIL_NOTIFICATION_SENT",
-          level: "INFO",
-          message: `Correo de confirmación enviado a ${populated.client.email}.`,
-          metadata: { email: populated.client.email }
-        });
-      }
-    } catch (mailError) {
-      await logEvent({
-        appointmentId,
-        userId: userId,
-        event: "EMAIL_NOTIFICATION_FAILED",
-        level: "ERROR",
-        message: `Error al enviar correo de confirmación.`,
-        technicalMessage: mailError.message,
-        metadata: { appointmentId }
-      });
-    }
-  });
+  // Enviar correo de confirmación al cliente (segundo plano diferido)
+  notifyAppointmentConfirmed(appointmentId, userId);
 
   return updatedAppointment;
 };
@@ -356,33 +267,8 @@ export const cancelAppointment = async (appointmentId, userId, userRole) => {
   const dateStr = new Date(appointment.date).toISOString().split("T")[0];
   emitAvailabilityChange(appointment.worker._id.toString(), dateStr);
 
-  // Enviar correo de cancelación al cliente (en segundo plano diferido para no demorar la respuesta de la API)
-  setImmediate(async () => {
-    try {
-      const populated = await appointmentRepository.findById(appointmentId);
-      if (populated && populated.client.email) {
-        await mailer.sendAppointmentCancelledEmail(populated.client.email, populated);
-        await logEvent({
-          appointmentId,
-          userId: populated.client._id,
-          event: "EMAIL_NOTIFICATION_SENT",
-          level: "INFO",
-          message: `Correo de cancelación enviado a ${populated.client.email}.`,
-          metadata: { email: populated.client.email }
-        });
-      }
-    } catch (mailError) {
-      await logEvent({
-        appointmentId,
-        userId: userId,
-        event: "EMAIL_NOTIFICATION_FAILED",
-        level: "ERROR",
-        message: `Error al enviar correo de cancelación.`,
-        technicalMessage: mailError.message,
-        metadata: { appointmentId }
-      });
-    }
-  });
+  // Enviar correo de cancelación al cliente (segundo plano diferido)
+  notifyAppointmentCancelled(appointmentId, userId);
 
   return updatedAppointment;
 };

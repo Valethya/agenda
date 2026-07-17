@@ -1,5 +1,9 @@
 import User from "../db/models/user.model.js";
 
+export const findById = async (id) => {
+  return await User.findById(id);
+};
+
 export const findByEmail = async (email) => {
   return await User.findOne({ email }).populate("business");
 };
@@ -33,4 +37,12 @@ export const findByResetToken = async (token) => {
 
 export const findAll = async (query = {}) => {
   return await User.find(query);
+};
+
+export const findOne = async (query = {}) => {
+  return await User.findOne(query);
+};
+
+export const aggregate = async (pipeline) => {
+  return await User.aggregate(pipeline);
 };

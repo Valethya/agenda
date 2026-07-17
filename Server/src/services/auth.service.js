@@ -11,10 +11,12 @@ import {
 } from "../repositories/user.repository.js";
 import { isValidPassword, createHash } from "../utils/password.js";
 import { ConflictError, UnauthorizedError, NotFoundError, ValidationError } from "../utils/appError.js";
-import * as mailer from "../utils/mailer.js";
-import Membership from "../db/models/membership.model.js";
+import * as mailer from "./email/emailService.js";
+import * as membershipRepository from "../repositories/membership.repository.js";
 
-const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
+import { googleClientId } from "../config/env.js";
+
+const googleClient = new OAuth2Client(googleClientId);
 
 export const register = async (data) => {
   const { firstName, lastName, email, password, role, phone } = data;
@@ -58,7 +60,7 @@ export const login = async (email, password) => {
   }
 
   // Buscar membresías asociadas al usuario
-  const memberships = await Membership.find({ user: user._id, isActive: true }).populate("business");
+  const memberships = await membershipRepository.findActiveByUser(user._id);
 
   return {
     id: user._id,
@@ -79,7 +81,7 @@ export const login = async (email, password) => {
 export const loginWithGoogle = async (idToken) => {
   const ticket = await googleClient.verifyIdToken({
     idToken: idToken,
-    audience: process.env.GOOGLE_CLIENT_ID,
+    audience: googleClientId,
   });
   const payload = ticket.getPayload();
   const { email, given_name, family_name, picture } = payload;
@@ -95,7 +97,7 @@ export const loginWithGoogle = async (idToken) => {
     });
   }
 
-  const memberships = await Membership.find({ user: user._id, isActive: true }).populate("business");
+  const memberships = await membershipRepository.findActiveByUser(user._id);
 
   return {
     id: user._id,
@@ -228,4 +230,130 @@ export const getOrCreateGuestUser = async (clientInfo) => {
   }
 
   return user;
+};
+
+// --- Funciones de sesión y negocio (movidas desde auth.controller.js) ---
+
+import * as userRepository from "../repositories/user.repository.js";
+import * as businessRepository from "../repositories/business.repository.js";
+
+/**
+ * Resuelve los datos de sesión a partir de un usuario autenticado.
+ * Centraliza la lógica duplicada entre login y googleLogin.
+ *
+ * Retorna un objeto con:
+ * - type: "superadmin" | "single" | "needs_selection"
+ * - sessionUser: datos para req.session.user (si type !== "needs_selection")
+ * - tempUser: datos para req.session.tempUser (si type === "needs_selection")
+ * - memberships: lista de membresías (si type === "needs_selection")
+ */
+export const resolveSessionFromUser = (user) => {
+  // Superadmin: no necesita membresías
+  if (user.role === "superadmin") {
+    return {
+      type: "superadmin",
+      sessionUser: {
+        id: user.id,
+        firstName: user.firstName,
+        lastName: user.lastName,
+        email: user.email,
+        role: "superadmin",
+      },
+    };
+  }
+
+  if (!user.memberships || user.memberships.length === 0) {
+    throw new UnauthorizedError("Tu cuenta no tiene ningún negocio asociado");
+  }
+
+  // Un solo negocio: sesión directa
+  if (user.memberships.length === 1) {
+    const active = user.memberships[0];
+    return {
+      type: "single",
+      sessionUser: {
+        id: user.id,
+        firstName: user.firstName,
+        lastName: user.lastName,
+        email: user.email,
+        role: active.role,
+        businessId: active.businessId,
+        businessSlug: active.businessSlug,
+      },
+    };
+  }
+
+  // Múltiples negocios: requiere selección
+  return {
+    type: "needs_selection",
+    tempUser: {
+      id: user.id,
+      firstName: user.firstName,
+      lastName: user.lastName,
+      email: user.email,
+      role: user.role,
+      memberships: user.memberships,
+    },
+    memberships: user.memberships,
+  };
+};
+
+/**
+ * Resuelve el cambio de negocio para un usuario autenticado.
+ * Retorna los campos a actualizar en req.session.user.
+ */
+export const switchBusiness = async (userId, userRole, businessId) => {
+  // Superadmin: acceso directo a cualquier negocio
+  if (userRole === "superadmin") {
+    const targetBusiness = await businessRepository.findById(businessId);
+    if (!targetBusiness) {
+      throw new ValidationError("El negocio especificado no existe");
+    }
+    return {
+      businessId: targetBusiness._id,
+      businessSlug: targetBusiness.slug,
+    };
+  }
+
+  // Usuario normal: verificar membresía activa
+  const membership = await membershipRepository.findActiveByUserAndBusiness(userId, businessId);
+  if (!membership) {
+    throw new UnauthorizedError("No tienes acceso a este negocio");
+  }
+
+  return {
+    businessId: membership.business._id,
+    businessSlug: membership.business.slug,
+    role: membership.role,
+  };
+};
+
+/**
+ * Obtiene el payload del usuario actual con sus membresías.
+ * Retorna null si el usuario ya no existe en la BD (sesión huérfana).
+ */
+export const getCurrentUser = async (sessionUser) => {
+  // Verificar que el usuario exista en la base de datos para prevenir sesiones huérfanas
+  const userExists = await userRepository.findById(sessionUser.id);
+  if (!userExists) {
+    return null;
+  }
+
+  // Buscar membresías para inyectarlas al frontend (para el switch de negocio)
+  let membershipsPayload = [];
+  if (sessionUser.role !== "superadmin") {
+    const memberships = await membershipRepository.findActiveByUser(sessionUser.id);
+    membershipsPayload = memberships.map((m) => ({
+      id: m._id,
+      businessId: m.business?._id,
+      businessName: m.business?.name,
+      businessSlug: m.business?.slug,
+      role: m.role,
+    }));
+  }
+
+  return {
+    ...sessionUser,
+    memberships: membershipsPayload,
+  };
 };

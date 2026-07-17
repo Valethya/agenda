@@ -3,26 +3,11 @@ import * as blockRepository from "../repositories/block.repository.js";
 import * as appointmentRepository from "../repositories/appointment.repository.js";
 import * as serviceRepository from "../repositories/service.repository.js";
 import * as businessConfigRepository from "../repositories/businessConfig.repository.js";
-import User from "../db/models/user.model.js";
-import HolidayModel from "../db/models/holiday.model.js";
+import * as userRepository from "../repositories/user.repository.js";
+import * as holidayRepository from "../repositories/holiday.repository.js";
 import { NotFoundError, ValidationError } from "../utils/appError.js";
+import { timeToMinutes, minutesToTime, checkOverlap } from "../utils/time.js";
 
-const timeToMinutes = (timeStr) => {
-  const [hours, minutes] = timeStr.split(":").map(Number);
-  return hours * 60 + minutes;
-};
-
-const minutesToTime = (totalMinutes) => {
-  const hours = Math.floor(totalMinutes / 60)
-    .toString()
-    .padStart(2, "0");
-  const minutes = (totalMinutes % 60).toString().padStart(2, "0");
-  return `${hours}:${minutes}`;
-};
-
-const checkOverlap = (startA, endA, startB, endB) => {
-  return Math.max(startA, startB) < Math.min(endA, endB);
-};
 export const getAvailableSlots = async (workerId, dateStr, serviceId, businessId, excludeAppointmentId = null) => {
   const dateParts = dateStr.split("-").map(Number);
   const targetDate = new Date(
@@ -33,14 +18,9 @@ export const getAvailableSlots = async (workerId, dateStr, serviceId, businessId
   // Ejecutar todas las consultas a base de datos de forma paralela concurrente
   const [service, worker, shift, holiday, appointments, blocks, businessConfig] = await Promise.all([
     serviceRepository.findById(serviceId),
-    User.findById(workerId),
+    userRepository.findById(workerId),
     shiftRepository.findByWorkerAndDay(workerId, dayOfWeek),
-    HolidayModel.findOne({
-      date: {
-        $gte: new Date(Date.UTC(dateParts[0], dateParts[1] - 1, dateParts[2], 0, 0, 0)),
-        $lte: new Date(Date.UTC(dateParts[0], dateParts[1] - 1, dateParts[2], 23, 59, 59, 999))
-      }
-    }),
+    holidayRepository.findByDate(new Date(Date.UTC(dateParts[0], dateParts[1] - 1, dateParts[2]))),
     appointmentRepository.findByWorkerAndDate(workerId, targetDate),
     blockRepository.findByWorkerAndDateRange(workerId, targetDate, targetDate),
     businessId ? businessConfigRepository.getConfig(businessId) : Promise.resolve(null)
@@ -153,23 +133,7 @@ export const getAvailableSlots = async (workerId, dateStr, serviceId, businessId
       if (isBlocked) {
         available = false;
       }
-    if (slotStart === 960) {
-      console.log("DEBUG 16:00 details:", {
-        available,
-        isInBreak,
-        isBooked,
-        isBlocked,
-        appointments: appointments.map(app => ({
-          id: app._id,
-          startTime: app.startTime,
-          endTime: app.endTime,
-          appStart: timeToMinutes(app.startTime),
-          appEnd: timeToMinutes(app.endTime),
-          overlap: checkOverlap(960, 960 + serviceDuration, timeToMinutes(app.startTime), timeToMinutes(app.endTime))
-        }))
-      });
     }
-  }
 
     availableSlots.push({
       startTime: minutesToTime(slotStart),
