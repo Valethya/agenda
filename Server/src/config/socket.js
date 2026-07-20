@@ -5,6 +5,8 @@
 import { Server } from "socket.io";
 import logger from "../config/logger.js";
 import { corsOrigins } from "../config/env.js";
+import { sessionMiddleware } from "../app.js";
+import MembershipModel from "../db/models/membership.model.js";
 
 let io;
 
@@ -23,15 +25,49 @@ export const initSocket = (httpServer) => {
     },
   });
 
-  io.on("connection", (socket) => {
-    logger.info(`Cliente WebSocket conectado: ${socket.id}`);
+  // Compartir la sesión de Express con Socket.IO
+  io.engine.use(sessionMiddleware);
 
-    // El cliente se suscribe a las actualizaciones de un día específico de un trabajador
-    socket.on("join_availability", ({ workerId, date }) => {
-      if (workerId && date) {
+  // Rechazar conexiones sin sesión autenticada
+  io.use((socket, next) => {
+    const sess = socket.request.session;
+    if (!sess || !sess.user) {
+      return next(new Error("No autorizado"));
+    }
+    socket.data.user = sess.user;
+    socket.data.businessId = sess.user.businessId;
+    next();
+  });
+
+  io.on("connection", (socket) => {
+    logger.info(`Cliente WebSocket conectado: ${socket.id} (user=${socket.data.user.id})`);
+
+    // Auto-unirse a la sala del negocio para recibir calendar_update
+    if (socket.data.businessId) {
+      socket.join(`business:${socket.data.businessId}`);
+    }
+
+    socket.on("join_availability", async ({ workerId, date }) => {
+      if (!workerId || !date) return;
+
+      try {
+        const membership = await MembershipModel.findOne({
+          user: workerId,
+          business: socket.data.businessId,
+          isActive: true,
+        }).lean();
+
+        if (!membership) {
+          socket.emit("ws_error", { message: "El trabajador no pertenece a su negocio" });
+          return;
+        }
+
         const room = `availability:${workerId}:${date}`;
         socket.join(room);
         logger.info(`Socket ${socket.id} se unió a la sala: ${room}`);
+      } catch (err) {
+        logger.error(`Error al validar membresía en join_availability: ${err.message}`);
+        socket.emit("ws_error", { message: "Error al unirse a la sala" });
       }
     });
 
@@ -65,15 +101,17 @@ export const getIO = () => {
 
 /**
  * Notifica un cambio de disponibilidad a los clientes suscritos.
- * Emite tanto al room específico como un evento global de calendario.
+ * Emite al room específico y un evento calendar_update al room del negocio.
  */
-export const emitAvailabilityChange = (workerId, dateStr) => {
+export const emitAvailabilityChange = (workerId, dateStr, businessId) => {
   if (io) {
     const room = `availability:${workerId}:${dateStr}`;
     io.to(room).emit("availability_changed", { workerId, date: dateStr });
     logger.info(`WS Broadcast: Cambios de disponibilidad en la sala ${room}`);
-    
-    io.emit("calendar_update");
-    logger.info("WS Broadcast: Evento global calendar_update emitido");
+
+    if (businessId) {
+      io.to(`business:${businessId}`).emit("calendar_update");
+      logger.info(`WS Broadcast: calendar_update emitido a business:${businessId}`);
+    }
   }
 };

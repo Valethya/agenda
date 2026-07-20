@@ -31,7 +31,7 @@ export const webpayReturn = async (req, res, next) => {
   try {
     // Transbank envía los parámetros por POST (en req.body) o GET (en req.query)
     const tokenWs = req.body?.token_ws || req.query?.token_ws;
-    const tbkToken = req.body?.TBK_TOKEN_WS || req.query?.TBK_TOKEN_WS;
+    const tbkToken = req.body?.TBK_TOKEN || req.query?.TBK_TOKEN;
     const slug = req.query?.slug || "barberia";
 
     const frontendUrl = process.env.FRONTEND_URL || "http://localhost:5173";

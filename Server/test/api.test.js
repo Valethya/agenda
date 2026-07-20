@@ -1,10 +1,15 @@
+import './setup.js';
 import test from "node:test";
 import assert from "node:assert";
 import app, { sessionStore } from "../src/app.js";
 import { connectDB } from "../src/db/db.js";
+import { seedTestData, teardown } from "./fixtures.js";
 
-// Conectar a la base de datos para habilitar las pruebas de integración
+// Conectar a la base de datos de test
 await connectDB();
+
+// Sembrar datos base (se necesita al menos un Business para que scopeBusiness funcione)
+await seedTestData();
 
 // Creamos un servidor de pruebas en un puerto dinámico efímero (evita colisiones de puerto)
 const server = app.listen(0);
@@ -49,10 +54,5 @@ test("Servidor Express - Endpoints Básicos", async (t) => {
 
 // Liberamos los recursos al finalizar todas las pruebas
 test.after(async () => {
-  server.close();
-  if (sessionStore && typeof sessionStore.close === "function") {
-    await sessionStore.close();
-  }
-  const mongoose = await import("mongoose");
-  await mongoose.default.disconnect();
+  await teardown(server, sessionStore);
 });

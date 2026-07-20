@@ -1,3 +1,4 @@
+import './setup.js';
 import test from "node:test";
 import assert from "node:assert";
 import app, { sessionStore } from "../src/app.js";
@@ -10,6 +11,7 @@ import Business from "../src/db/models/business.model.js";
 import Payment from "../src/db/models/payment.model.js";
 import AuditLog from "../src/db/models/auditLog.model.js";
 import Block from "../src/db/models/block.model.js";
+import Membership from "../src/db/models/membership.model.js";
 import { createHash } from "../src/utils/password.js";
 
 // Mock de Transbank SDK
@@ -107,6 +109,13 @@ test("Pruebas de Integración - Flujo de Pago Abierto y Registro Progresivo", as
     });
     testWorkerId = workerUser._id.toString();
 
+    // Crear membresía para el trabajador (requerida por resolveSessionFromUser)
+    await Membership.create({
+      user: workerUser._id,
+      business: business._id,
+      role: "worker",
+    });
+
     // Iniciar sesión de trabajador para obtener la cookie de administración
     const logRes = await fetch(`${baseUrl}/login`, {
       method: "POST",
@@ -130,19 +139,23 @@ test("Pruebas de Integración - Flujo de Pago Abierto y Registro Progresivo", as
     });
     testServiceId = service._id.toString();
 
-    // Generar turnos de disponibilidad (Lunes a Viernes 09:00 - 18:00)
+    // Generar fecha de prueba garantizando que sea día laborable (Lun-Vie)
     const tomorrow = new Date();
     tomorrow.setDate(tomorrow.getDate() + 2);
+    // Si cae en fin de semana, avanzar al lunes
+    while (tomorrow.getDay() === 0 || tomorrow.getDay() === 6) {
+      tomorrow.setDate(tomorrow.getDate() + 1);
+    }
     tomorrowStr = tomorrow.toISOString().split("T")[0];
 
-    // Crear shift para el trabajador en la fecha de la prueba
+    // Crear shift para el trabajador en el día de la semana de la prueba
     await Shift.create({
       worker: workerUser._id,
-      business: business._id,
       dayOfWeek: tomorrow.getDay(),
+      isOpen: true,
       startTime: "09:00",
       endTime: "18:00",
-      slots: [{ startTime: "09:00", endTime: "09:30", available: true }],
+      breaks: [],
     });
   });
 
@@ -162,6 +175,7 @@ test("Pruebas de Integración - Flujo de Pago Abierto y Registro Progresivo", as
       "progressive-2@example.com"
     ] } });
     await Service.deleteMany({ name: "Servicio Auditoría" });
+    await Membership.deleteMany({});
     await Business.deleteMany({ slug: "barberia-audit" });
 
     if (sessionStore && typeof sessionStore.close === "function") {

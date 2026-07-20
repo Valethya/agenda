@@ -7,6 +7,8 @@ import {
 } from "../controllers/businessConfig.controller.js";
 import { isAuthenticated } from "../middleware/auth.middleware.js";
 import { isAdmin } from "../middleware/role.middleware.js";
+import { validate } from "../middleware/validate.middleware.js";
+import { updateBusinessConfigSchema } from "../validations/common.validation.js";
 
 const router = Router();
 
@@ -14,7 +16,7 @@ const router = Router();
 router.get("/", getBusinessConfig);
 
 // Configuración protegida (Solo administradores)
-router.put("/", isAuthenticated, isAdmin, updateBusinessConfig);
+router.put("/", isAuthenticated, isAdmin, validate(updateBusinessConfigSchema), updateBusinessConfig);
 
 // Métricas y analíticas (Solo administradores del negocio)
 router.get("/metrics", isAuthenticated, isAdmin, getBusinessMetrics);

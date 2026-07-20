@@ -312,7 +312,7 @@ export const confirmPayment = async (tokenWs) => {
 
       // Notificar cambio de disponibilidad en tiempo real vía WebSockets
       const dateStr = new Date(appointment.date).toISOString().split("T")[0];
-      emitAvailabilityChange(appointment.worker._id.toString(), dateStr);
+      emitAvailabilityChange(appointment.worker._id.toString(), dateStr, appointment.business._id || appointment.business);
 
       // Enviar correo de confirmación al cliente
       const populated = await appointmentRepository.findById(appointmentId);

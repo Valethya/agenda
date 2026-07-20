@@ -29,20 +29,19 @@ if (nodeEnv === "production") {
   app.set("trust proxy", 1);
 }
 
-app.use(
-  session({
-    secret: sessionSecret,
-    resave: false,
-    saveUninitialized: false,
-    store: sessionStore,
-    cookie: {
-      httpOnly: true,
-      maxAge: 1000 * 60 * 60 * 24,
-      secure: nodeEnv === "production",
-      sameSite: nodeEnv === "production" ? "none" : "lax",
-    },
-  }),
-);
+export const sessionMiddleware = session({
+  secret: sessionSecret,
+  resave: false,
+  saveUninitialized: false,
+  store: sessionStore,
+  cookie: {
+    httpOnly: true,
+    maxAge: 1000 * 60 * 60 * 24,
+    secure: nodeEnv === "production",
+    sameSite: nodeEnv === "production" ? "none" : "lax",
+  },
+});
+app.use(sessionMiddleware);
 
 // CORS - Whitelist de orígenes permitidos (soporta widgets SaaS embebidos)
 const allowedOrigins = corsOrigins.split(",").map((o) => o.trim());

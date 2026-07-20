@@ -11,6 +11,7 @@ import {
   selectMembershipSchema,
   switchBusinessSchema,
   saveShiftSchema,
+  updateBusinessConfigSchema,
 } from "../../src/validations/common.validation.js";
 
 // --- Helper: parse debe lanzar ---
@@ -108,34 +109,44 @@ describe("initiatePaymentSchema", () => {
 // webpayReturnSchema
 // ========================================================
 describe("webpayReturnSchema", () => {
-  it("acepta callback normal con token_ws en body", () => {
+  // --- Flujo normal: pago completado, Transbank envía token_ws ---
+  it("acepta flujo normal: token_ws en body (POST)", () => {
     expectPass(webpayReturnSchema, {
-      body: { token_ws: "abc123token" },
+      body: { token_ws: "01abcdef1234567890abcdef1234567890" },
       query: {},
     });
   });
 
-  it("acepta callback normal con token_ws en query", () => {
+  it("acepta flujo normal: token_ws en query (GET fallback)", () => {
     expectPass(webpayReturnSchema, {
       body: {},
-      query: { token_ws: "abc123token" },
+      query: { token_ws: "01abcdef1234567890abcdef1234567890" },
     });
   });
 
-  it("acepta callback abortado con TBK_TOKEN_WS en body", () => {
+  // --- Flujo abortado: usuario canceló en Transbank, envía TBK_TOKEN ---
+  it("acepta flujo abortado: TBK_TOKEN + TBK_ORDEN_COMPRA + TBK_ID_SESION en body", () => {
     expectPass(webpayReturnSchema, {
-      body: { TBK_TOKEN_WS: "tbk-token", TBK_ORDEN_COMPRA: "order-123", TBK_ID_SESION: "sess-1" },
+      body: { TBK_TOKEN: "01ab-tbk-token", TBK_ORDEN_COMPRA: "order-123", TBK_ID_SESION: "sess-1" },
       query: {},
     });
   });
 
-  it("acepta callback abortado con TBK_TOKEN_WS en query", () => {
+  it("acepta flujo abortado: solo TBK_TOKEN en query", () => {
     expectPass(webpayReturnSchema, {
       body: {},
-      query: { TBK_TOKEN_WS: "tbk-token" },
+      query: { TBK_TOKEN: "01ab-tbk-token" },
     });
   });
 
+  it("acepta flujo abortado: TBK_TOKEN en body sin los campos auxiliares", () => {
+    expectPass(webpayReturnSchema, {
+      body: { TBK_TOKEN: "01ab-tbk-token" },
+      query: {},
+    });
+  });
+
+  // --- Combinaciones y slug ---
   it("acepta slug en query junto con token_ws", () => {
     const result = expectPass(webpayReturnSchema, {
       body: {},
@@ -144,12 +155,21 @@ describe("webpayReturnSchema", () => {
     assert.equal(result.query.slug, "mi-barberia");
   });
 
+  // --- Rechazo: sin ningún token ---
   it("rechaza callback sin ningún token (body y query vacíos)", () => {
     expectFail(webpayReturnSchema, { body: {}, query: {} }, "token_ws");
   });
 
   it("rechaza callback completamente vacío", () => {
     expectFail(webpayReturnSchema, {}, "token_ws");
+  });
+
+  // --- Verifica que TBK_TOKEN_WS (incorrecto) no pasa ---
+  it("rechaza TBK_TOKEN_WS (nombre incorrecto del campo)", () => {
+    expectFail(webpayReturnSchema, {
+      body: { TBK_TOKEN_WS: "bad-field-name" },
+      query: {},
+    }, "token_ws");
   });
 });
 
@@ -341,5 +361,114 @@ describe("saveShiftSchema", () => {
         breaks: [{ startTime: "1pm", endTime: "2pm" }],
       },
     }, "HH:MM");
+  });
+});
+
+// ========================================================
+// updateBusinessConfigSchema
+// ========================================================
+describe("updateBusinessConfigSchema", () => {
+  it("acepta payload con solo businessName", () => {
+    expectPass(updateBusinessConfigSchema, { body: { businessName: "Mi Barbería" } });
+  });
+
+  it("acepta payload con workingHours válido", () => {
+    expectPass(updateBusinessConfigSchema, {
+      body: {
+        workingHours: [
+          { dayOfWeek: 1, isOpen: true, startTime: "09:00", endTime: "18:00", breaks: [{ startTime: "13:00", endTime: "14:00" }] },
+          { dayOfWeek: 0, isOpen: false },
+        ],
+      },
+    });
+  });
+
+  it("acepta payload con appointmentSettings parcial", () => {
+    expectPass(updateBusinessConfigSchema, {
+      body: { appointmentSettings: { slotDuration: 30 } },
+    });
+  });
+
+  it("acepta payload con paymentSettings completo", () => {
+    expectPass(updateBusinessConfigSchema, {
+      body: {
+        paymentSettings: {
+          requireDeposit: true,
+          depositType: "percentage",
+          depositValue: 20,
+        },
+      },
+    });
+  });
+
+  it("acepta payload con emailSettings válido", () => {
+    expectPass(updateBusinessConfigSchema, {
+      body: {
+        emailSettings: {
+          brandColor: "#FF5733",
+          logoUrl: "https://example.com/logo.png",
+          customFooter: "Gracias por preferirnos",
+        },
+      },
+    });
+  });
+
+  it("acepta emailSettings con logoUrl vacío", () => {
+    expectPass(updateBusinessConfigSchema, {
+      body: { emailSettings: { logoUrl: "" } },
+    });
+  });
+
+  it("rechaza propiedad desconocida en body (strict)", () => {
+    expectFail(updateBusinessConfigSchema, {
+      body: { businessName: "Ok", hackerField: "malicious" },
+    }, "");
+  });
+
+  it("rechaza propiedad desconocida en appointmentSettings (strict)", () => {
+    expectFail(updateBusinessConfigSchema, {
+      body: { appointmentSettings: { slotDuration: 30, unknownField: true } },
+    }, "");
+  });
+
+  it("rechaza brandColor con formato inválido", () => {
+    expectFail(updateBusinessConfigSchema, {
+      body: { emailSettings: { brandColor: "red" } },
+    }, "hexadecimal");
+  });
+
+  it("rechaza depositType con valor no permitido (enum)", () => {
+    expectFail(updateBusinessConfigSchema, {
+      body: { paymentSettings: { depositType: "bitcoin" } },
+    }, "");
+  });
+
+  it("rechaza businessName vacío", () => {
+    expectFail(updateBusinessConfigSchema, {
+      body: { businessName: "" },
+    }, "vacío");
+  });
+
+  it("rechaza slotDuration menor a 5 minutos", () => {
+    expectFail(updateBusinessConfigSchema, {
+      body: { appointmentSettings: { slotDuration: 2 } },
+    }, "");
+  });
+
+  it("rechaza logoUrl con formato URL inválido", () => {
+    expectFail(updateBusinessConfigSchema, {
+      body: { emailSettings: { logoUrl: "not-a-url" } },
+    }, "");
+  });
+
+  it("rechaza workingHours con más de 7 entradas", () => {
+    const entries = Array.from({ length: 8 }, (_, i) => ({ dayOfWeek: i % 7 }));
+    expectFail(updateBusinessConfigSchema, {
+      body: { workingHours: entries },
+    }, "");
+  });
+
+  it("acepta body completamente vacío (update sin cambios)", () => {
+    expectPass(updateBusinessConfigSchema, { body: {} });
   });
 });

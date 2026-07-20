@@ -116,7 +116,7 @@ export const bookAppointment = async (appointmentData) => {
   });
 
   // F. Emitir cambio de disponibilidad en tiempo real mediante WebSockets
-  emitAvailabilityChange(worker, dateStr);
+  emitAvailabilityChange(worker, dateStr, businessId);
 
   // G. Enviar correos de notificación (segundo plano diferido)
   notifyBookingCreated(newAppointment._id, client, initialStatus);
@@ -265,7 +265,7 @@ export const cancelAppointment = async (appointmentId, userId, userRole) => {
 
   // Emitir cambio de disponibilidad en tiempo real mediante WebSockets
   const dateStr = new Date(appointment.date).toISOString().split("T")[0];
-  emitAvailabilityChange(appointment.worker._id.toString(), dateStr);
+  emitAvailabilityChange(appointment.worker._id.toString(), dateStr, appointment.business._id || appointment.business);
 
   // Enviar correo de cancelación al cliente (segundo plano diferido)
   notifyAppointmentCancelled(appointmentId, userId);

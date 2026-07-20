@@ -111,7 +111,7 @@ export const createBlock = async (req, res, next) => {
 
     // Emitir cambio de disponibilidad en tiempo real mediante WebSockets
     const dateStr = new Date(date).toISOString().split("T")[0];
-    emitAvailabilityChange(workerId, dateStr);
+    emitAvailabilityChange(workerId, dateStr, req.session.user.businessId);
 
     res.status(201).json({
       status: "success",
@@ -150,7 +150,7 @@ export const deleteBlock = async (req, res, next) => {
 
     // Emitir cambio de disponibilidad en tiempo real mediante WebSockets
     const dateStr = new Date(block[0].date).toISOString().split("T")[0];
-    emitAvailabilityChange(blockOwnerId, dateStr);
+    emitAvailabilityChange(blockOwnerId, dateStr, req.session.user.businessId);
 
     res.status(200).json({
       status: "success",

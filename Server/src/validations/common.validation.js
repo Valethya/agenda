@@ -29,27 +29,29 @@ export const initiatePaymentSchema = z.object({
 });
 
 // Callback de Webpay: tolerante porque Transbank controla el payload.
-// En flujo normal envía token_ws; en flujo abortado envía TBK_TOKEN_WS + TBK_ORDEN_COMPRA + TBK_ID_SESION.
+// Flujo normal (pago completado): Transbank envía token_ws
+// Flujo abortado/cancelado: Transbank envía TBK_TOKEN + TBK_ORDEN_COMPRA + TBK_ID_SESION (sin token_ws)
+// Flujo timeout (usuario no completó): puede llegar sin ningún token
 // Validación mínima: al menos uno de los tokens debe estar presente.
 export const webpayReturnSchema = z.object({
   body: z.object({
     token_ws: z.string().optional(),
-    TBK_TOKEN_WS: z.string().optional(),
+    TBK_TOKEN: z.string().optional(),
     TBK_ORDEN_COMPRA: z.string().optional(),
     TBK_ID_SESION: z.string().optional(),
   }).optional().default({}),
   query: z.object({
     token_ws: z.string().optional(),
-    TBK_TOKEN_WS: z.string().optional(),
+    TBK_TOKEN: z.string().optional(),
     slug: z.string().optional(),
   }).optional().default({}),
 }).refine(
   (data) => {
     const hasToken = data.body?.token_ws || data.query?.token_ws;
-    const hasTbk = data.body?.TBK_TOKEN_WS || data.query?.TBK_TOKEN_WS;
+    const hasTbk = data.body?.TBK_TOKEN || data.query?.TBK_TOKEN;
     return hasToken || hasTbk;
   },
-  { message: "Se requiere al menos token_ws o TBK_TOKEN_WS en body o query" }
+  { message: "Se requiere al menos token_ws o TBK_TOKEN en body o query" }
 );
 
 // --- Superadmin ---
@@ -126,4 +128,51 @@ export const saveShiftSchema = z.object({
       endTime: timeHHMM,
     })).optional(),
   }),
+});
+
+// --- BusinessConfig (PUT /business-settings) ---
+// Basado en el modelo Mongoose BusinessConfig. Usa strict() para rechazar propiedades desconocidas.
+// Todos los campos son opcionales porque es una actualización parcial.
+const workingHourEntry = z.object({
+  dayOfWeek: z.number().int().min(0).max(6),
+  isOpen: z.boolean().optional(),
+  startTime: timeHHMM.optional(),
+  endTime: timeHHMM.optional(),
+  breaks: z.array(z.object({
+    startTime: timeHHMM,
+    endTime: timeHHMM,
+  })).optional(),
+}).strict();
+
+export const updateBusinessConfigSchema = z.object({
+  body: z.object({
+    businessName: z.string()
+      .min(1, "El nombre no puede estar vacío")
+      .max(100, "El nombre no debe exceder 100 caracteres")
+      .optional(),
+    workingHours: z.array(workingHourEntry)
+      .max(7, "No puede haber más de 7 entradas de horario")
+      .optional(),
+    appointmentSettings: z.object({
+      slotDuration: z.number().int().min(5).max(480).optional(),
+      bufferTime: z.number().int().min(0).max(120).optional(),
+      minAdvanceHours: z.number().int().min(0).max(168).optional(),
+      maxAdvanceDays: z.number().int().min(1).max(365).optional(),
+      autoConfirmLocalBookings: z.boolean().optional(),
+    }).strict().optional(),
+    cancellationSettings: z.object({
+      allowCancellation: z.boolean().optional(),
+      limitHours: z.number().int().min(0).max(168).optional(),
+    }).strict().optional(),
+    paymentSettings: z.object({
+      requireDeposit: z.boolean().optional(),
+      depositType: z.enum(["percentage", "fixed"]).optional(),
+      depositValue: z.number().min(0).max(100000).optional(),
+    }).strict().optional(),
+    emailSettings: z.object({
+      brandColor: z.string().regex(/^#[0-9a-fA-F]{6}$/, "Color debe ser hexadecimal (#RRGGBB)").optional(),
+      logoUrl: z.string().url("URL de logo inválida").or(z.literal("")).optional(),
+      customFooter: z.string().max(500, "El footer no debe exceder 500 caracteres").optional(),
+    }).strict().optional(),
+  }).strict(),
 });
