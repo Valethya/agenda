@@ -1,5 +1,23 @@
+import mongoose from "mongoose";
 import * as businessRepository from "../repositories/business.repository.js";
-import { NotFoundError, UnauthorizedError } from "../utils/appError.js";
+import { NotFoundError, UnauthorizedError, ValidationError } from "../utils/appError.js";
+
+const BUSINESS_NOT_AVAILABLE_MESSAGE = "El negocio especificado no está disponible";
+
+const collectIdentifier = (name, values, normalize = (value) => value) => {
+  const provided = values.filter((value) => value !== undefined && value !== null && value !== "");
+
+  if (provided.some((value) => typeof value !== "string")) {
+    throw new ValidationError(`${name} debe ser un texto válido`);
+  }
+
+  const normalized = [...new Set(provided.map((value) => normalize(value)))];
+  if (normalized.length > 1) {
+    throw new ValidationError(`Se recibieron valores contradictorios para ${name}`);
+  }
+
+  return normalized[0] || null;
+};
 
 export const scopeBusiness = async (req, res, next) => {
   try {
@@ -34,45 +52,46 @@ export const scopeBusiness = async (req, res, next) => {
 
     // 2. Ruta pública o cliente general (pueden agendar en distintos negocios)
     // Buscamos businessId o slug en query params, body o headers
-    const businessId = req.query.businessId || (req.body && req.body.businessId) || req.headers["x-business-id"];
-    const slug = req.query.slug || (req.body && req.body.slug) || req.headers["x-business-slug"];
+    const businessId = collectIdentifier("businessId", [
+      req.query.businessId,
+      req.body?.businessId,
+      req.headers["x-business-id"],
+    ], (value) => value.trim());
+    const slug = collectIdentifier("slug", [
+      req.query.slug,
+      req.body?.slug,
+      req.headers["x-business-slug"],
+    ], (value) => value.toLowerCase().trim());
 
     if (!businessId && !slug) {
-      // Como fallback de desarrollo y pruebas, si no se especifica, se toma el primer negocio activo
-      const defaultBusiness = await businessRepository.findFirstActive();
-      if (!defaultBusiness) {
-        throw new NotFoundError("No hay ningún negocio activo registrado en la plataforma.");
-      }
-      req.business = defaultBusiness;
-      req.businessId = defaultBusiness._id;
-      return next();
+      throw new ValidationError("Debe especificar el negocio mediante businessId o slug");
     }
 
-    let business;
+    if (businessId && !mongoose.isValidObjectId(businessId)) {
+      throw new ValidationError("businessId debe ser un ObjectId válido");
+    }
+
+    let businessById = null;
+    let businessBySlug = null;
     if (businessId) {
-      business = await businessRepository.findById(businessId);
-    } else if (slug) {
-      business = await businessRepository.findBySlug(slug);
+      businessById = await businessRepository.findById(businessId);
+    }
+    if (slug) {
+      businessBySlug = await businessRepository.findBySlug(slug);
     }
 
-    if (!business) {
-      // Si el usuario es superadmin, usamos el primer negocio activo como fallback en lugar de lanzar error 404
-      if (req.session?.user?.role === "superadmin") {
-        const fallbackBiz = await businessRepository.findFirstActive();
-        if (fallbackBiz) {
-          req.business = fallbackBiz;
-          req.businessId = fallbackBiz._id;
-          return next();
-        }
-      }
-      throw new NotFoundError("El negocio especificado no existe o no pudo ser encontrado.");
+    if ((businessId && !businessById) || (slug && !businessBySlug)) {
+      throw new NotFoundError(BUSINESS_NOT_AVAILABLE_MESSAGE);
     }
+
+    if (businessById && businessBySlug && !businessById._id.equals(businessBySlug._id)) {
+      throw new ValidationError("businessId y slug corresponden a negocios diferentes");
+    }
+
+    const business = businessById || businessBySlug;
 
     if (!business.isActive) {
-      return res.status(403).json({
-        status: "fail",
-        message: `El negocio '${business.name}' está actualmente inactivo en la plataforma.`,
-      });
+      throw new NotFoundError(BUSINESS_NOT_AVAILABLE_MESSAGE);
     }
 
     req.business = business;
@@ -82,4 +101,3 @@ export const scopeBusiness = async (req, res, next) => {
     next(error);
   }
 };
-
