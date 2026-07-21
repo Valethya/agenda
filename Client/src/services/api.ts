@@ -7,8 +7,6 @@ if (!configuredApiUrl) {
 }
 
 const API_URL = configuredApiUrl.replace(/\/+$/, '');
-const FALLBACK_BUSINESS_SLUG = 'barberia';
-
 type JsonBody = Record<string, unknown> | unknown[];
 
 export interface ApiRequestInit extends Omit<RequestInit, 'body'> {
@@ -42,16 +40,13 @@ export function isApiError(error: unknown): error is ApiError {
   return error instanceof ApiError;
 }
 
-export function getBusinessSlug(): string {
-  let slug = FALLBACK_BUSINESS_SLUG;
+export function getBusinessSlug(): string | null {
   if (typeof window !== "undefined") {
     const params = new URLSearchParams(window.location.search);
-    const urlSlug = params.get("slug");
-    if (urlSlug) {
-      slug = urlSlug;
-    }
+    const urlSlug = params.get("slug")?.trim();
+    return urlSlug || null;
   }
-  return slug;
+  return null;
 }
 
 function isJsonBody(body: ApiRequestInit['body']): body is JsonBody {
@@ -85,7 +80,9 @@ export async function apiFetch<T = any>(path: string, options: ApiRequestInit = 
   const headers = new Headers(options.headers);
   let body = options.body;
 
-  headers.set('x-business-slug', slug);
+  if (slug && !headers.has('x-business-slug') && !headers.has('x-business-id')) {
+    headers.set('x-business-slug', slug);
+  }
 
   if (isJsonBody(body)) {
     body = JSON.stringify(body);

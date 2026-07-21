@@ -70,6 +70,11 @@ test("Pruebas de Integración - Flujo de Pago Abierto y Registro Progresivo", as
   let testBusinessId = "";
   let tomorrowStr = "";
 
+  const tenantJsonHeaders = () => ({
+    "Content-Type": "application/json",
+    "x-business-id": testBusinessId,
+  });
+
   // Configuración inicial de datos de prueba
   t.before(async () => {
     // Cada suite parte desde una base vacía. La guarda de cleanTestData evita
@@ -172,7 +177,7 @@ test("Pruebas de Integración - Flujo de Pago Abierto y Registro Progresivo", as
     // A. Crear reserva como invitado (POST sin cookies, pasando clientInfo)
     const bookRes = await fetch(`${baseUrl}/appointments`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: tenantJsonHeaders(),
       body: JSON.stringify({
         worker: testWorkerId,
         service: testServiceId,
@@ -201,7 +206,7 @@ test("Pruebas de Integración - Flujo de Pago Abierto y Registro Progresivo", as
     // B. Iniciar pago (Público, sin cookies)
     const initRes = await fetch(`${baseUrl}/payments/initiate`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: tenantJsonHeaders(),
       body: JSON.stringify({
         appointmentId,
         paymentType: "deposit",
@@ -249,7 +254,7 @@ test("Pruebas de Integración - Flujo de Pago Abierto y Registro Progresivo", as
     // A. Crear reserva para Cliente 1 (Creación de registro inicial)
     const bookRes1 = await fetch(`${baseUrl}/appointments`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: tenantJsonHeaders(),
       body: JSON.stringify({
         worker: testWorkerId,
         service: testServiceId,
@@ -277,7 +282,7 @@ test("Pruebas de Integración - Flujo de Pago Abierto y Registro Progresivo", as
     // y no sobrescriba los nombres existentes.
     const bookRes2 = await fetch(`${baseUrl}/appointments`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: tenantJsonHeaders(),
       body: JSON.stringify({
         worker: testWorkerId,
         service: testServiceId,
@@ -318,7 +323,7 @@ test("Pruebas de Integración - Flujo de Pago Abierto y Registro Progresivo", as
     // Reservar indicando un apellido para completar la ficha
     const bookRes3 = await fetch(`${baseUrl}/appointments`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: tenantJsonHeaders(),
       body: JSON.stringify({
         worker: testWorkerId,
         service: testServiceId,
@@ -343,7 +348,7 @@ test("Pruebas de Integración - Flujo de Pago Abierto y Registro Progresivo", as
   await t.test("Debería denegar la reserva si no se pasa clientInfo y no hay sesión activa", async () => {
     const bookRes = await fetch(`${baseUrl}/appointments`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: tenantJsonHeaders(),
       body: JSON.stringify({
         worker: testWorkerId,
         service: testServiceId,
@@ -361,7 +366,7 @@ test("Pruebas de Integración - Flujo de Pago Abierto y Registro Progresivo", as
     // Crear reserva inicial
     const bookRes = await fetch(`${baseUrl}/appointments`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: tenantJsonHeaders(),
       body: JSON.stringify({
         worker: testWorkerId,
         service: testServiceId,
@@ -389,7 +394,7 @@ test("Pruebas de Integración - Flujo de Pago Abierto y Registro Progresivo", as
     // Intentar iniciar el pago
     const initRes = await fetch(`${baseUrl}/payments/initiate`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: tenantJsonHeaders(),
       body: JSON.stringify({ appointmentId, paymentType: "deposit" }),
     });
 
