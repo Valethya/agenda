@@ -2,7 +2,7 @@
 
 **Proyecto:** ATMÓSFERA Agenda
 
-**Estado:** Listo para revisión
+**Estado:** Completado
 
 **Fecha:** 21 de julio de 2026
 
@@ -66,10 +66,31 @@ Tampoco modifica modelos de turnos o bloqueos, ni corrige mutaciones administrat
 ## 8. Evidencia de verificación
 
 - PR: `#6` — `hardening/6.2.1-b-booking-coherence` → `master`.
-- GitHub Actions: CI `#19` (`29856567929`).
+- GitHub Actions final: CI `#20` (`29856701368`).
 - `Backend unit tests`: aprobado.
 - `Backend integration tests`: aprobado con MongoDB y los tres casos negativos de esta entrega.
 - `Frontend checks and build`: aprobado.
 - `Secret scan`: aprobado.
 
-El documento cambiará a **Completado** después del merge y la prueba de humo correspondiente.
+## 9. Prueba de humo en producción
+
+Realizada el 21 de julio de 2026 después del merge del PR `#6`:
+
+1. La landing pública de ATMÓSFERA cargó el negocio, servicio, profesional y disponibilidad.
+2. Se creó una reserva confirmada para `Reunión Online de Diagnóstico` con `Consultor Atmósfera`.
+3. El correo de confirmación llegó con negocio, servicio, profesional, fecha, hora y estado correctos.
+4. La cita apareció en el calendario administrativo de ATMÓSFERA en el horario reservado.
+5. Para permitir ambos frontends se definió `CORS_ORIGINS` en Railway con los orígenes exactos de agenda y landing, con y sin `www`.
+
+Resultado: flujo `landing → API → MongoDB → correo → panel` verificado en producción.
+
+## 10. Hallazgos no bloqueantes
+
+- El panel muestra un error genérico cuando un superadministrador abre `/admin` sin un tenant explícito; debe ofrecer el selector SaaS o conservar/agregar `slug` en la redirección.
+- La landing permite continuar cuando falla su inicialización y puede enviar `worker` o `service` vacíos; debe bloquear el formulario y mostrar el error de conexión.
+- La landing descarta `errors` de las respuestas de validación y muestra sólo el mensaje general.
+- El saludo del correo aparece sin el nombre del cliente.
+- La landing promete un enlace de videollamada; debe verificarse que la plantilla enviada incluya realmente ese enlace.
+- La gestión de turnos todavía no posee una interfaz completa en el panel.
+
+Estos puntos no reabren 6.2.1-B: se registran como trabajo de experiencia, operabilidad y frontend posterior.
