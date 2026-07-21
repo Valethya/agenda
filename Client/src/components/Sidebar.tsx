@@ -127,8 +127,10 @@ export const Sidebar: React.FC = () => {
     } else if (id === 'horarios') {
       setViewType('horarios');
     } else if (id === 'saas-negocios' || id === 'saas-metricas') {
-      // @ts-ignore
-      setViewType(id);
+      const params = new URLSearchParams(window.location.search);
+      params.delete('slug');
+      params.set('view', id);
+      window.location.href = `/admin?${params.toString()}`;
     }
   };
 
