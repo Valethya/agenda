@@ -107,11 +107,11 @@ export const CalendarProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         setViewType('dia');
         setSelectedProfessionalId(null);
       }
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error("Error loading calendar data:", err);
       setError("Ocurrió un error al cargar la información del panel.");
       // If unauthorized, redirect to login
-      if (err.message?.includes("401")) {
+      if (api.isApiError(err) && err.status === 401) {
         window.location.href = "/login";
       }
     } finally {
