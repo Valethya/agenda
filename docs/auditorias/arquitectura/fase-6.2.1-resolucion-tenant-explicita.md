@@ -52,6 +52,7 @@ Esta entrega implementa el contrato de resolución. Las guardas de ownership de 
 | `Server/src/repositories/business.repository.js` | Elimina `findFirstActive()`. | Retirar del runtime HTTP una primitiva que permitía resolver tenant por orden de la base. |
 | `Client/src/services/api.ts` | Elimina `FALLBACK_BUSINESS_SLUG` y condiciona el header tenant. | Hacer visible la ausencia de contexto y conservar limpias las llamadas globales. |
 | `Server/test/api.test.js` | Agrega casos públicos, autenticados y de superadministración. | Fijar el contrato con pruebas de regresión y aislamiento. |
+| `Server/test/auditPayment.test.js` | Declara el negocio en reservas e inicios de pago públicos de la suite. | Adaptar los consumidores de prueba al contrato explícito sin alterar los payloads funcionales. |
 
 ## 4. Cobertura añadida
 
