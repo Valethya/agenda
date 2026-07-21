@@ -3,8 +3,9 @@
 ## Estado
 
 - **Fecha:** 2026-07-20
-- **Estado:** implementada localmente, pendiente de commit
+- **Estado:** cerrada, verificada y fusionada
 - **Commit base:** `9d87bc0`
+- **PR:** #1, fusionado en `master` mediante `622237b`
 
 ## Objetivo
 
@@ -50,14 +51,13 @@ Socket.IO permanece separado porque no utiliza el protocolo de solicitudes HTTP 
 - `git diff --check`: aprobado.
 - Búsqueda global: una sola llamada directa a `fetch`, encapsulada en `services/api.ts`.
 - `PUBLIC_API_URL=http://localhost:3000/api npm run build`: aprobado, 5 páginas generadas.
-- `npm run check`: ejecutado después de instalar las herramientas requeridas; reportó 8 errores y 5 sugerencias preexistentes en scripts Astro. No reportó errores en `services/api.ts` ni `CalendarContext.tsx`.
+- `npm run check`: 0 errores, 0 advertencias y 0 sugerencias después de incorporar las herramientas requeridas y corregir los scripts Astro.
+- `npm ci`: instalación limpia reproducible desde el lockfile.
 
-## Deuda detectada fuera del alcance
+## Deuda restante fuera del alcance
 
-- `package.json` y `package-lock.json` del cliente no están sincronizados; `npm ci` no puede ejecutarse.
-- El script `npm run check` requiere `@astrojs/check` y `typescript`, pero no están declarados en el proyecto.
-- La verificación inicial detectó 8 errores y 5 sugerencias TypeScript en `login.astro`, `payment-success.astro` y `payment-failed.astro`. Se planificó tratarlos antes del refactor estructural de 7.2.
-- El slug de respaldo hardcodeado se conserva temporalmente y debe eliminarse en 7.9.
+- El slug de respaldo hardcodeado se conserva temporalmente y debe eliminarse después de estabilizar el contrato multitenant.
+- Los tipos de usuario, membresía y configuración deberán profundizarse a medida que se dividan los contextos, manteniendo `astro check` como barrera obligatoria.
 
 ## Criterios de cierre
 
