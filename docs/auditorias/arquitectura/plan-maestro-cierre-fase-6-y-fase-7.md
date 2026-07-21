@@ -1,8 +1,8 @@
 # Plan maestro de cierre de Fase 6 y preparación de Fase 7
 
 **Proyecto:** ATMÓSFERA Agenda
-**Estado del documento:** Propuesta para aprobación
-**Fecha de revisión:** 20 de julio de 2026
+**Estado del documento:** Plan vigente con decisiones aprobadas de identidad cliente e integración headless
+**Fecha de revisión:** 21 de julio de 2026
 **Alcance:** Backend, multitenencia, seguridad, pagos, impersonación, frontend, pruebas y operación
 
 ## 1. Objetivo
@@ -32,15 +32,17 @@ No se considerará terminada una tarea solamente porque el código compile. Cada
 | P0 | Autoridad de roles y membresías | `User.role`/`User.business` y `Membership` compiten como fuentes de permisos. |
 | P0 | Impersonación | La sesión principal se reemplaza, todas las pestañas comparten el cambio y la atribución de auditoría es incompleta. |
 | P0 | Pagos y propiedad de citas | El inicio de pago es público y las transiciones distribuidas no son atómicas ni completamente idempotentes. |
-| P1 | Pruebas y CI | El comando oficial no ejecuta todas las suites y no existe una barrera automatizada de integración. |
+| Cerrado | Pruebas y CI | La etapa 6.1 dejó 95 pruebas de backend, checks de frontend, build y escaneo de secretos como barreras obligatorias de `master`. |
 | P1 | Sesiones y CSRF | Las cookies cross-site requieren protección explícita para operaciones mutables. |
 | P1 | Dependencias | La auditoría encontró vulnerabilidades conocidas en dependencias directas y transitivas. |
-| P1 | Tipado frontend | El build funciona, pero la primera ejecución reproducible del análisis estático detectó 8 errores y 5 sugerencias. |
+| Cerrado | Tipado frontend | `astro check` finaliza con 0 errores, 0 advertencias y 0 sugerencias desde el cierre de 7.1. |
 | P2 | Refactor frontend | Es necesario, pero debe realizarse después de estabilizar contratos y límites de autorización. |
 
 ## 4. Etapa 6.1 — Base verificable
 
 **Registro de ejecución:** [`fase-6.1-base-verificable.md`](./fase-6.1-base-verificable.md)
+
+**Estado:** cerrada y verificada el 21 de julio de 2026. Los apartados siguientes se conservan como especificación y evidencia histórica.
 
 ### 6.1.1 Ejecutar todas las suites desde el comando oficial
 
@@ -207,15 +209,23 @@ Comprobar solamente que el usuario es administrador no demuestra que el recurso 
 - Todos los endpoints por ID poseen pruebas de aislamiento entre negocio A y negocio B.
 - Un ID válido de otro negocio responde como recurso inaccesible y nunca se modifica.
 
-### 6.2.5 Definir el modelo de cuentas cliente
+### 6.2.5 Implementar identidad progresiva del cliente
 
-**Decisión necesaria**
+**Decisión aprobada**
 
-Definir formalmente una de estas alternativas:
+Utilizar una identidad global y perfiles complementarios específicos por negocio, según el [ADR-001](./adr-001-autoridad-multitenant-identidad-progresiva.md). Reservar como invitado no requerirá login, contraseña ni verificación en cada ocasión.
 
-1. el cliente es global y sus citas se relacionan con distintos negocios;
-2. el cliente posee una membresía específica por negocio;
-3. existe un perfil global y perfiles tenant-scoped complementarios.
+En el MVP:
+
+- normalizar correo y teléfono al recibir una reserva;
+- utilizar coincidencias de contacto sólo para seguimiento interno y tratarlas como identidades probables mientras no estén verificadas;
+- crear o actualizar un perfil tenant-scoped con la relación entre cliente y negocio;
+- permitir continuidad en el mismo dispositivo mediante una credencial opaca, segura y de duración limitada;
+- no tratar esa continuidad como prueba de identidad ni utilizarla para mostrar historial o información sensible;
+- no fusionar perfiles contradictorios automáticamente;
+- mantener separados el consentimiento para comunicaciones operativas y el consentimiento para marketing.
+
+La verificación por correo será opcional para reservar y obligatoria cuando sea necesario demostrar posesión del contacto, recuperar acceso, consultar historial o fusionar identidades. SMS no forma parte del MVP. WhatsApp se reserva para una etapa posterior como canal operativo.
 
 **Problemas que deben resolverse**
 
@@ -223,6 +233,7 @@ Definir formalmente una de estas alternativas:
 - Los clientes invitados reciben una contraseña aleatoria que no conocen.
 - Google puede crear usuarios sin membresía.
 - La asociación automática por teléfono puede unir identidades por error.
+- Una coincidencia de contacto no verificado no demuestra identidad ni autoriza acceso a citas anteriores.
 
 **Por qué es necesario**
 
@@ -231,7 +242,36 @@ Sin esta decisión no es posible definir correctamente login, historial de citas
 **Criterio de aceptación**
 
 - El registro, Google, reserva como invitado y consulta de citas siguen un contrato documentado y coherente.
-- La vinculación de correo o teléfono requiere una prueba de posesión adecuada.
+- La reserva invitada nunca crea una contraseña aleatoria desconocida por el cliente.
+- El sistema distingue perfiles probables de contactos verificados.
+- La vinculación definitiva de correo o teléfono requiere una prueba de posesión adecuada.
+- Las pruebas demuestran que un contacto no verificado no permite consultar historial ni administrar citas ajenas.
+
+### 6.2.6 Formalizar el contrato headless mínimo de Agenda
+
+**Decisión aprobada**
+
+ATMÓSFERA Agenda funcionará como infraestructura de reservas headless según el [ADR-002](./adr-002-agenda-headless-gestion-publica.md). La API centralizará servicios, profesionales, disponibilidad, citas, pagos, reglas y comunicaciones, pero no impondrá una interfaz pública única.
+
+Las webs construidas por ATMÓSFERA serán la interfaz del negocio y consumirán la API para crear recorridos completamente personalizados. En el futuro, el mismo contrato podrá ofrecerse a páginas de terceros sin modificar el dominio central.
+
+**Cambio necesario**
+
+- Definir una versión inicial mínima para servicios, profesionales, disponibilidad y creación de citas.
+- Reservar confirmación, reprogramación y cancelación públicas para operaciones separadas con credenciales de acción.
+- Exigir `businessId` o slug válido en todas las operaciones públicas y aplicar ownership en el backend.
+- Evitar que la API dependa del orden visual, cantidad de pasos o estructura del formulario consumidor.
+- Registrar por negocio una `websiteUrl` y una `bookingUrl` HTTPS cuyos dominios hayan sido verificados.
+- Construir enlaces operativos exclusivamente desde la configuración persistida; nunca desde una URL arbitraria recibida del navegador.
+- Definir estados, códigos de error, idempotencia, límites de frecuencia y reglas de compatibilidad.
+
+**Criterio de aceptación**
+
+- Dos webs pueden implementar recorridos visuales diferentes utilizando los mismos contratos de dominio.
+- La landing de ATMÓSFERA puede combinar contacto y reserva progresiva sin abandonar su propia interfaz.
+- Una solicitud con negocio inexistente o recurso de otro tenant se rechaza de manera determinista.
+- Cambiar la presentación de una web no requiere modificar la lógica central de citas.
+- El contrato inicial no incorpora endpoints ajenos a los recorridos necesarios para el MVP.
 
 ## 6. Etapa 6.3 — Autorización, sesiones y pagos
 
@@ -340,6 +380,43 @@ Una filtración de base de datos no debería convertir tokens de recuperación e
 - El token enviado por correo no existe en texto reutilizable en la base de datos.
 - Una cuenta OAuth no puede autenticarse por contraseña hasta configurarla mediante un flujo verificado.
 
+### 6.3.7 Gestionar citas mediante enlaces seguros del negocio
+
+**Decisión aprobada**
+
+El correo de confirmación incluirá enlaces para gestionar la cita sin exigir login. La reprogramación dirigirá a la agenda existente en la web del negocio, no a una interfaz visual genérica ni a un iframe externo.
+
+Ejemplo conceptual:
+
+```text
+https://negocio.cl/agenda?accion=reagendar&token=TOKEN_SEGURO
+```
+
+La forma exacta de transportar y canjear la credencial debe impedir que un token reutilizable termine expuesto en logs, analítica, historial o encabezados `Referer`.
+
+**Cambio necesario**
+
+- Generar credenciales aleatorias con hash persistido, alcance limitado, expiración y asociación explícita a cita, negocio y acción.
+- Aplicar política de un solo uso o rotación según la acción y registrar cada canje.
+- Exponer un endpoint de contexto que entregue sólo la información necesaria para representar la acción autorizada.
+- Exponer operaciones separadas para confirmar, reprogramar y cancelar.
+- No utilizar el ID de la cita como credencial ni incluir datos personales legibles en el token.
+- Redactar credenciales de logs y analítica, aplicar `Referrer-Policy: no-referrer` y evitar recursos de terceros antes del canje.
+- Aplicar rate limiting e idempotencia a los endpoints públicos de gestión.
+- Mantener la cita y el horario originales mientras el cliente explora alternativas.
+- Al confirmar, reservar el nuevo horario, actualizar la cita y liberar el anterior mediante una transacción o máquina de estados recuperable.
+- Registrar cita anterior, cita resultante, origen, fecha y resultado en auditoría.
+- Enviar una nueva confirmación después de una reprogramación exitosa.
+
+**Criterio de aceptación**
+
+- Una credencial sólo permite la acción, cita y negocio para los que fue emitida.
+- Una credencial alterada, vencida, revocada, reutilizada fuera de su política o presentada fuera de alcance se rechaza.
+- Abrir el enlace no libera ni cancela el horario original.
+- Dos intentos concurrentes no producen reservas duplicadas ni pérdida de ambos horarios.
+- La reprogramación se completa dentro de la web del negocio sin cambiar su identidad visual.
+- Los logs y eventos de analítica no contienen credenciales reutilizables.
+
 ## 7. Etapa 6.4 — Impersonación segura
 
 ### 6.4.1 Crear un ADR antes de implementar
@@ -442,12 +519,15 @@ El registro actual está orientado a citas y pagos, pero no permite reconstruir 
 **Cambio necesario**
 
 - Eliminar o migrar el módulo antiguo `utils/mailer.js`.
+- Hacer que citas y pagos emitan eventos de dominio, por ejemplo `appointment.created`, `appointment.rescheduled`, `appointment.cancelled` y `appointment.reminder_due`.
+- Hacer que `NotificationService` procese esos eventos sin acoplar el dominio al canal utilizado.
+- Mantener correo como canal operativo del MVP y permitir añadir WhatsApp posteriormente sin modificar los servicios de citas.
 - Evitar accesos directos a modelos desde controladores, WebSocket y utilidades cuando existe una capa de repositorios.
 - Centralizar logging en el logger estructurado.
 
 **Por qué es necesario**
 
-La duplicación permite que correcciones de seguridad o branding se apliquen en un módulo y no en el otro. Los accesos directos también evitan políticas comunes de negocio.
+La duplicación permite que correcciones de seguridad o branding se apliquen en un módulo y no en el otro. Los accesos directos también evitan políticas comunes de negocio. Acoplar citas directamente al correo obligaría a modificar el dominio al incorporar WhatsApp u otro canal.
 
 ### 6.5.3 Actualizar dependencias de forma controlada
 
@@ -483,12 +563,12 @@ El servidor puede aceptar solicitudes antes de disponer de base de datos y la di
 
 ## 9. Fase 7 — Refactor frontend revisado
 
-La tarea 7.1, unificación del cliente API, puede conservarse como base provisional. Sin embargo, el cliente todavía debe eliminar el slug predeterminado, completar contratos y adaptarse a las decisiones multitenant.
+La tarea 7.1 quedó implementada y fusionada mediante el PR #1. Su registro se encuentra en [`fase-7.1-api-client-unificado.md`](./fase-7.1-api-client-unificado.md). El cliente canónico todavía debe eliminar el slug predeterminado y adaptarse a las decisiones multitenant cuando los contratos estén estabilizados.
 
 ### Orden recomendado
 
-1. **7.1 Unificar API client:** conservar y ajustar después de estabilizar contratos.
-2. **7.10 Completar tipado TypeScript:** mover antes de los refactors estructurales.
+1. **7.1 Unificar API client:** completado; ajustar después de estabilizar contratos.
+2. **7.10 Completar tipado TypeScript:** base cerrada con `astro check` limpio; mantener como barrera durante los refactors.
 3. **7.2 Dividir CalendarContext.**
 4. **7.3 Dividir SaasBusinessesView.**
 5. **7.4 Extraer utilidades duplicadas.**
@@ -500,9 +580,10 @@ La tarea 7.1, unificación del cliente API, puede conservarse como base provisio
 
 ### 7.10 Completar tipado antes de dividir componentes
 
-**Cambio necesario**
+**Estado:** base completada durante 7.1 y verificada nuevamente en 6.1 con 0 errores, 0 advertencias y 0 sugerencias.
 
-- Corregir los 8 errores y 5 sugerencias detectados por la primera ejecución reproducible de `astro check`.
+**Cambio continuo necesario**
+
 - Tipar usuario, membresías, respuestas API, configuración y errores.
 - Eliminar `any`, `as any` y `@ts-ignore` injustificados.
 - Validar los valores de `view` provenientes de la URL.
@@ -573,6 +654,9 @@ El responsive debe aplicarse cuando la estructura de componentes ya sea estable;
 | Turno | Worker A modifica su turno en A | Worker A modifica turno ajeno o de otro negocio |
 | Bloqueo | Admin A elimina bloqueo A | Admin A elimina bloqueo B |
 | Pago | Propietario inicia pago | Usuario ajeno inicia pago por ID |
+| Cliente invitado | Contacto probable acumula seguimiento interno | Contacto no verificado consulta historial |
+| Gestión pública | Credencial válida reprograma su cita | Credencial de otra cita, negocio o acción modifica recursos |
+| Reprogramación | El cambio confirma el nuevo horario y libera el anterior | Abrir el enlace o fallar a mitad deja la cita sin horario |
 | Webpay | Callback válido confirma una vez | Callback repetido duplica efectos |
 | WebSocket | Miembro A entra a sala A | Miembro A entra a sala B |
 | Impersonación | Token válido crea sesión aislada | Token reutilizado o expirado crea sesión |
@@ -588,7 +672,10 @@ La Fase 6 podrá declararse terminada cuando se cumplan todas estas condiciones:
 - las operaciones tenant-scoped filtran por negocio;
 - turnos y bloqueos poseen `businessId` y datos migrados;
 - `Membership` es la autoridad de permisos tenant;
-- el modelo de cuentas cliente está documentado;
+- el modelo de identidad progresiva y perfiles tenant-scoped está documentado y probado;
+- el contrato headless no depende de una interfaz pública específica;
+- la gestión pública de citas utiliza credenciales con alcance, vencimiento y aislamiento tenant;
+- la reprogramación conserva el horario original hasta confirmar de forma transaccional o recuperable el nuevo;
 - pagos son autorizados, idempotentes y reconciliables;
 - sesiones cuentan con protección CSRF acorde al despliegue;
 - impersonación utiliza una sesión independiente y auditable;
@@ -597,22 +684,24 @@ La Fase 6 podrá declararse terminada cuando se cumplan todas estas condiciones:
 
 ## 12. Decisiones que deben aprobarse antes de implementar
 
-1. Modelo definitivo de identidad y membresía de clientes.
-2. Arquitectura de dominios de frontend y backend, necesaria para cookies y CSRF.
-3. Alcance permitido del modo soporte: solo lectura o escritura limitada.
-4. Política de retención y contenido de auditoría.
-5. Estrategia de migración para turnos, bloqueos y campos heredados de usuario.
-6. Política de compatibilidad y actualización de dependencias.
+1. ~~Modelo definitivo de identidad y membresía de clientes.~~ **Aprobado:** identidad global progresiva con perfiles tenant-scoped ([ADR-001](./adr-001-autoridad-multitenant-identidad-progresiva.md)).
+2. ~~Modelo de integración de la agenda pública.~~ **Aprobado:** API headless y experiencia visual perteneciente a la web del negocio ([ADR-002](./adr-002-agenda-headless-gestion-publica.md)).
+3. ~~Destino de los enlaces de reprogramación.~~ **Aprobado:** `bookingUrl` verificada del negocio y credencial limitada a la acción ([ADR-002](./adr-002-agenda-headless-gestion-publica.md)).
+4. Arquitectura de dominios de frontend y backend, necesaria para cookies y CSRF.
+5. Alcance permitido del modo soporte: sólo lectura o escritura limitada.
+6. Política de retención y contenido de auditoría.
+7. Estrategia de migración para turnos, bloqueos y campos heredados de usuario.
+8. Política de compatibilidad y actualización de dependencias.
 
-## 13. Primer bloque de trabajo recomendado
+## 13. Siguiente bloque de trabajo recomendado
 
-El primer bloque debe ser pequeño y no modificar todavía el modelo de datos:
+La red de seguridad inicial quedó cerrada en 6.1. El siguiente bloque debe preparar 6.2 sin modificar todavía datos productivos:
 
-1. corregir scripts de pruebas;
-2. corregir fixtures;
-3. añadir casos de aislamiento que actualmente deberían fallar;
-4. establecer CI;
-5. redactar ADR de autoridad multitenant;
-6. aprobar migración de turnos y bloqueos.
+1. aprobar el ADR de autoridad multitenant e identidad progresiva;
+2. aprobar el ADR del contrato headless y gestión pública de citas;
+3. inventariar los usos actuales de `User.role`, `User.business`, selección del primer negocio y consultas por ID sin ownership;
+4. añadir pruebas negativas específicas para solicitudes sin negocio, slugs inválidos y recursos pertenecientes a otro tenant;
+5. documentar y aprobar la migración de turnos, bloqueos y campos heredados;
+6. implementar 6.2.1 en una rama acotada, sin mezclar todavía la migración del modelo.
 
-Este orden crea una red de seguridad antes de aplicar cambios de autorización o migraciones.
+Este orden convierte las decisiones aprobadas en contratos verificables antes de cambiar autorización o datos persistidos.
