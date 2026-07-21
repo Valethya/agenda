@@ -2,7 +2,7 @@
 
 **Proyecto:** ATMÓSFERA Agenda
 
-**Estado:** En verificación
+**Estado:** Listo para revisión
 
 **Fecha:** 21 de julio de 2026
 
@@ -78,7 +78,9 @@ Las aserciones de aislamiento exigen que la colección devuelta no esté vacía,
 - Sintaxis Node de middleware, repositorio y prueba: correcta.
 - `npm run check` del frontend: 0 errores, 0 advertencias y 0 hints.
 - `npm run build` del frontend con `PUBLIC_API_URL` explícita: correcto.
-- Suite de integración con MongoDB: pendiente de ejecución en GitHub Actions.
+- Suite de integración con MongoDB: correcta en GitHub Actions, ejecución `CI #16`.
+
+La primera ejecución remota detectó que la suite histórica de pagos no declaraba tenant en sus solicitudes públicas. Los fixtures se adaptaron para enviar el `businessId` que crean durante su preparación; no fue necesario relajar el middleware ni cambiar lógica productiva.
 
 El estado de este documento debe cambiar a **Completado** únicamente después de que los checks obligatorios del PR estén verdes y el cambio sea fusionado.
 
