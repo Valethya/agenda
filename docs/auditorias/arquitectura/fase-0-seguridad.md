@@ -33,7 +33,7 @@ import { passwordMongo } from "./config/env.js";
 // ...
 secret: passwordMongo,
 ```
-El password de la base de datos MongoDB Atlas (`guraJkMN7JzWv1kW`) se reutilizaba como secreto de firma de sesiones Express. Si un atacante obtenía el session secret (ej: via error stack trace), tendría acceso directo a la base de datos.
+El password de la base de datos MongoDB Atlas (`[REDACTED]`) se reutilizaba como secreto de firma de sesiones Express. Si un atacante obtenía el session secret (ej: via error stack trace), tendría acceso directo a la base de datos.
 
 ### 2.3 Imports faltantes en auth.controller.js
 En `Server/src/controllers/auth.controller.js`, las clases `UnauthorizedError` y `ValidationError` se usaban en las líneas 44, 134, 187, 192, 225, 233, 256 sin estar importadas. Esto producía `ReferenceError` en runtime cuando se ejecutaban esas rutas de código (ej: login sin membresías, selección de membresía inválida).
