@@ -123,4 +123,4 @@ jobs:
       - name: Scan tracked files with Gitleaks
         uses: docker://ghcr.io/gitleaks/gitleaks:v8.24.2
         with:
-          args: detect --source=/github/workspace --no-git --redact --no-banner
+          args: detect --source=/github/workspace --no-git --redact --no-banner --verbose
