@@ -6,28 +6,12 @@ import { useSession } from '../context/SessionContext';
 import ViewSwitcher from './ViewSwitcher';
 import DateNav from './DateNav';
 import NewAppointmentButton from './NewAppointmentButton';
+import { getEndOfWeek, getStartOfWeek } from '../utils/calendarDate';
 
 export const Topbar: React.FC = () => {
   const { currentDate, viewType, selectedProfessionalId, setSelectedProfessionalId } = useCalendarNavigation();
   const { profs, businessConfig } = useCalendarData();
   const { currentUser } = useSession();
-
-  const getStartOfWeek = (d: Date): Date => {
-    const date = new Date(d);
-    const day = date.getDay();
-    const diff = date.getDate() - day + (day === 0 ? -6 : 1);
-    const start = new Date(date.setDate(diff));
-    start.setHours(0,0,0,0);
-    return start;
-  };
-
-  const getEndOfWeek = (d: Date): Date => {
-    const start = getStartOfWeek(d);
-    const end = new Date(start);
-    end.setDate(start.getDate() + 6);
-    end.setHours(23,59,59,999);
-    return end;
-  };
 
   const formatWeekRange = (date: Date): string => {
     const start = getStartOfWeek(date);

@@ -2,7 +2,17 @@ import React, { useEffect, useState } from 'react';
 import styles from './CalendarWeekView.module.scss';
 import { useCalendarData } from '../context/CalendarDataContext';
 import { useCalendarNavigation } from '../context/CalendarNavigationContext';
-import { generateHoras, timeToRowIndex, formatLocalDateStr, getWorkerDaysOff, parseUTCDateToLocal, getBusinessHoursBounds } from '../utils/time';
+import {
+  formatLocalDateStr,
+  generateHoras,
+  getBusinessHoursBounds,
+  getWorkerDaysOff,
+  parseUTCDateToLocal,
+  timeRangeToSlotSpan,
+  timeToMinutes,
+  timeToRowIndex
+} from '../utils/time';
+import { getEndOfWeek, getStartOfWeek, getWeekDays } from '../utils/calendarDate';
 import AppointmentCard from './AppointmentCard';
 import type { Appointment } from '../types';
 
@@ -21,8 +31,7 @@ export const CalendarWeekView: React.FC = () => {
       const now = new Date();
       // Check if today is within the active week
       const start = getStartOfWeek(currentDate);
-      const end = new Date(start);
-      end.setDate(start.getDate() + 6);
+      const end = getEndOfWeek(currentDate);
       
       if (now >= start && now <= end) {
         const mins = (now.getHours() - startHour) * 60 + now.getMinutes();
@@ -40,23 +49,8 @@ export const CalendarWeekView: React.FC = () => {
     return () => clearInterval(interval);
   }, [currentDate, startHour, endHour]);
 
-  // Helper: get start of week (Monday)
-  const getStartOfWeek = (d: Date): Date => {
-    const date = new Date(d);
-    const day = date.getDay();
-    const diff = date.getDate() - day + (day === 0 ? -6 : 1);
-    const start = new Date(date.setDate(diff));
-    start.setHours(0,0,0,0);
-    return start;
-  };
-
   // Generate 7 days of the active week (Monday to Sunday)
-  const startOfWeek = getStartOfWeek(currentDate);
-  const weekDays = Array.from({ length: 7 }, (_, i) => {
-    const dayDate = new Date(startOfWeek);
-    dayDate.setDate(startOfWeek.getDate() + i);
-    return dayDate;
-  });
+  const weekDays = getWeekDays(currentDate);
 
   const weekDateStrings = weekDays.map(d => formatLocalDateStr(d));
   const weekdaysNames = ['Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb', 'Dom'];
@@ -75,13 +69,6 @@ export const CalendarWeekView: React.FC = () => {
     });
   }
 
-  // Parse time HH:MM to minutes
-  const parseTimeToMinutes = (timeStr: string) => {
-    if (!timeStr) return 0;
-    const [h, m] = timeStr.split(':').map(Number);
-    return h * 60 + m;
-  };
-
   // Map to store overlapping styles for week appointments (grouped by day)
   const layoutStyles = new Map<string, { left?: string; width?: string; right?: string }>();
 
@@ -92,7 +79,7 @@ export const CalendarWeekView: React.FC = () => {
     });
 
     const sortedApps = [...dayApps].sort((a, b) => 
-      parseTimeToMinutes(a.startTime) - parseTimeToMinutes(b.startTime)
+      timeToMinutes(a.startTime) - timeToMinutes(b.startTime)
     );
 
     // Group overlapping appointments
@@ -101,8 +88,8 @@ export const CalendarWeekView: React.FC = () => {
     let currentGroupEnd = 0;
 
     sortedApps.forEach(app => {
-      const start = parseTimeToMinutes(app.startTime);
-      const end = parseTimeToMinutes(app.endTime || app.startTime);
+      const start = timeToMinutes(app.startTime);
+      const end = timeToMinutes(app.endTime || app.startTime);
       
       if (currentGroup.length === 0 || start < currentGroupEnd) {
         currentGroup.push(app);
@@ -120,8 +107,8 @@ export const CalendarWeekView: React.FC = () => {
     groups.forEach(group => {
       const columns: number[] = [];
       const appColumns = group.map(app => {
-        const start = parseTimeToMinutes(app.startTime);
-        const end = parseTimeToMinutes(app.endTime || app.startTime);
+        const start = timeToMinutes(app.startTime);
+        const end = timeToMinutes(app.endTime || app.startTime);
         
         let colIdx = -1;
         for (let i = 0; i < columns.length; i++) {
@@ -245,12 +232,7 @@ export const CalendarWeekView: React.FC = () => {
             
             let breakSpan = 1;
             if (brk.endTime && brk.startTime) {
-              const [hStart, mStart] = brk.startTime.split(':').map(Number);
-              const startMins = hStart * 60 + mStart;
-              const [hEnd, mEnd] = brk.endTime.split(':').map(Number);
-              const endMins = hEnd * 60 + mEnd;
-              const diffMin = endMins - startMins;
-              breakSpan = Math.max(1, Math.round(diffMin / slotDuration));
+              breakSpan = timeRangeToSlotSpan(brk.startTime, brk.endTime, slotDuration, startHour);
             }
 
             return (
@@ -280,16 +262,7 @@ export const CalendarWeekView: React.FC = () => {
           
           let duracion = 1;
           if (c.endTime && c.startTime) {
-            const [hStart, mStart] = c.startTime.split(':').map(Number);
-            let startMins = hStart * 60 + mStart;
-            if (hStart < startHour) startMins += 24 * 60;
-            
-            const [hEnd, mEnd] = c.endTime.split(':').map(Number);
-            let endMins = hEnd * 60 + mEnd;
-            if (hEnd < startHour) endMins += 24 * 60;
-            
-            const diffMin = endMins - startMins;
-            duracion = Math.max(1, Math.round(diffMin / slotDuration));
+            duracion = timeRangeToSlotSpan(c.startTime, c.endTime, slotDuration, startHour);
           }
 
           const cardLayout = layoutStyles.get(c._id) || {};
