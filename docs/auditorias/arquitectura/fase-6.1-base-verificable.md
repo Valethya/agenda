@@ -2,7 +2,7 @@
 
 **Proyecto:** ATMÓSFERA Agenda
 
-**Estado:** Verificado por CI; cierre condicionado a controles administrativos
+**Estado:** Cerrado y verificado
 
 **Fecha:** 21 de julio de 2026
 
@@ -127,6 +127,6 @@ Estado de los criterios:
 - [x] los comandos oficiales confirman 95/95 pruebas de backend sin fallos;
 - [x] el resultado real de integración está registrado en este documento;
 - [x] las verificaciones están configuradas como obligatorias para `master`;
-- [ ] se confirmó la rotación de cualquier credencial histórica todavía vigente.
+- [x] se confirmó la rotación de la credencial histórica y se revocó el usuario antiguo.
 
-La implementación técnica de la fase 6.1 está verificada y `master` está protegida por los cuatro jobs del pipeline. No debe declararse cerrada administrativamente ni mezclarse con cambios de la etapa 6.2 hasta confirmar la rotación de cualquier credencial histórica todavía vigente.
+La fase 6.1 está cerrada: la implementación técnica fue verificada, `master` está protegida por los cuatro jobs del pipeline y la credencial histórica fue rotada sin interrumpir el acceso de la aplicación a MongoDB.
