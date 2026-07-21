@@ -283,17 +283,36 @@
   <script>
     import { apiFetch } from "../services/api";
 
-    const loginForm = document.getElementById("loginForm");
-    const emailInput = document.getElementById("email");
-    const passwordInput = document.getElementById("password");
-    const submitBtn = document.getElementById("submitBtn");
-    const btnSpinner = document.getElementById("btnSpinner");
-    const btnText = document.getElementById("btnText");
-    const errorAlert = document.getElementById("errorAlert");
+    interface MembershipOption {
+      id: string;
+      businessName?: string;
+      role: string;
+    }
+
+    interface SessionUser {
+      role: string;
+      businessSlug?: string;
+    }
+
+    interface AuthResponse {
+      status: string;
+      message?: string;
+      payload?: SessionUser;
+      user?: SessionUser;
+      memberships?: MembershipOption[];
+    }
+
+    const loginForm = document.getElementById("loginForm") as HTMLFormElement;
+    const emailInput = document.getElementById("email") as HTMLInputElement;
+    const passwordInput = document.getElementById("password") as HTMLInputElement;
+    const submitBtn = document.getElementById("submitBtn") as HTMLButtonElement;
+    const btnSpinner = document.getElementById("btnSpinner") as HTMLElement;
+    const btnText = document.getElementById("btnText") as HTMLElement;
+    const errorAlert = document.getElementById("errorAlert") as HTMLElement;
     
-    const workspaceSection = document.getElementById("workspaceSection");
-    const workspaceList = document.getElementById("workspaceList");
-    const backToLoginBtn = document.getElementById("backToLoginBtn");
+    const workspaceSection = document.getElementById("workspaceSection") as HTMLElement;
+    const workspaceList = document.getElementById("workspaceList") as HTMLElement;
+    const backToLoginBtn = document.getElementById("backToLoginBtn") as HTMLButtonElement;
 
     loginForm.addEventListener("submit", async (e) => {
       e.preventDefault();
@@ -311,7 +330,7 @@
       setLoading(true);
 
       try {
-        const response = await apiFetch("/login", {
+        const response = await apiFetch<AuthResponse>("/login", {
           method: "POST",
           body: JSON.stringify({ email, password })
         });
@@ -320,7 +339,7 @@
           const user = response.payload || response.user;
           handleSuccessfulLogin(user);
         } else if (response && response.status === "needs_selection") {
-          showWorkspaceSelector(response.memberships);
+          showWorkspaceSelector(response.memberships ?? []);
         } else {
           showError(response?.message || "Ocurrió un error inesperado al intentar iniciar sesión.");
           setLoading(false);
@@ -337,7 +356,7 @@
       hideError();
     });
 
-    function showWorkspaceSelector(memberships) {
+    function showWorkspaceSelector(memberships: MembershipOption[]) {
       setLoading(false);
       loginForm.style.display = "none";
       workspaceSection.style.display = "flex";
@@ -362,7 +381,7 @@
         btn.addEventListener("click", async () => {
           setLoading(true);
           try {
-            const selectRes = await apiFetch("/select-membership", {
+            const selectRes = await apiFetch<AuthResponse>("/select-membership", {
               method: "POST",
               body: JSON.stringify({ membershipId: m.id })
             });
@@ -382,7 +401,13 @@
       });
     }
 
-    function handleSuccessfulLogin(user) {
+    function handleSuccessfulLogin(user: SessionUser | undefined) {
+      if (!user) {
+        showError("No fue posible recuperar los datos de la sesión.");
+        setLoading(false);
+        return;
+      }
+
       if (user.role === "admin" || user.role === "worker" || user.role === "superadmin") {
         const slug = user.businessSlug;
         if (slug) {
@@ -396,7 +421,7 @@
       }
     }
 
-    function showError(msg) {
+    function showError(msg: string) {
       errorAlert.textContent = msg;
       errorAlert.style.display = "block";
     }
@@ -405,7 +430,7 @@
       errorAlert.style.display = "none";
     }
 
-    function setLoading(isLoading) {
+    function setLoading(isLoading: boolean) {
       if (isLoading) {
         submitBtn.disabled = true;
         btnSpinner.style.display = "inline-block";

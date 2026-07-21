@@ -207,16 +207,21 @@
     const amount = params.get("amount") || "";
     const slug = params.get("slug") || "atmosfera";
 
-    document.getElementById("appId").innerText = appointmentId ? appointmentId.substring(18).toUpperCase() : "-";
-    document.getElementById("authCode").innerText = code || "-";
+    const appIdEl = document.getElementById("appId") as HTMLElement;
+    const authCodeEl = document.getElementById("authCode") as HTMLElement;
+    const amountPaidEl = document.getElementById("amountPaid") as HTMLElement;
+    const backLink = document.getElementById("btnBack") as HTMLAnchorElement;
+
+    appIdEl.innerText = appointmentId ? appointmentId.substring(18).toUpperCase() : "-";
+    authCodeEl.innerText = code || "-";
     
     if (amount) {
-      const formattedAmount = new Intl.NumberFormat("es-CL", { style: "currency", currency: "CLP", maximumFractionDigits: 0 }).format(amount);
-      document.getElementById("amountPaid").innerText = formattedAmount;
+      const formattedAmount = new Intl.NumberFormat("es-CL", { style: "currency", currency: "CLP", maximumFractionDigits: 0 }).format(Number(amount));
+      amountPaidEl.innerText = formattedAmount;
     }
 
     // Actualizar enlace de retorno con el slug
-    document.getElementById("btnBack").href = `/agenda?slug=${slug}`;
+    backLink.href = `/agenda?slug=${slug}`;
   </script>
 </body>
 </html>

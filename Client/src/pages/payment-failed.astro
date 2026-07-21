@@ -210,17 +210,21 @@
     const appointmentId = params.get("appointmentId") || "";
     const slug = params.get("slug") || "atmosfera";
 
-    const descEl = document.getElementById("errorDescription");
-    const reasonEl = document.getElementById("errorReason");
+    const descEl = document.getElementById("errorDescription") as HTMLElement;
+    const reasonEl = document.getElementById("errorReason") as HTMLElement;
+    const appRow = document.getElementById("appRow") as HTMLElement;
+    const appIdEl = document.getElementById("appId") as HTMLElement;
+    const retryLink = document.getElementById("btnRetry") as HTMLAnchorElement;
+    const backLink = document.getElementById("btnBack") as HTMLAnchorElement;
 
     if (appointmentId) {
-      document.getElementById("appRow").style.display = "flex";
-      document.getElementById("appId").innerText = appointmentId.substring(18).toUpperCase();
+      appRow.style.display = "flex";
+      appIdEl.innerText = appointmentId.substring(18).toUpperCase();
     }
 
     // Actualizar enlaces de retorno con el slug
-    document.getElementById("btnRetry").href = `/agenda?slug=${slug}`;
-    document.getElementById("btnBack").href = `/agenda?slug=${slug}`;
+    retryLink.href = `/agenda?slug=${slug}`;
+    backLink.href = `/agenda?slug=${slug}`;
 
     switch(reason) {
       case "cancelled_by_user":
