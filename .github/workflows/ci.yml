@@ -121,6 +121,6 @@ jobs:
         uses: actions/checkout@v7
 
       - name: Scan tracked files with Gitleaks
-        uses: docker://zricethezav/gitleaks:v8.27.1
+        uses: docker://ghcr.io/gitleaks/gitleaks:v8.27.1
         with:
           args: detect --source=/github/workspace --no-git --redact --no-banner
