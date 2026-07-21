@@ -138,6 +138,8 @@ Los fallbacks silenciosos pueden iniciar el servidor con una configuración inse
 
 ## 5. Etapa 6.2 — Modelo y aislamiento multitenant
 
+**Inventario técnico:** [`fase-6.2-inventario-fallbacks-fronteras.md`](./fase-6.2-inventario-fallbacks-fronteras.md)
+
 ### 6.2.1 Eliminar la selección implícita del primer negocio
 
 **Cambio necesario**
