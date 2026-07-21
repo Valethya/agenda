@@ -112,7 +112,7 @@ describe("webpayReturnSchema", () => {
   // --- Flujo normal: pago completado, Transbank envía token_ws ---
   it("acepta flujo normal: token_ws en body (POST)", () => {
     expectPass(webpayReturnSchema, {
-      body: { token_ws: "01abcdef1234567890abcdef1234567890" },
+      body: { token_ws: "test-token" },
       query: {},
     });
   });
@@ -120,7 +120,7 @@ describe("webpayReturnSchema", () => {
   it("acepta flujo normal: token_ws en query (GET fallback)", () => {
     expectPass(webpayReturnSchema, {
       body: {},
-      query: { token_ws: "01abcdef1234567890abcdef1234567890" },
+      query: { token_ws: "test-token" },
     });
   });
 
@@ -260,7 +260,7 @@ describe("createWorkerSchema", () => {
 // ========================================================
 describe("googleLoginSchema", () => {
   it("acepta payload con idToken", () => {
-    expectPass(googleLoginSchema, { body: { idToken: "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9..." } });
+    expectPass(googleLoginSchema, { body: { idToken: "test-id-token" } });
   });
 
   it("rechaza sin idToken (campo obligatorio)", () => {
