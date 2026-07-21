@@ -409,6 +409,11 @@
       }
 
       if (user.role === "admin" || user.role === "worker" || user.role === "superadmin") {
+        if (user.role === "superadmin" && !user.businessSlug) {
+          window.location.href = "/admin?view=saas-negocios";
+          return;
+        }
+
         const slug = user.businessSlug;
         if (slug) {
           window.location.href = `/admin?slug=${slug}`;
