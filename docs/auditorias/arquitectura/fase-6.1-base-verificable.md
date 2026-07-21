@@ -126,7 +126,7 @@ Estado de los criterios:
 - [x] los cuatro jobs de CI están verdes en el pull request;
 - [x] los comandos oficiales confirman 95/95 pruebas de backend sin fallos;
 - [x] el resultado real de integración está registrado en este documento;
-- [ ] las verificaciones están configuradas como obligatorias para `master`;
+- [x] las verificaciones están configuradas como obligatorias para `master`;
 - [ ] se confirmó la rotación de cualquier credencial histórica todavía vigente.
 
-La implementación técnica de la fase 6.1 está verificada. No debe declararse cerrada administrativamente ni mezclarse con cambios de la etapa 6.2 hasta resolver los dos controles pendientes.
+La implementación técnica de la fase 6.1 está verificada y `master` está protegida por los cuatro jobs del pipeline. No debe declararse cerrada administrativamente ni mezclarse con cambios de la etapa 6.2 hasta confirmar la rotación de cualquier credencial histórica todavía vigente.
