@@ -7,7 +7,9 @@
     "build": "astro build",
     "preview": "astro preview",
     "check": "astro check",
-    "test:context": "node --test --experimental-strip-types test/sessionPolicy.test.ts"
+    "test:context": "node --test --experimental-strip-types test/sessionPolicy.test.ts",
+    "test:saas-businesses": "node --test --experimental-strip-types test/saasBusinessesRules.test.ts",
+    "test:frontend": "node --test --experimental-strip-types test/*.test.ts"
   },
   "dependencies": {
     "@astrojs/check": "^0.9.9",

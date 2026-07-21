@@ -104,8 +104,8 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Run frontend context policy tests
-        run: npm run test:context
+      - name: Run frontend policy tests
+        run: npm run test:frontend
 
       - name: Run Astro and TypeScript checks
         run: npm run check

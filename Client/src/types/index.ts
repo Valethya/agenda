@@ -101,3 +101,29 @@ export interface SessionUser {
   memberships: BusinessMembership[];
   isImpersonating?: boolean;
 }
+
+export interface BusinessOwner {
+  firstName: string;
+  lastName: string;
+  email: string | string[];
+  phone?: string | string[];
+}
+
+export interface SaasBusiness {
+  _id: string;
+  name: string;
+  slug: string;
+  isActive: boolean;
+  owner?: BusinessOwner;
+  createdAt?: string;
+}
+
+export interface CreateSaasBusinessInput {
+  name: string;
+  slug: string;
+  ownerEmail: string;
+  ownerPassword: string;
+  ownerFirstName: string;
+  ownerLastName: string;
+  ownerPhone: string;
+}

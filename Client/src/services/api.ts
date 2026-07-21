@@ -1,4 +1,11 @@
-import type { Professional, Appointment, Shift, BusinessConfig } from '../types';
+import type {
+  Professional,
+  Appointment,
+  Shift,
+  BusinessConfig,
+  CreateSaasBusinessInput,
+  SaasBusiness
+} from '../types';
 
 const configuredApiUrl = import.meta.env.PUBLIC_API_URL;
 
@@ -205,6 +212,26 @@ export async function getBusinessConfigData(): Promise<BusinessConfig> {
 export async function impersonateBusiness(businessId: string) {
   return apiFetch<{ status: string; message: string; user: any; payload: any }>(`/superadmin/businesses/${businessId}/impersonate`, {
     method: "POST"
+  });
+}
+
+export async function getSaasBusinesses() {
+  const data = await apiFetch<{ status: string; payload: SaasBusiness[] }>('/superadmin/businesses');
+  return data.payload;
+}
+
+export async function toggleSaasBusinessStatus(businessId: string) {
+  const data = await apiFetch<{ status: string; payload: SaasBusiness }>(
+    `/superadmin/businesses/${businessId}/status`,
+    { method: 'PATCH' }
+  );
+  return data.payload;
+}
+
+export async function createSaasBusiness(input: CreateSaasBusinessInput) {
+  return apiFetch<{ status: string; payload: SaasBusiness }>('/superadmin/businesses', {
+    method: 'POST',
+    body: input
   });
 }
 
