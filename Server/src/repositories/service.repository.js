@@ -8,6 +8,11 @@ export const findById = async (id) => {
   return await Service.findById(id).populate("workers", "firstName lastName email phone");
 };
 
+export const findByIdAndBusiness = async (id, businessId) => {
+  return await Service.findOne({ _id: id, business: businessId })
+    .populate("workers", "firstName lastName email phone");
+};
+
 export const findByName = async (name, businessId) => {
   return await Service.findOne({ name, business: businessId });
 };
