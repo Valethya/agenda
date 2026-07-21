@@ -1,9 +1,9 @@
 import React from 'react';
 import styles from './Topbar.module.scss';
-import { useCalendar } from '../context/CalendarContext';
+import { useCalendarNavigation } from '../context/CalendarNavigationContext';
 
 export const DateNav: React.FC = () => {
-  const { currentDate, setDate, viewType } = useCalendar();
+  const { currentDate, setDate, viewType } = useCalendarNavigation();
 
   if (viewType === 'horarios') return null;
 

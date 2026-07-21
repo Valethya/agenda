@@ -1,10 +1,12 @@
 import React from 'react';
 import styles from './CalendarMonthView.module.scss';
-import { useCalendar } from '../context/CalendarContext';
+import { useCalendarData } from '../context/CalendarDataContext';
+import { useCalendarNavigation } from '../context/CalendarNavigationContext';
 import { formatLocalDateStr, getWorkerDaysOff, parseUTCDateToLocal } from '../utils/time';
 
 export const CalendarMonthView: React.FC = () => {
-  const { currentDate, setDate, setViewType, citas, selectedProfessionalId, profs, shifts } = useCalendar();
+  const { currentDate, setDate, setViewType, selectedProfessionalId } = useCalendarNavigation();
+  const { citas, profs, shifts } = useCalendarData();
 
   const year = currentDate.getFullYear();
   const month = currentDate.getMonth();

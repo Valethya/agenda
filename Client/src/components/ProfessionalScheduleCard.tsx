@@ -2,7 +2,8 @@ import React, { useEffect, useState } from 'react';
 import styles from './ProfessionalScheduleCard.module.scss';
 import type { Professional, Shift } from '../types';
 import * as api from '../services/api';
-import { useCalendar } from '../context/CalendarContext';
+import { useCalendarData } from '../context/CalendarDataContext';
+import { useCalendarNavigation } from '../context/CalendarNavigationContext';
 import { parseUTCDateToLocal } from '../utils/time';
 
 interface ProfessionalScheduleCardProps {
@@ -21,7 +22,8 @@ const COLORS = [
 ];
 
 export const ProfessionalScheduleCard: React.FC<ProfessionalScheduleCardProps> = ({ professional, idx }) => {
-  const { citas, currentDate } = useCalendar();
+  const { citas } = useCalendarData();
+  const { currentDate } = useCalendarNavigation();
   const [shifts, setShifts] = useState<Shift[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
 

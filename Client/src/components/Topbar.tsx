@@ -1,12 +1,16 @@
 import React from 'react';
 import styles from './Topbar.module.scss';
-import { useCalendar } from '../context/CalendarContext';
+import { useCalendarData } from '../context/CalendarDataContext';
+import { useCalendarNavigation } from '../context/CalendarNavigationContext';
+import { useSession } from '../context/SessionContext';
 import ViewSwitcher from './ViewSwitcher';
 import DateNav from './DateNav';
 import NewAppointmentButton from './NewAppointmentButton';
 
 export const Topbar: React.FC = () => {
-  const { currentDate, viewType, profs, selectedProfessionalId, setSelectedProfessionalId, businessConfig, currentUser } = useCalendar();
+  const { currentDate, viewType, selectedProfessionalId, setSelectedProfessionalId } = useCalendarNavigation();
+  const { profs, businessConfig } = useCalendarData();
+  const { currentUser } = useSession();
 
   const getStartOfWeek = (d: Date): Date => {
     const date = new Date(d);

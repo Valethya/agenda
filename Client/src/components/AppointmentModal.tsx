@@ -1,11 +1,13 @@
 import React from 'react';
 import styles from './AppointmentModal.module.scss';
-import { useCalendar } from '../context/CalendarContext';
+import { useCalendarData } from '../context/CalendarDataContext';
+import { useCalendarNavigation } from '../context/CalendarNavigationContext';
 import StatusBadge from './StatusBadge';
 import { parseUTCDateToLocal } from '../utils/time';
 
 export const AppointmentModal: React.FC = () => {
-  const { selectedAppointment, setSelectedAppointment, confirmApp, completeApp, cancelApp, profs, businessConfig } = useCalendar();
+  const { selectedAppointment, setSelectedAppointment } = useCalendarNavigation();
+  const { confirmApp, completeApp, cancelApp, profs, businessConfig } = useCalendarData();
 
   if (!selectedAppointment) {
     return (

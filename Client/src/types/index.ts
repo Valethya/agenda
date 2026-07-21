@@ -78,3 +78,26 @@ export interface BusinessConfig {
     autoConfirmLocalBookings: boolean;
   };
 }
+
+export type UserRole = 'admin' | 'worker' | 'superadmin' | 'user';
+
+export interface BusinessMembership {
+  id: string;
+  businessId: string;
+  businessName?: string;
+  businessSlug?: string;
+  role: UserRole;
+}
+
+export interface SessionUser {
+  id?: string;
+  _id?: string;
+  firstName: string;
+  lastName: string;
+  email?: string;
+  role: UserRole;
+  businessId?: string;
+  businessSlug?: string;
+  memberships: BusinessMembership[];
+  isImpersonating?: boolean;
+}
