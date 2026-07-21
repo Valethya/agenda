@@ -20,10 +20,6 @@ export const findAll = async () => {
   return await Business.find().populate("owner", "firstName lastName email phone");
 };
 
-export const findFirstActive = async () => {
-  return await Business.findOne({ isActive: true });
-};
-
 export const create = async (data) => {
   return await Business.create(data);
 };
