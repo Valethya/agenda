@@ -5,10 +5,15 @@ import * as serviceRepository from "../repositories/service.repository.js";
 import * as businessConfigRepository from "../repositories/businessConfig.repository.js";
 import * as userRepository from "../repositories/user.repository.js";
 import * as holidayRepository from "../repositories/holiday.repository.js";
+import * as membershipRepository from "../repositories/membership.repository.js";
 import { NotFoundError, ValidationError } from "../utils/appError.js";
 import { timeToMinutes, minutesToTime, checkOverlap } from "../utils/time.js";
 
 export const getAvailableSlots = async (workerId, dateStr, serviceId, businessId, excludeAppointmentId = null) => {
+  if (!businessId) {
+    throw new ValidationError("El contexto de negocio es obligatorio para consultar disponibilidad");
+  }
+
   const dateParts = dateStr.split("-").map(Number);
   const targetDate = new Date(
     Date.UTC(dateParts[0], dateParts[1] - 1, dateParts[2]),
@@ -16,9 +21,10 @@ export const getAvailableSlots = async (workerId, dateStr, serviceId, businessId
   const dayOfWeek = targetDate.getUTCDay();
 
   // Ejecutar todas las consultas a base de datos de forma paralela concurrente
-  const [service, worker, shift, holiday, appointments, blocks, businessConfig] = await Promise.all([
-    serviceRepository.findById(serviceId),
+  const [service, worker, workerMembership, shift, holiday, appointments, blocks, businessConfig] = await Promise.all([
+    serviceRepository.findByIdAndBusiness(serviceId, businessId),
     userRepository.findById(workerId),
+    membershipRepository.findActiveByUserAndBusiness(workerId, businessId),
     shiftRepository.findByWorkerAndDay(workerId, dayOfWeek),
     holidayRepository.findByDate(new Date(Date.UTC(dateParts[0], dateParts[1] - 1, dateParts[2]))),
     appointmentRepository.findByWorkerAndDate(workerId, targetDate),
@@ -27,17 +33,17 @@ export const getAvailableSlots = async (workerId, dateStr, serviceId, businessId
   ]);
 
   if (!service) {
-    throw new NotFoundError("El servicio especificado no existe");
-  }
-  if (businessId && service.business && service.business.toString() !== businessId.toString()) {
-    throw new ValidationError("El servicio especificado no pertenece a este negocio");
+    throw new NotFoundError("El servicio especificado no está disponible");
   }
 
-  if (!worker || worker.role !== "worker") {
-    throw new NotFoundError("El profesional especificado no existe");
-  }
-  if (businessId && worker.business && worker.business.toString() !== businessId.toString()) {
-    throw new ValidationError("El profesional especificado no pertenece a este negocio");
+  if (
+    !worker ||
+    !worker.isActive ||
+    worker.role !== "worker" ||
+    !workerMembership ||
+    workerMembership.role !== "worker"
+  ) {
+    throw new NotFoundError("El profesional especificado no está disponible");
   }
 
   const serviceDuration = service.duration;

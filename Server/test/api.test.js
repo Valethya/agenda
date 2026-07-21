@@ -6,6 +6,8 @@ import { connectDB } from "../src/db/db.js";
 import { seedTestData, cleanTestData, teardown } from "./fixtures.js";
 import Business from "../src/db/models/business.model.js";
 import User from "../src/db/models/user.model.js";
+import Service from "../src/db/models/service.model.js";
+import Appointment from "../src/db/models/appointment.model.js";
 import { createHash } from "../src/utils/password.js";
 
 // Conectar a la base de datos de test
@@ -147,6 +149,81 @@ test("Servidor Express - Endpoints Básicos", async (t) => {
     } finally {
       await Business.findByIdAndUpdate(seed.business._id, { isActive: true });
     }
+  });
+
+  await t.test("Reserva pública debería rechazar un servicio de otro tenant antes de crear al invitado", async () => {
+    const serviceB = await Service.create({
+      name: "Servicio de Negocio B",
+      description: "Servicio para probar coherencia tenant",
+      duration: 30,
+      price: 10000,
+      depositAmount: 0,
+      business: seed.businessB._id,
+      workers: [seed.workerB._id],
+      isActive: true,
+    });
+    const guestEmail = "cross-tenant-service@example.com";
+    const appointmentCountBefore = await Appointment.countDocuments({});
+
+    const response = await fetch(`${baseUrl}/appointments`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-business-slug": seed.business.slug,
+      },
+      body: JSON.stringify({
+        worker: seed.workerB._id,
+        service: serviceB._id,
+        date: "2099-01-05",
+        startTime: "09:00",
+        clientInfo: {
+          firstName: "Cliente",
+          lastName: "Cross Tenant",
+          email: guestEmail,
+          phone: "+56988880001",
+        },
+      }),
+    });
+
+    assert.strictEqual(response.status, 404);
+    assert.strictEqual(await Appointment.countDocuments({}), appointmentCountBefore);
+    assert.strictEqual(await User.findOne({ email: guestEmail }), null);
+  });
+
+  await t.test("Reserva sugerida debería rechazar un profesional de otro tenant", async () => {
+    const guestEmail = "cross-tenant-worker@example.com";
+    const appointmentCountBefore = await Appointment.countDocuments({});
+    const response = await fetch(`${baseUrl}/appointments`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-business-slug": seed.business.slug,
+      },
+      body: JSON.stringify({
+        worker: seed.workerB._id,
+        service: seed.service._id,
+        date: "2099-01-05",
+        startTime: "09:00",
+        isSuggestion: true,
+        clientInfo: {
+          firstName: "Cliente",
+          lastName: "Sugerencia Cross Tenant",
+          email: guestEmail,
+          phone: "+56988880002",
+        },
+      }),
+    });
+
+    assert.strictEqual(response.status, 404);
+    assert.strictEqual(await Appointment.countDocuments({}), appointmentCountBefore);
+    assert.strictEqual(await User.findOne({ email: guestEmail }), null);
+  });
+
+  await t.test("Disponibilidad pública debería rechazar un profesional de otro tenant", async () => {
+    const response = await fetch(
+      `${baseUrl}/availability/slots?workerId=${seed.workerB._id}&serviceId=${seed.service._id}&date=2099-01-05&slug=${seed.business.slug}`
+    );
+    assert.strictEqual(response.status, 404);
   });
 
   await t.test("Superadmin sin tenant explícito no debería seleccionar el primer negocio", async () => {

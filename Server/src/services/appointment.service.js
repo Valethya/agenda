@@ -7,11 +7,52 @@ import { notifyBookingCreated, notifyAppointmentConfirmed, notifyAppointmentCanc
 import { logEvent } from "../utils/auditLogger.js";
 import * as auditLogRepository from "../repositories/auditLog.repository.js";
 import * as businessConfigRepository from "../repositories/businessConfig.repository.js";
+import * as membershipRepository from "../repositories/membership.repository.js";
+import * as userRepository from "../repositories/user.repository.js";
 import { addMinutesToTime } from "../utils/time.js";
+
+export const validateBookingTenantScope = async ({ worker, service, businessId }) => {
+  if (!businessId) {
+    throw new ValidationError("El contexto de negocio es obligatorio para reservar");
+  }
+
+  const [serviceDetail, workerDetail, workerMembership] = await Promise.all([
+    serviceRepository.findByIdAndBusiness(service, businessId),
+    userRepository.findById(worker),
+    membershipRepository.findActiveByUserAndBusiness(worker, businessId),
+  ]);
+
+  if (!serviceDetail) {
+    throw new NotFoundError("El servicio solicitado no está disponible");
+  }
+
+  if (
+    !workerDetail ||
+    !workerDetail.isActive ||
+    workerDetail.role !== "worker" ||
+    !workerMembership ||
+    workerMembership.role !== "worker"
+  ) {
+    throw new NotFoundError("El profesional especificado no está disponible");
+  }
+
+  return { serviceDetail, workerDetail };
+};
 
 // 1. Crear / Reservar una Cita
 export const bookAppointment = async (appointmentData) => {
-  const { client, worker, service, date, startTime, notes, paymentOption, isSuggestion } = appointmentData;
+  const {
+    client,
+    worker,
+    service,
+    businessId,
+    tenantScope,
+    date,
+    startTime,
+    notes,
+    paymentOption,
+    isSuggestion,
+  } = appointmentData;
 
   await logEvent({
     userId: client,
@@ -21,19 +62,12 @@ export const bookAppointment = async (appointmentData) => {
     metadata: { worker, service, date, startTime, isSuggestion }
   });
 
-  // A. Obtener el servicio y validar existencia/duración
-  const serviceDetail = await serviceRepository.findById(service);
-  if (!serviceDetail) {
-    await logEvent({
-      userId: client,
-      event: "APPOINTMENT_VALIDATION_FAILED",
-      level: "WARN",
-      message: `Validación de reserva fallida: El servicio solicitado ${service} no existe.`,
-      metadata: { service }
-    });
-    throw new NotFoundError("El servicio solicitado no existe");
-  }
-  const businessId = serviceDetail.business;
+  // A. Validar que servicio y profesional pertenezcan al tenant ya resuelto.
+  const { serviceDetail } = tenantScope || await validateBookingTenantScope({
+    worker,
+    service,
+    businessId,
+  });
 
   // B. Dar formato YYYY-MM-DD a la fecha para validación
   const targetDate = new Date(date);

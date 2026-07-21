@@ -8,6 +8,13 @@ export const createAppointment = async (req, res, next) => {
     const { worker, service, date, startTime, notes, clientInfo, paymentOption, isSuggestion } = req.body;
     let clientId;
 
+    // Rechazar referencias cross-tenant antes de crear o actualizar al invitado.
+    const tenantScope = await appointmentService.validateBookingTenantScope({
+      worker,
+      service,
+      businessId: req.businessId,
+    });
+
     if (clientInfo) {
       const clientUser = await authService.getOrCreateGuestUser(clientInfo);
       clientId = clientUser._id.toString();
@@ -21,6 +28,8 @@ export const createAppointment = async (req, res, next) => {
       client: clientId,
       worker,
       service,
+      businessId: req.businessId,
+      tenantScope,
       date,
       startTime,
       notes,
