@@ -40,6 +40,8 @@ No se considerará terminada una tarea solamente porque el código compile. Cada
 
 ## 4. Etapa 6.1 — Base verificable
 
+**Registro de ejecución:** [`fase-6.1-base-verificable.md`](./fase-6.1-base-verificable.md)
+
 ### 6.1.1 Ejecutar todas las suites desde el comando oficial
 
 **Cambio necesario**
