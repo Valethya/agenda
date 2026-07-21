@@ -3,9 +3,11 @@ import type { Appointment, Professional, BusinessConfig, Shift } from '../types'
 import * as api from '../services/api';
 import { io } from 'socket.io-client';
 
+export type ViewType = 'semana' | 'dia' | 'mes' | 'horarios' | 'saas-negocios' | 'saas-metricas';
+
 interface CalendarContextType {
   currentDate: Date;
-  viewType: 'semana' | 'dia' | 'mes' | 'horarios' | 'saas-negocios' | 'saas-metricas';
+  viewType: ViewType;
   selectedProfessionalId: string | null;
   selectedAppointment: Appointment | null;
   citas: Appointment[];
@@ -16,7 +18,7 @@ interface CalendarContextType {
   error: string | null;
   currentUser: any;
   setDate: (d: Date) => void;
-  setViewType: (v: 'semana' | 'dia' | 'mes' | 'horarios') => void;
+  setViewType: (v: ViewType) => void;
   setSelectedProfessionalId: (id: string | null) => void;
   setSelectedAppointment: (app: Appointment | null) => void;
   confirmApp: (id: string) => Promise<boolean>;
@@ -31,7 +33,7 @@ const CalendarContext = createContext<CalendarContextType | undefined>(undefined
 
 export const CalendarProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [currentDate, setDate] = useState<Date>(new Date());
-  const [viewType, setViewType] = useState<'semana' | 'dia' | 'mes' | 'horarios' | 'saas-negocios' | 'saas-metricas'>('semana');
+  const [viewType, setViewType] = useState<ViewType>('semana');
   const [selectedProfessionalId, setSelectedProfessionalId] = useState<string | null>(null);
   const [selectedAppointment, setSelectedAppointment] = useState<Appointment | null>(null);
   
@@ -63,14 +65,23 @@ export const CalendarProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       const loggedUser = userRes.payload || userRes.user;
       setCurrentUser(loggedUser);
 
-      // Si el usuario posee un negocio y el slug no está en la URL, redireccionar agregándolo
-      if (typeof window !== "undefined" && loggedUser.businessSlug) {
-        const params = new URLSearchParams(window.location.search);
-        if (!params.get("slug")) {
-          params.set("slug", loggedUser.businessSlug);
-          window.location.href = `${window.location.pathname}?${params.toString()}`;
-          return;
-        }
+      const params = new URLSearchParams(window.location.search);
+      const urlSlug = params.get('slug')?.trim();
+      const urlView = params.get('view');
+
+      // Un superadministrador sin tenant explícito permanece en el ámbito global.
+      // No se deben consultar endpoints de calendario hasta que elija un negocio.
+      if (loggedUser.role === 'superadmin' && !urlSlug) {
+        setViewType(urlView === 'saas-metricas' ? 'saas-metricas' : 'saas-negocios');
+        setSelectedProfessionalId(null);
+        return;
+      }
+
+      // Si el usuario posee un negocio y el slug no está en la URL, redireccionar agregándolo.
+      if (typeof window !== 'undefined' && loggedUser.businessSlug && !urlSlug) {
+        params.set("slug", loggedUser.businessSlug);
+        window.location.href = `${window.location.pathname}?${params.toString()}`;
+        return;
       }
 
       // Load Config, Workers, Appointments parallelly
@@ -91,11 +102,12 @@ export const CalendarProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       setShifts(allShifts);
 
       // Set default view & filter based on role, supporting URL query parameters
-      const params = new URLSearchParams(window.location.search);
-      const urlView = params.get('view');
+      const tenantViews: ViewType[] = ['semana', 'dia', 'mes', 'horarios'];
+      const superadminViews: ViewType[] = [...tenantViews, 'saas-negocios', 'saas-metricas'];
+      const allowedViews = loggedUser.role === 'superadmin' ? superadminViews : tenantViews;
 
-      if (urlView) {
-        setViewType(urlView as any);
+      if (urlView && allowedViews.includes(urlView as ViewType)) {
+        setViewType(urlView as ViewType);
         setSelectedProfessionalId(null);
       } else if (loggedUser && loggedUser.role === 'worker') {
         setViewType('semana');
@@ -146,8 +158,11 @@ export const CalendarProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         });
 
         socket.on('calendar_update', () => {
-          console.log("Recibido evento global 'calendar_update'. Sincronizando citas...");
-          refreshData();
+          // La vista global del superadministrador no tiene un tenant que sincronizar.
+          if (api.getBusinessSlug()) {
+            console.log("Recibido evento global 'calendar_update'. Sincronizando citas...");
+            refreshData();
+          }
         });
 
         socket.on('disconnect', () => {

@@ -497,6 +497,22 @@ td {
       border-color: $niebla;
     }
   }
+
+  &.impersonar {
+    border-color: $amarillo-claro;
+    color: $amarillo;
+
+    &:hover {
+      background: $amarillo;
+      color: white;
+      border-color: $amarillo;
+    }
+  }
+
+  &:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+  }
 }
 
 .noData {
@@ -708,5 +724,17 @@ td {
   &:disabled {
     opacity: 0.6;
     cursor: not-allowed;
+  }
+}
+
+@media (hover: none) {
+  .rowActions {
+    opacity: 1;
+    visibility: visible;
+  }
+
+  .actionBtn {
+    width: 32px;
+    height: 32px;
   }
 }
