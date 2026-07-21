@@ -3,12 +3,13 @@ import test from "node:test";
 import assert from "node:assert";
 import app, { sessionStore } from "../src/app.js";
 import { connectDB } from "../src/db/db.js";
-import { seedTestData, teardown } from "./fixtures.js";
+import { seedTestData, cleanTestData, teardown } from "./fixtures.js";
 
 // Conectar a la base de datos de test
 await connectDB();
 
 // Sembrar datos base (se necesita al menos un Business para que scopeBusiness funcione)
+await cleanTestData();
 await seedTestData();
 
 // Creamos un servidor de pruebas en un puerto dinámico efímero (evita colisiones de puerto)

@@ -85,7 +85,6 @@ export async function seedTestData() {
   });
 
   await Membership.create({ user: admin._id, business: business._id, role: 'admin' });
-  await Membership.create({ user: client._id, business: business._id, role: 'worker' });
   await Membership.create({ user: worker._id, business: business._id, role: 'worker' });
 
   const service = await Service.create({

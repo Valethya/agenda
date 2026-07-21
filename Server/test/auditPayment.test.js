@@ -13,6 +13,7 @@ import AuditLog from "../src/db/models/auditLog.model.js";
 import Block from "../src/db/models/block.model.js";
 import Membership from "../src/db/models/membership.model.js";
 import { createHash } from "../src/utils/password.js";
+import { cleanTestData, teardown } from "./fixtures.js";
 
 // Mock de Transbank SDK
 import pkg from "transbank-sdk";
@@ -71,23 +72,9 @@ test("Pruebas de Integración - Flujo de Pago Abierto y Registro Progresivo", as
 
   // Configuración inicial de datos de prueba
   t.before(async () => {
-    // Limpieza de datos antiguos de pruebas
-    await AuditLog.deleteMany({});
-    await Payment.deleteMany({});
-    await Appointment.deleteMany({});
-    const oldWorker = await User.findOne({ email: "audit-worker@example.com" });
-    if (oldWorker) {
-      await Shift.deleteMany({ worker: oldWorker._id });
-      await Block.deleteMany({ worker: oldWorker._id });
-    }
-    await User.deleteMany({ email: { $in: [
-      "audit-client@example.com", 
-      "audit-worker@example.com",
-      "progressive-1@example.com",
-      "progressive-2@example.com"
-    ] } });
-    await Service.deleteMany({ name: "Servicio Auditoría" });
-    await Business.deleteMany({ slug: "barberia-audit" });
+    // Cada suite parte desde una base vacía. La guarda de cleanTestData evita
+    // que esta limpieza pueda ejecutarse fuera de una base terminada en _test.
+    await cleanTestData();
 
     // Crear negocio
     const business = await Business.create({
@@ -160,29 +147,7 @@ test("Pruebas de Integración - Flujo de Pago Abierto y Registro Progresivo", as
   });
 
   t.after(async () => {
-    server.close();
-    await AuditLog.deleteMany({});
-    await Payment.deleteMany({});
-    await Appointment.deleteMany({});
-    if (testWorkerId) {
-      await Shift.deleteMany({ worker: testWorkerId });
-      await Block.deleteMany({ worker: testWorkerId });
-    }
-    await User.deleteMany({ email: { $in: [
-      "audit-client@example.com", 
-      "audit-worker@example.com",
-      "progressive-1@example.com",
-      "progressive-2@example.com"
-    ] } });
-    await Service.deleteMany({ name: "Servicio Auditoría" });
-    await Membership.deleteMany({});
-    await Business.deleteMany({ slug: "barberia-audit" });
-
-    if (sessionStore && typeof sessionStore.close === "function") {
-      await sessionStore.close();
-    }
-    const mongoose = await import("mongoose");
-    await mongoose.default.disconnect();
+    await teardown(server, sessionStore);
   });
 
   // Limpiar colecciones transaccionales antes de cada caso de prueba

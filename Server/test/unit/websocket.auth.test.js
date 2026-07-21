@@ -3,7 +3,7 @@ import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
 import app, { sessionStore } from "../../src/app.js";
 import { connectDB } from "../../src/db/db.js";
-import { seedTestData, teardown } from "../fixtures.js";
+import { seedTestData, cleanTestData, teardown } from "../fixtures.js";
 import { io as ioClient } from "socket.io-client";
 import { initSocket, emitAvailabilityChange } from "../../src/config/socket.js";
 
@@ -11,6 +11,7 @@ await connectDB();
 let seed, port, httpServer;
 
 before(async () => {
+  await cleanTestData();
   seed = await seedTestData();
   httpServer = app.listen(0);
   port = httpServer.address().port;
@@ -89,7 +90,7 @@ describe("WebSocket Authentication (6.5)", () => {
   });
 
   it("permite conexión autenticada con sesión válida", async () => {
-    const cookie = await loginAndGetCookie("test-client@example.com", "password123");
+    const cookie = await loginAndGetCookie("test-admin@example.com", "passwordAdmin");
     assert.ok(cookie, "Debería obtener cookie de sesión");
     
     const socket = createSocketClient(cookie);
@@ -100,7 +101,7 @@ describe("WebSocket Authentication (6.5)", () => {
   });
 
   it("permite join_availability para worker del mismo negocio", async () => {
-    const cookie = await loginAndGetCookie("test-client@example.com", "password123");
+    const cookie = await loginAndGetCookie("test-admin@example.com", "passwordAdmin");
     const socket = createSocketClient(cookie);
     await connectSocket(socket);
     
@@ -127,7 +128,7 @@ describe("WebSocket Authentication (6.5)", () => {
 describe("WebSocket Multitenant Isolation", () => {
   it("rechaza join_availability cuando el worker pertenece a otro negocio", async () => {
     // Usuario del negocio A intenta acceder a un worker del negocio B
-    const cookieA = await loginAndGetCookie("test-client@example.com", "password123");
+    const cookieA = await loginAndGetCookie("test-admin@example.com", "passwordAdmin");
     const socketA = createSocketClient(cookieA);
     await connectSocket(socketA);
 
@@ -152,7 +153,7 @@ describe("WebSocket Multitenant Isolation", () => {
 
   it("socket del negocio B no recibe calendar_update emitido para el negocio A", async () => {
     // Conectar socket del negocio A
-    const cookieA = await loginAndGetCookie("test-client@example.com", "password123");
+    const cookieA = await loginAndGetCookie("test-admin@example.com", "passwordAdmin");
     const socketA = createSocketClient(cookieA);
     await connectSocket(socketA);
 
