@@ -2,7 +2,7 @@
 
 **Proyecto:** ATMÓSFERA Agenda
 
-**Estado:** Implementado en rama; pendiente de confirmación por CI
+**Estado:** Verificado por CI; cierre condicionado a controles administrativos
 
 **Fecha:** 21 de julio de 2026
 
@@ -71,7 +71,7 @@ El workflow `.github/workflows/ci.yml` se ejecuta en cada pull request hacia `ma
 | Backend unit tests | `npm ci`, 75 pruebas unitarias y auditoría de dependencias productivas |
 | Backend integration tests | MongoDB 7 aislado y las cuatro suites de integración |
 | Frontend checks and build | `npm ci`, `astro check`, build estático y auditoría de dependencias productivas |
-| Secret scan | Gitleaks sobre el árbol de archivos publicado |
+| Secret scan | Gitleaks 8.24.2 desde GHCR oficial sobre el árbol de archivos publicado |
 
 El pipeline usa Node.js 24. La auditoría bloquea vulnerabilidades críticas; las vulnerabilidades altas existentes permanecen visibles y deben resolverse en la etapa de dependencias, sin ocultarlas ni aplicar actualizaciones mayores automáticas.
 
@@ -93,22 +93,40 @@ Entorno de verificación: Node.js 24.14.0 y npm 11.9.0.
 | `git diff --check` | Sin errores de whitespace |
 | Sintaxis de `ci.yml` | YAML válido |
 
-Las suites con MongoDB no pueden ejecutarse en el entorno local de preparación porque no dispone de un servidor MongoDB. El job `Backend integration tests` proporciona MongoDB 7 y constituye la evidencia pendiente antes de integrar la rama. El total esperado del comando oficial es 95 pruebas según la estructura actual; el número final debe copiarse desde CI a este documento.
+Las suites con MongoDB no pudieron ejecutarse en el entorno local de preparación porque no dispone de un servidor MongoDB. Su resultado fue confirmado posteriormente por CI.
+
+## 5.1 Evidencia de CI
+
+Ejecución confirmada: [CI #5](https://github.com/Valethya/agenda/actions/runs/29832330810), commit `fc466f3`, 21 de julio de 2026.
+
+| Job | Resultado |
+|---|---|
+| Backend unit tests | 75/75 pruebas, 19 suites, 0 fallos |
+| Backend integration tests — API | 5/5 pruebas, 0 fallos |
+| Backend integration tests — flujo | 5/5 pruebas, 0 fallos |
+| Backend integration tests — pagos | 5/5 pruebas, 0 fallos |
+| Backend integration tests — WebSocket | 5/5 pruebas, 2 suites, 0 fallos |
+| Frontend checks and build | Correcto |
+| Secret scan | Correcto, 0 hallazgos en el árbol actual |
+
+Resultado agregado del backend: **95/95 pruebas, 0 fallos**.
 
 ## 6. Seguridad de secretos
 
-Se eliminó de una auditoría histórica una credencial que estaba escrita literalmente. También se reemplazaron URI con credenciales embebidas en tres scripts de depuración por la variable de entorno obligatoria `MONGO_URI`; al hacerlo se corrigieron sus rutas de importación desde `Server/scripts/debug`.
+Se eliminó de una auditoría histórica una credencial que estaba escrita literalmente. También se reemplazaron URI con credenciales embebidas en tres scripts de depuración por la variable de entorno obligatoria `MONGO_URI`; al hacerlo se corrigieron sus rutas de importación desde `Server/scripts/debug`. El script de confirmación exige además `APPOINTMENT_ID` y `ADMIN_USER_ID`, por lo que no conserva identificadores operativos.
+
+Gitleaks detectó tres falsos positivos de alta entropía en fixtures de validación. Esos valores fueron reemplazados por sentinelas explícitamente sintéticos, sin cambiar los contratos comprobados, y el escaneo final confirmó cero hallazgos.
 
 La redacción evita que esos secretos permanezcan en el árbol actual, pero no los elimina de commits anteriores. Si las credenciales no fueron rotadas previamente, deben rotarse en el proveedor; reescribir el historial no sustituye la rotación.
 
 ## 7. Criterios de cierre
 
-La fase 6.1 puede marcarse como cerrada cuando:
+Estado de los criterios:
 
-- los cuatro jobs de CI estén verdes en el pull request;
-- `npm test` confirme el total completo sin fallos;
-- el resultado real de integración quede registrado en este documento;
-- las verificaciones se configuren como obligatorias para `master`;
-- se confirme la rotación de cualquier credencial histórica todavía vigente.
+- [x] los cuatro jobs de CI están verdes en el pull request;
+- [x] los comandos oficiales confirman 95/95 pruebas de backend sin fallos;
+- [x] el resultado real de integración está registrado en este documento;
+- [ ] las verificaciones están configuradas como obligatorias para `master`;
+- [ ] se confirmó la rotación de cualquier credencial histórica todavía vigente.
 
-Hasta entonces, la rama está preparada para revisión, pero no debe darse por finalizada ni mezclarse con cambios de la etapa 6.2.
+La implementación técnica de la fase 6.1 está verificada. No debe declararse cerrada administrativamente ni mezclarse con cambios de la etapa 6.2 hasta resolver los dos controles pendientes.
