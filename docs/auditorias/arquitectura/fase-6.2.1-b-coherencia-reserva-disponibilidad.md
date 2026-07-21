@@ -2,7 +2,7 @@
 
 **Proyecto:** ATMÓSFERA Agenda
 
-**Estado:** En verificación
+**Estado:** Listo para revisión
 
 **Fecha:** 21 de julio de 2026
 
@@ -63,4 +63,13 @@ Tampoco modifica modelos de turnos o bloqueos, ni corrige mutaciones administrat
 - Suite de integración backend con MongoDB.
 - Frontend check/build y secret scan sin regresiones.
 
-Este documento cambiará a **Listo para revisión** cuando el PR tenga todos los checks verdes, y a **Completado** después del merge y la prueba de humo correspondiente.
+## 8. Evidencia de verificación
+
+- PR: `#6` — `hardening/6.2.1-b-booking-coherence` → `master`.
+- GitHub Actions: CI `#19` (`29856567929`).
+- `Backend unit tests`: aprobado.
+- `Backend integration tests`: aprobado con MongoDB y los tres casos negativos de esta entrega.
+- `Frontend checks and build`: aprobado.
+- `Secret scan`: aprobado.
+
+El documento cambiará a **Completado** después del merge y la prueba de humo correspondiente.
