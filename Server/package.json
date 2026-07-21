@@ -6,7 +6,13 @@
   "scripts": {
     "dev": "nodemon src/index.js",
     "start": "node src/index.js",
-    "test": "node --test test/api.test.js && node --test test/integration.test.js"
+    "test": "npm run test:unit && npm run test:integration",
+    "test:unit": "node --test --test-concurrency=1 test/unit/auth.session.test.js test/unit/email.templates.test.js test/unit/validation.schemas.test.js",
+    "test:integration": "npm run test:api && npm run test:flow && npm run test:payment && npm run test:websocket",
+    "test:api": "node --test test/api.test.js",
+    "test:flow": "node --test test/integration.test.js",
+    "test:payment": "node --test test/auditPayment.test.js",
+    "test:websocket": "node --test test/unit/websocket.auth.test.js"
   },
   "dependencies": {
     "bcryptjs": "^3.0.3",

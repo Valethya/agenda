@@ -3,7 +3,6 @@ import test from 'node:test';
 import assert from 'node:assert';
 import app, { sessionStore } from '../src/app.js';
 import { connectDB } from '../src/db/db.js';
-import Membership from '../src/db/models/membership.model.js';
 import { seedTestData, cleanTestData, teardown } from './fixtures.js';
 
 await connectDB();
@@ -25,14 +24,13 @@ test('Flujo de Integración Completo de la API', async (t) => {
     await teardown(server, sessionStore);
   });
 
-  let clientCookie = '';
   let adminCookie = '';
   let testServiceId = '';
   let testWorkerId = '';
   let testAppointmentId = '';
 
-  // 1. REGISTRO E INICIO DE SESIÓN DE CLIENTE
-  await t.test('Registro e Inicio de Sesión de Cliente', async () => {
+  // 1. REGISTRO Y CONTRATO ACTUAL DE CUENTA SIN MEMBRESÍA
+  await t.test('Registro de cliente y rechazo explícito de login sin membresía', async () => {
     // A. Registrar un nuevo usuario (prueba que el endpoint funciona)
     const regRes = await fetch(`${baseUrl}/register`, {
       method: 'POST',
@@ -49,26 +47,19 @@ test('Flujo de Integración Completo de la API', async (t) => {
     const regData = await regRes.json();
     assert.strictEqual(regData.status, 'succes');
 
-    // B. Login with the pre-seeded client (who has a Membership)
+    // B. El registro no crea una membresía. Mientras no se defina el modelo
+    // formal de cuentas cliente, el login debe rechazarlo de forma explícita.
     const logRes = await fetch(`${baseUrl}/login`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        email: 'test-client@example.com',
-        password: 'password123',
+        email: 'test-nuevo@example.com',
+        password: 'passwordNuevo',
       }),
     });
-    assert.strictEqual(logRes.status, 201);
-    clientCookie = logRes.headers.get('set-cookie');
-    assert.ok(clientCookie, 'Debería retornar cookie de sesión');
-
-    // C. Verificar sesión (GET /me)
-    const meRes = await fetch(`${baseUrl}/me`, {
-      headers: { Cookie: clientCookie },
-    });
-    assert.strictEqual(meRes.status, 200);
-    const meData = await meRes.json();
-    assert.strictEqual(meData.payload.email, 'test-client@example.com');
+    assert.strictEqual(logRes.status, 401);
+    const logData = await logRes.json();
+    assert.match(logData.message, /ningún negocio asociado/i);
   });
 
   // 2. OPERACIONES DE ADMINISTRADOR
@@ -142,59 +133,63 @@ test('Flujo de Integración Completo de la API', async (t) => {
 
     // A. Consultar slots libres de disponibilidad
     const availRes = await fetch(
-      `${baseUrl}/availability/slots?workerId=${workerId}&serviceId=${serviceId}&date=${dateStr}`
+      `${baseUrl}/availability/slots?workerId=${workerId}&serviceId=${serviceId}&date=${dateStr}&slug=${seed.business.slug}`
     );
     assert.strictEqual(availRes.status, 200);
     const availData = await availRes.json();
     assert.ok(Array.isArray(availData.payload));
 
     const firstAvailableSlot = availData.payload.find(slot => slot.available !== false);
-    const startTime = firstAvailableSlot ? firstAvailableSlot.startTime : '09:00';
+    assert.ok(firstAvailableSlot, 'Debe existir al menos un horario disponible');
+    const startTime = firstAvailableSlot.startTime;
 
-    // B. Reservar cita (POST /appointments como cliente)
+    // B. Reservar cita mediante el flujo público vigente, enviando clientInfo.
     const bookRes = await fetch(`${baseUrl}/appointments`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Cookie: clientCookie,
-      },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         worker: workerId,
         service: serviceId,
+        slug: seed.business.slug,
         date: dateStr,
         startTime: startTime,
         notes: 'Cita de prueba integrada',
+        clientInfo: {
+          firstName: 'Cliente',
+          lastName: 'Prueba',
+          email: 'test-client@example.com',
+          phone: '+56911112222',
+        },
       }),
     });
-
-    if (bookRes.status === 201) {
-      const bookData = await bookRes.json();
-      testAppointmentId = bookData.payload._id;
-      assert.strictEqual(bookData.status, 'success');
-      assert.ok(testAppointmentId);
-    }
+    assert.strictEqual(bookRes.status, 201);
+    const bookData = await bookRes.json();
+    testAppointmentId = bookData.payload._id;
+    assert.strictEqual(bookData.status, 'success');
+    assert.ok(testAppointmentId);
   });
 
   // 4. CONFIRMACIÓN Y CANCELACIÓN DE CITAS
-  await t.test('Flujos de Citas (Confirmar y Cancelar)', async () => {
-    if (testAppointmentId) {
-      // A. Confirmar Cita (Como Admin)
-      const confRes = await fetch(`${baseUrl}/appointments/${testAppointmentId}/confirm`, {
-        method: 'PATCH',
-        headers: { Cookie: adminCookie },
-      });
-      assert.strictEqual(confRes.status, 200);
-      const confData = await confRes.json();
-      assert.strictEqual(confData.payload.status, 'confirmed');
+  await t.test('Flujos administrativos de citas (Confirmar y Cancelar)', async () => {
+    assert.ok(testAppointmentId, 'La reserva previa debe haber creado una cita');
 
-      // B. Cancelar Cita (Como Cliente)
-      const cancelRes = await fetch(`${baseUrl}/appointments/${testAppointmentId}/cancel`, {
-        method: 'PATCH',
-        headers: { Cookie: clientCookie },
-      });
-      assert.strictEqual(cancelRes.status, 200);
-      const cancelData = await cancelRes.json();
-      assert.strictEqual(cancelData.payload.status, 'cancelled');
-    }
+    // A. Confirmar cita como administrador.
+    const confRes = await fetch(`${baseUrl}/appointments/${testAppointmentId}/confirm`, {
+      method: 'PATCH',
+      headers: { Cookie: adminCookie },
+    });
+    assert.strictEqual(confRes.status, 200);
+    const confData = await confRes.json();
+    assert.strictEqual(confData.payload.status, 'confirmed');
+
+    // B. Cancelar cita como administrador. El modelo de acceso del cliente se
+    // decidirá en la etapa 6.2 y no se simula con permisos de trabajador.
+    const cancelRes = await fetch(`${baseUrl}/appointments/${testAppointmentId}/cancel`, {
+      method: 'PATCH',
+      headers: { Cookie: adminCookie },
+    });
+    assert.strictEqual(cancelRes.status, 200);
+    const cancelData = await cancelRes.json();
+    assert.strictEqual(cancelData.payload.status, 'cancelled');
   });
 });
