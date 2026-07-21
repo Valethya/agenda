@@ -1,11 +1,13 @@
 import React, { useEffect, useState } from 'react';
 import styles from './CalendarDayView.module.scss';
-import { useCalendar } from '../context/CalendarContext';
+import { useCalendarData } from '../context/CalendarDataContext';
+import { useCalendarNavigation } from '../context/CalendarNavigationContext';
 import { generateHoras, timeToRowIndex, formatLocalDateStr, getWorkerDaysOff, parseUTCDateToLocal, getBusinessHoursBounds } from '../utils/time';
 import AppointmentCard from './AppointmentCard';
 
 export const CalendarDayView: React.FC = () => {
-  const { currentDate, citas, profs, selectedProfessionalId, businessConfig, shifts } = useCalendar();
+  const { currentDate, selectedProfessionalId } = useCalendarNavigation();
+  const { citas, profs, businessConfig, shifts } = useCalendarData();
   
   const slotDuration = businessConfig.appointmentSettings?.slotDuration || 60;
   const { startHour, endHour } = getBusinessHoursBounds(businessConfig);

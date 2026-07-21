@@ -1,6 +1,9 @@
 import React from 'react';
 import styles from './Sidebar.module.scss';
-import { useCalendar } from '../context/CalendarContext';
+import { useCalendarData } from '../context/CalendarDataContext';
+import { useCalendarNavigation } from '../context/CalendarNavigationContext';
+import { useSession } from '../context/SessionContext';
+import { shouldShowWorkspaceSwitcher } from '../context/sessionPolicy';
 
 interface NavItemDef {
   id: string;
@@ -107,7 +110,9 @@ const ALL_NAV_ITEMS: NavItemDef[] = [
 const SECTIONS = ['Agenda', 'Clientes', 'Negocio', 'Sistema'] as const;
 
 export const Sidebar: React.FC = () => {
-  const { viewType, setViewType, businessConfig, currentUser, logoutUser, switchWorkspace } = useCalendar();
+  const { viewType, setViewType } = useCalendarNavigation();
+  const { businessConfig } = useCalendarData();
+  const { currentUser, logoutUser, switchWorkspace } = useSession();
   const [showWorkspaceDropdown, setShowWorkspaceDropdown] = React.useState(false);
   const dropdownRef = React.useRef<HTMLDivElement>(null);
 
@@ -186,7 +191,7 @@ export const Sidebar: React.FC = () => {
         <span className={styles.logoText}>{businessConfig.businessName}</span>
         <small className={styles.logoSub}>Panel de gestión</small>
         
-        {currentUser?.memberships && currentUser.memberships.length > 1 && (
+        {shouldShowWorkspaceSwitcher(currentUser) && currentUser && (
           <div className={styles.workspaceSelectorContainer}>
             <span 
               className={styles.changeBusinessLink} 
@@ -197,7 +202,7 @@ export const Sidebar: React.FC = () => {
             
             {showWorkspaceDropdown && (
               <div className={styles.workspaceDropdownMenu}>
-                {currentUser.memberships.map((m: any) => {
+                {currentUser.memberships.map((m) => {
                   const isActive = m.businessId === businessConfig.business?._id;
                   return (
                     <div 

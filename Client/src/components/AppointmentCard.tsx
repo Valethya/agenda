@@ -1,7 +1,8 @@
 import React from 'react';
 import styles from './AppointmentCard.module.scss';
 import type { Appointment } from '../types';
-import { useCalendar } from '../context/CalendarContext';
+import { useCalendarData } from '../context/CalendarDataContext';
+import { useCalendarNavigation } from '../context/CalendarNavigationContext';
 
 interface AppointmentCardProps {
   appointment: Appointment;
@@ -10,7 +11,8 @@ interface AppointmentCardProps {
 }
 
 export const AppointmentCard: React.FC<AppointmentCardProps> = ({ appointment, size, style }) => {
-  const { setSelectedAppointment, confirmApp, completeApp, cancelApp } = useCalendar();
+  const { setSelectedAppointment } = useCalendarNavigation();
+  const { confirmApp, completeApp, cancelApp } = useCalendarData();
 
   const handleCardClick = (e: React.MouseEvent) => {
     if ((e.target as HTMLElement).closest(`.${styles.actionBtn}`)) {

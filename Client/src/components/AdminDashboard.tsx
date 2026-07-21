@@ -1,6 +1,9 @@
 import React from 'react';
 import styles from './AdminDashboard.module.scss';
-import { CalendarProvider, useCalendar } from '../context/CalendarContext';
+import { CalendarProvider } from '../context/CalendarContext';
+import { useCalendarData } from '../context/CalendarDataContext';
+import { useCalendarNavigation } from '../context/CalendarNavigationContext';
+import { SessionProvider, useSession } from '../context/SessionContext';
 import Sidebar from './Sidebar';
 import Topbar from './Topbar';
 import CalendarWeekView from './CalendarWeekView';
@@ -13,7 +16,11 @@ import SaasBusinessesView from './SaasBusinessesView';
 import SaasMetricsView from './SaasMetricsView';
 
 const DashboardContent: React.FC = () => {
-  const { viewType, loading, error, profs, currentUser, businessConfig } = useCalendar();
+  const { viewType } = useCalendarNavigation();
+  const { loading: dataLoading, error: dataError, profs, businessConfig } = useCalendarData();
+  const { currentUser, loading: sessionLoading, error: sessionError } = useSession();
+  const loading = sessionLoading || dataLoading;
+  const error = sessionError || dataError;
 
   if (loading) {
     return (
@@ -120,9 +127,11 @@ const DashboardContent: React.FC = () => {
 
 export const AdminDashboard: React.FC = () => {
   return (
-    <CalendarProvider>
-      <DashboardContent />
-    </CalendarProvider>
+    <SessionProvider>
+      <CalendarProvider>
+        <DashboardContent />
+      </CalendarProvider>
+    </SessionProvider>
   );
 };
 
