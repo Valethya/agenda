@@ -4,7 +4,9 @@ import type { Professional, Shift } from '../types';
 import * as api from '../services/api';
 import { useCalendarData } from '../context/CalendarDataContext';
 import { useCalendarNavigation } from '../context/CalendarNavigationContext';
-import { parseUTCDateToLocal } from '../utils/time';
+import { getPersonAvatarGradient, getPersonInitials } from '../utils/avatar';
+import { getEndOfWeek, getStartOfWeek } from '../utils/calendarDate';
+import { parseUTCDateToLocal, timeToMinutes } from '../utils/time';
 
 interface ProfessionalScheduleCardProps {
   professional: Professional;
@@ -14,37 +16,11 @@ interface ProfessionalScheduleCardProps {
 const DAYS_LABEL = ['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb'];
 const DAY_ORDER = [1, 2, 3, 4, 5, 6, 0];
 
-const COLORS = [
-  'linear-gradient(135deg,#8A9BAE,#7A8E9E)',
-  'linear-gradient(135deg,#B5A898,#A5988A)',
-  'linear-gradient(135deg,#7A9E8C,#6A8E7C)',
-  'linear-gradient(135deg,#C4AA7A,#B49A6A)'
-];
-
 export const ProfessionalScheduleCard: React.FC<ProfessionalScheduleCardProps> = ({ professional, idx }) => {
   const { citas } = useCalendarData();
   const { currentDate } = useCalendarNavigation();
   const [shifts, setShifts] = useState<Shift[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
-
-  // Helper: get start of week (Monday)
-  const getStartOfWeek = (d: Date): Date => {
-    const date = new Date(d);
-    const day = date.getDay();
-    const diff = date.getDate() - day + (day === 0 ? -6 : 1);
-    const start = new Date(date.setDate(diff));
-    start.setHours(0,0,0,0);
-    return start;
-  };
-
-  // Helper: get end of week (Sunday)
-  const getEndOfWeek = (d: Date): Date => {
-    const start = getStartOfWeek(d);
-    const end = new Date(start);
-    end.setDate(start.getDate() + 6);
-    end.setHours(23,59,59,999);
-    return end;
-  };
 
   useEffect(() => {
     const fetchShifts = async () => {
@@ -61,8 +37,8 @@ export const ProfessionalScheduleCard: React.FC<ProfessionalScheduleCardProps> =
     fetchShifts();
   }, [professional._id]);
 
-  const initials = `${professional.firstName[0] || ''}${professional.lastName[0] || ''}`.toUpperCase();
-  const avatarColor = COLORS[idx % COLORS.length];
+  const initials = getPersonInitials(professional.firstName, professional.lastName);
+  const avatarColor = getPersonAvatarGradient(idx);
 
   // Map and sort shifts by Monday-first order
   const sortedShifts = DAY_ORDER.map(dayNum => {
@@ -74,14 +50,10 @@ export const ProfessionalScheduleCard: React.FC<ProfessionalScheduleCardProps> =
   let totalHours = 0;
   sortedShifts.forEach(s => {
     if (s.isOpen && s.startTime && s.endTime) {
-      const [hStart, mStart] = s.startTime.split(':').map(Number);
-      const [hEnd, mEnd] = s.endTime.split(':').map(Number);
-      let diff = (hEnd * 60 + mEnd - (hStart * 60 + mStart)) / 60;
+      let diff = (timeToMinutes(s.endTime) - timeToMinutes(s.startTime)) / 60;
       if (s.breaks) {
         s.breaks.forEach(b => {
-          const [bSH, bSM] = b.startTime.split(':').map(Number);
-          const [bEH, bEM] = b.endTime.split(':').map(Number);
-          diff -= (bEH * 60 + bEM - (bSH * 60 + bSM)) / 60;
+          diff -= (timeToMinutes(b.endTime) - timeToMinutes(b.startTime)) / 60;
         });
       }
       totalHours += diff;

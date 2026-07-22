@@ -2,7 +2,16 @@ import React, { useEffect, useState } from 'react';
 import styles from './CalendarDayView.module.scss';
 import { useCalendarData } from '../context/CalendarDataContext';
 import { useCalendarNavigation } from '../context/CalendarNavigationContext';
-import { generateHoras, timeToRowIndex, formatLocalDateStr, getWorkerDaysOff, parseUTCDateToLocal, getBusinessHoursBounds } from '../utils/time';
+import {
+  formatLocalDateStr,
+  generateHoras,
+  getBusinessHoursBounds,
+  getWorkerDaysOff,
+  parseUTCDateToLocal,
+  timeRangeToSlotSpan,
+  timeToRowIndex
+} from '../utils/time';
+import { getPersonAvatarGradient, getPersonInitials } from '../utils/avatar';
 import AppointmentCard from './AppointmentCard';
 
 export const CalendarDayView: React.FC = () => {
@@ -56,21 +65,14 @@ export const CalendarDayView: React.FC = () => {
     return activeProfIds.includes(wId);
   });
 
-  const colors = [
-    'linear-gradient(135deg,#8A9BAE,#7A8E9E)',
-    'linear-gradient(135deg,#B5A898,#A5988A)',
-    'linear-gradient(135deg,#7A9E8C,#6A8E7C)',
-    'linear-gradient(135deg,#C4AA7A,#B49A6A)'
-  ];
-
   return (
     <div className={styles.container}>
       {/* Header showing Professionals as Columns */}
       <div className={styles.dayHeader} style={{ gridTemplateColumns }}>
         <div className={styles.headerTime} />
         {activeProfs.map((p, idx) => {
-          const initials = `${p.firstName[0] || ''}${p.lastName[0] || ''}`.toUpperCase();
-          const color = colors[idx % colors.length];
+          const initials = getPersonInitials(p.firstName, p.lastName);
+          const color = getPersonAvatarGradient(idx);
           return (
             <div key={p._id} className={styles.profColHeader}>
               <div className={styles.profAvatar} style={{ background: color }}>{initials}</div>
@@ -169,12 +171,7 @@ export const CalendarDayView: React.FC = () => {
             
             let breakSpan = 1;
             if (brk.endTime && brk.startTime) {
-              const [hStart, mStart] = brk.startTime.split(':').map(Number);
-              const startMins = hStart * 60 + mStart;
-              const [hEnd, mEnd] = brk.endTime.split(':').map(Number);
-              const endMins = hEnd * 60 + mEnd;
-              const diffMin = endMins - startMins;
-              breakSpan = Math.max(1, Math.round(diffMin / slotDuration));
+              breakSpan = timeRangeToSlotSpan(brk.startTime, brk.endTime, slotDuration, startHour);
             }
 
             return (
@@ -203,16 +200,7 @@ export const CalendarDayView: React.FC = () => {
           
           let duracion = 1;
           if (c.endTime && c.startTime) {
-            const [hStart, mStart] = c.startTime.split(':').map(Number);
-            let startMins = hStart * 60 + mStart;
-            if (hStart < startHour) startMins += 24 * 60;
-            
-            const [hEnd, mEnd] = c.endTime.split(':').map(Number);
-            let endMins = hEnd * 60 + mEnd;
-            if (hEnd < startHour) endMins += 24 * 60;
-            
-            const diffMin = endMins - startMins;
-            duracion = Math.max(1, Math.round(diffMin / slotDuration));
+            duracion = timeRangeToSlotSpan(c.startTime, c.endTime, slotDuration, startHour);
           }
 
           return (

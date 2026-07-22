@@ -13,16 +13,36 @@ export function generateHoras(slotDuration: number = 60, startHour: number = 8, 
   return horas;
 }
 
+export function timeToMinutes(time: string): number {
+  if (!time) return 0;
+  const [hours = 0, minutes = 0] = time.split(':').map(Number);
+  return hours * 60 + minutes;
+}
+
+export function timeToMinutesFromDayStart(time: string, startHour: number = 0): number {
+  const minutes = timeToMinutes(time);
+  const dayStartMinutes = startHour * 60;
+  return minutes < dayStartMinutes ? minutes + 24 * 60 : minutes;
+}
+
+export function timeRangeToSlotSpan(
+  startTime: string,
+  endTime: string,
+  slotDuration: number = 60,
+  startHour: number = 0
+): number {
+  const startMinutes = timeToMinutesFromDayStart(startTime, startHour);
+  const endMinutes = timeToMinutesFromDayStart(endTime, startHour);
+  return Math.max(1, Math.round((endMinutes - startMinutes) / slotDuration));
+}
+
 export function timeToRowIndex(startTime: string, slotDuration: number = 60, startHour: number = 8): number {
   if (!startTime) return 1;
-  const [h, m] = startTime.split(':').map(Number);
-  let mins = h * 60 + m - startHour * 60;
-  if (h < startHour) {
-    // For slots after midnight (00:00 to startHour - 1)
-    mins = (h + 24) * 60 + m - startHour * 60;
-  }
+  const mins = timeToMinutesFromDayStart(startTime, startHour) - startHour * 60;
   return Math.round(mins / slotDuration) + 1;
-}export function formatLocalDateStr(date: Date): string {
+}
+
+export function formatLocalDateStr(date: Date): string {
   const y = date.getFullYear();
   const m = String(date.getMonth() + 1).padStart(2, '0');
   const d = String(date.getDate()).padStart(2, '0');
