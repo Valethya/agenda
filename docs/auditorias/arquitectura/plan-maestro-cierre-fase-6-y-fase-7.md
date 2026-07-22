@@ -571,10 +571,10 @@ La tarea 7.1 quedó implementada y fusionada mediante el PR #1. Su registro se e
 
 1. **7.1 Unificar API client:** completado; ajustar después de estabilizar contratos.
 2. **7.10 Completar tipado TypeScript:** base cerrada con `astro check` limpio; mantener como barrera durante los refactors.
-3. **7.2 Dividir CalendarContext.**
-4. **7.3 Dividir SaasBusinessesView.**
-5. **7.4 Extraer utilidades duplicadas.**
-6. **7.5 Extraer paleta de colores de avatar.**
+3. **7.2 Dividir CalendarContext:** completado mediante el PR #9.
+4. **7.3 Dividir SaasBusinessesView:** completado mediante el PR #10.
+5. **7.4 Extraer utilidades duplicadas:** completado mediante el PR #11.
+6. **7.5 Extraer paleta de colores de avatar:** completado dentro del PR #11.
 7. **7.6 Unificar CalendarDayView y CalendarWeekView.**
 8. **7.7 Extraer SVG de Sidebar.**
 9. **7.9 Eliminar correos, slugs y reglas hardcodeadas.**

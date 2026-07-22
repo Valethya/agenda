@@ -58,7 +58,7 @@ export function parseUTCDateToLocal(dateInput: string | Date): Date {
   }
   return new Date(dateInput);
 }
-export function getWorkerDaysOff(email: string | string[], workerShifts?: any[]): number[] {
+export function getWorkerDaysOff(email?: string | string[], workerShifts?: any[]): number[] {
   // Si tenemos los turnos reales de la base de datos para este trabajador, los usamos de forma dinámica
   if (workerShifts && workerShifts.length > 0) {
     const workingDays = workerShifts
