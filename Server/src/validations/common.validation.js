@@ -43,7 +43,6 @@ export const webpayReturnSchema = z.object({
   query: z.object({
     token_ws: z.string().optional(),
     TBK_TOKEN: z.string().optional(),
-    slug: z.string().optional(),
   }).optional().default({}),
 }).refine(
   (data) => {
@@ -173,6 +172,13 @@ export const updateBusinessConfigSchema = z.object({
       brandColor: z.string().regex(/^#[0-9a-fA-F]{6}$/, "Color debe ser hexadecimal (#RRGGBB)").optional(),
       logoUrl: z.string().url("URL de logo inválida").or(z.literal("")).optional(),
       customFooter: z.string().max(500, "El footer no debe exceder 500 caracteres").optional(),
+    }).strict().optional(),
+    uiSettings: z.object({
+      professionalRoleLabel: z.string().min(1).max(50).optional(),
+      professionalRoleLabelPlural: z.string().min(1).max(50).optional(),
+      enabledNavItems: z.array(z.enum([
+        "calendario", "horarios", "clientes", "seguimiento", "servicios", "equipo", "reportes"
+      ])).max(7).optional(),
     }).strict().optional(),
   }).strict(),
 });

@@ -1,7 +1,8 @@
 import * as businessConfigRepository from "../repositories/businessConfig.repository.js";
+import * as businessRepository from "../repositories/business.repository.js";
 
 // Datos por defecto para inicializar la configuración si la DB está vacía
-const createDefaults = () => {
+const createDefaults = (businessName = "Agenda") => {
   const workingHours = [];
   
   // Lunes a Viernes abierto (1 a 5)
@@ -27,7 +28,7 @@ const createDefaults = () => {
   }
 
   return {
-    businessName: "Mi Agenda de Servicios",
+    businessName,
     workingHours,
     appointmentSettings: {
       bufferTime: 0,
@@ -49,6 +50,11 @@ const createDefaults = () => {
       logoUrl: "",
       customFooter: "",
     },
+    uiSettings: {
+      professionalRoleLabel: "Profesional",
+      professionalRoleLabelPlural: "Profesionales",
+      enabledNavItems: ["calendario", "horarios", "clientes", "servicios", "equipo", "reportes"],
+    },
   };
 };
 
@@ -57,7 +63,8 @@ export const getOrInitializeConfig = async (businessId) => {
   
   if (!config) {
     // Inicialización automática si es la primera ejecución
-    const defaults = createDefaults();
+    const business = await businessRepository.findById(businessId);
+    const defaults = createDefaults(business?.name);
     defaults.business = businessId; // Asociar con el negocio específico
     config = await businessConfigRepository.createDefaultConfig(defaults);
   }

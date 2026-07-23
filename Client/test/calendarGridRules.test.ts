@@ -93,6 +93,14 @@ test('resolves days off and breaks from one shared schedule rule', () => {
   assert.deepEqual(getColumnSchedule(tuesdayColumn, shifts), { isOff: true, breaks: [] });
 });
 
+test('treats a missing persisted schedule as unavailable instead of inferring it from identity', () => {
+  const worker = professional('sofia');
+  worker.email = 'sofia@barberia.com';
+  const mondayColumn = buildDayColumns(new Date(2026, 6, 20), [worker])[0];
+
+  assert.deepEqual(getColumnSchedule(mondayColumn, []), { isOff: true, breaks: [] });
+});
+
 test('assigns horizontal space only to overlapping appointments', () => {
   const columns = buildDayColumns(new Date(2026, 6, 22), [professional('worker-1')]);
   const appointments = [

@@ -146,13 +146,12 @@ describe("webpayReturnSchema", () => {
     });
   });
 
-  // --- Combinaciones y slug ---
-  it("acepta slug en query junto con token_ws", () => {
+  it("elimina parámetros ajenos al callback controlado por Transbank", () => {
     const result = expectPass(webpayReturnSchema, {
       body: {},
       query: { token_ws: "tok", slug: "mi-barberia" },
     });
-    assert.equal(result.query.slug, "mi-barberia");
+    assert.deepEqual(result.query, { token_ws: "tok" });
   });
 
   // --- Rechazo: sin ningún token ---
@@ -411,6 +410,19 @@ describe("updateBusinessConfigSchema", () => {
         },
       },
     });
+  });
+
+  it("acepta configuración de interfaz explícita por negocio", () => {
+    const result = expectPass(updateBusinessConfigSchema, {
+      body: {
+        uiSettings: {
+          professionalRoleLabel: "Consultor",
+          professionalRoleLabelPlural: "Consultores",
+          enabledNavItems: ["calendario", "clientes", "servicios"],
+        },
+      },
+    });
+    assert.equal(result.body.uiSettings.professionalRoleLabel, "Consultor");
   });
 
   it("acepta emailSettings con logoUrl vacío", () => {

@@ -58,7 +58,7 @@ export function parseUTCDateToLocal(dateInput: string | Date): Date {
   }
   return new Date(dateInput);
 }
-export function getWorkerDaysOff(email?: string | string[], workerShifts?: any[]): number[] {
+export function getWorkerDaysOff(workerShifts: any[] = []): number[] {
   // Si tenemos los turnos reales de la base de datos para este trabajador, los usamos de forma dinámica
   if (workerShifts && workerShifts.length > 0) {
     const workingDays = workerShifts
@@ -74,17 +74,8 @@ export function getWorkerDaysOff(email?: string | string[], workerShifts?: any[]
     return daysOff;
   }
 
-  // Fallback estático basado en correos
-  if (!email) return [0, 6];
-  const emailStr = Array.isArray(email) ? (email[0] || '') : email;
-  const eLower = emailStr.toLowerCase();
-  if (eLower.includes('sofia@barberia.com') || eLower.includes('lucas@barberia.com')) {
-    return [0, 1, 2]; // Domingo, Lunes, Martes
-  }
-  if (eLower.includes('javier@barberia.com') || eLower.includes('elena@barberia.com')) {
-    return [1, 2, 3]; // Lunes, Martes, Miércoles
-  }
-  return [0, 6]; // Domingo, Sábado por defecto
+  // Sin horario persistido no se inventa disponibilidad.
+  return [0, 1, 2, 3, 4, 5, 6];
 }
 
 export function getBusinessHoursBounds(businessConfig: any) {

@@ -106,7 +106,7 @@ export const CalendarMonthView: React.FC = () => {
             ? shifts.filter(s => s.worker === selectedProf._id || (typeof s.worker === 'object' && s.worker._id === selectedProf._id))
             : [];
           const isDayOff = selectedProf 
-            ? getWorkerDaysOff(selectedProf.email, selectedProfShifts).includes(d.date.getDay())
+            ? getWorkerDaysOff(selectedProfShifts).includes(d.date.getDay())
             : false;
 
           // Count appointments by category
