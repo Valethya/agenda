@@ -575,8 +575,8 @@ La tarea 7.1 quedó implementada y fusionada mediante el PR #1. Su registro se e
 4. **7.3 Dividir SaasBusinessesView:** completado mediante el PR #10.
 5. **7.4 Extraer utilidades duplicadas:** completado mediante el PR #11.
 6. **7.5 Extraer paleta de colores de avatar:** completado dentro del PR #11.
-7. **7.6 Unificar CalendarDayView y CalendarWeekView.**
-8. **7.7 Extraer SVG de Sidebar.**
+7. **7.6 Unificar CalendarDayView y CalendarWeekView:** completado mediante el PR #12.
+8. **7.7 Extraer SVG de Sidebar:** implementado en esta rama; pendiente de fusión.
 9. **7.9 Eliminar correos, slugs y reglas hardcodeadas.**
 10. **7.8 Implementar diseño responsive.**
 
