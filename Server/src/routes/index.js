@@ -19,7 +19,7 @@ router.use("/", authRoutes);
 router.use("/services", scopeBusiness, serviceRoutes);
 router.use("/availability", scopeBusiness, availabilityRoutes);
 router.use("/appointments", scopeBusiness, appointmentRoutes);
-router.use("/payments", scopeBusiness, paymentRoutes);
+router.use("/payments", paymentRoutes);
 router.use("/users", scopeBusiness, userRoutes);
 router.use("/business-settings", scopeBusiness, businessConfigRoutes);
 
