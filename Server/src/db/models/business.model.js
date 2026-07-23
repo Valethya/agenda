@@ -19,6 +19,11 @@ const businessSchema = new mongoose.Schema(
       type: Boolean,
       default: true,
     },
+    subscriptionStatus: {
+      type: String,
+      enum: ["active", "trial"],
+      default: "active",
+    },
     owner: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",

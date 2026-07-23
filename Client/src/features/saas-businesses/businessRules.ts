@@ -10,16 +10,9 @@ export interface BusinessMetrics {
   inactive: number;
 }
 
-const TRIAL_SLUGS = new Set([
-  'calavera',
-  'calavera-studio',
-  'calaveras',
-  'ink-studio'
-]);
-
 export function getBusinessStatus(business: SaasBusiness): BusinessStatus {
   if (!business.isActive) return 'inactivo';
-  return TRIAL_SLUGS.has(business.slug) ? 'trial' : 'activo';
+  return business.subscriptionStatus === 'trial' ? 'trial' : 'activo';
 }
 
 export function getBusinessMetrics(businesses: SaasBusiness[]): BusinessMetrics {

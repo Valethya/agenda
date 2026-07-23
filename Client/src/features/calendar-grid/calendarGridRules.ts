@@ -79,7 +79,7 @@ export function getColumnSchedule(
 
   const workerShifts = shifts.filter(shift => getEntityId(shift.worker) === column.professionalId);
   const dayOfWeek = column.date.getDay();
-  const isOff = getWorkerDaysOff(column.professional.email, workerShifts).includes(dayOfWeek);
+  const isOff = getWorkerDaysOff(workerShifts).includes(dayOfWeek);
   const shift = workerShifts.find(candidate => candidate.dayOfWeek === dayOfWeek);
 
   return {

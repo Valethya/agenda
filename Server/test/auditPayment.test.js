@@ -217,7 +217,7 @@ test("Pruebas de Integración - Flujo de Pago Abierto y Registro Progresivo", as
     assert.strictEqual(initData.payload.token, "mock-token-12345");
 
     // C. Confirmar pago (Commit)
-    const returnRes = await fetch(`${baseUrl}/payments/webpay-return?token_ws=mock-token-12345&slug=barberia-audit`, {
+    const returnRes = await fetch(`${baseUrl}/payments/webpay-return?token_ws=mock-token-12345`, {
       method: "POST",
       redirect: "manual",
     });

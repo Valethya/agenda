@@ -18,7 +18,7 @@ interface CalendarDataContextType {
 }
 
 const DEFAULT_BUSINESS_CONFIG: BusinessConfig = {
-  businessName: 'Atmósfera',
+  businessName: 'Agenda',
   professionalRoleLabel: 'Profesional',
   professionalRoleLabelPlural: 'Profesionales',
   enabledNavItems: ['calendario', 'horarios', 'clientes', 'servicios', 'equipo', 'reportes']

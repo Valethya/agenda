@@ -77,6 +77,11 @@ export interface BusinessConfig {
     maxAdvanceDays: number;
     autoConfirmLocalBookings: boolean;
   };
+  uiSettings?: {
+    professionalRoleLabel: string;
+    professionalRoleLabelPlural: string;
+    enabledNavItems: string[];
+  };
 }
 
 export type UserRole = 'admin' | 'worker' | 'superadmin' | 'user';
@@ -114,6 +119,7 @@ export interface SaasBusiness {
   name: string;
   slug: string;
   isActive: boolean;
+  subscriptionStatus?: 'active' | 'trial';
   owner?: BusinessOwner;
   createdAt?: string;
 }

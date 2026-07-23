@@ -51,6 +51,14 @@ const businessConfigSchema = new mongoose.Schema(
       logoUrl: { type: String, default: "" },          // Enlace al logotipo del negocio
       customFooter: { type: String, default: "" }      // Mensaje de despedida o firma personalizado
     },
+    uiSettings: {
+      professionalRoleLabel: { type: String, default: "Profesional", trim: true },
+      professionalRoleLabelPlural: { type: String, default: "Profesionales", trim: true },
+      enabledNavItems: {
+        type: [String],
+        default: ["calendario", "horarios", "clientes", "servicios", "equipo", "reportes"],
+      },
+    },
   },
   {
     timestamps: true,

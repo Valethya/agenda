@@ -25,14 +25,14 @@ const business = (overrides: Partial<SaasBusiness> = {}): SaasBusiness => ({
 
 test('classifies active, trial and inactive businesses consistently', () => {
   assert.equal(getBusinessStatus(business()), 'activo');
-  assert.equal(getBusinessStatus(business({ slug: 'calavera-studio' })), 'trial');
+  assert.equal(getBusinessStatus(business({ subscriptionStatus: 'trial' })), 'trial');
   assert.equal(getBusinessStatus(business({ isActive: false })), 'inactivo');
 });
 
 test('computes SaaS metrics from the shared status rule', () => {
   assert.deepEqual(getBusinessMetrics([
     business(),
-    business({ _id: 'business-2', slug: 'ink-studio' }),
+    business({ _id: 'business-2', subscriptionStatus: 'trial' }),
     business({ _id: 'business-3', isActive: false })
   ]), { total: 3, active: 1, trial: 1, inactive: 1 });
 });

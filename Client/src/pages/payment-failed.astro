@@ -208,7 +208,7 @@
     const reason = params.get("reason") || "";
     const message = params.get("message") || "";
     const appointmentId = params.get("appointmentId") || "";
-    const slug = params.get("slug") || "atmosfera";
+    const slug = params.get("slug");
 
     const descEl = document.getElementById("errorDescription") as HTMLElement;
     const reasonEl = document.getElementById("errorReason") as HTMLElement;
@@ -223,8 +223,9 @@
     }
 
     // Actualizar enlaces de retorno con el slug
-    retryLink.href = `/agenda?slug=${slug}`;
-    backLink.href = `/agenda?slug=${slug}`;
+    const agendaUrl = slug ? `/agenda?slug=${encodeURIComponent(slug)}` : "/agenda";
+    retryLink.href = agendaUrl;
+    backLink.href = agendaUrl;
 
     switch(reason) {
       case "cancelled_by_user":

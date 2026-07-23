@@ -162,51 +162,20 @@ export async function switchBusiness(businessId: string) {
 }
 
 export async function getBusinessConfigData(): Promise<BusinessConfig> {
-  try {
-    const data = await apiFetch<{ status: string; payload: any }>("/business-settings");
-    const configPayload = data.payload;
-    const slug = configPayload?.business?.slug || getBusinessSlug();
-    
-    // Determine labels based on business slug
-    let professionalRoleLabel = "Profesional";
-    let professionalRoleLabelPlural = "Profesionales";
-    let enabledNavItems = ["calendario", "horarios", "clientes", "servicios", "equipo", "reportes"];
+  const data = await apiFetch<{ status: string; payload: any }>("/business-settings");
+  const configPayload = data.payload;
+  const uiSettings = configPayload?.uiSettings || {};
 
-    if (slug === "barberia") {
-      professionalRoleLabel = "Profesional";
-      professionalRoleLabelPlural = "Profesionales";
-      enabledNavItems = ["calendario", "horarios", "clientes", "servicios", "equipo", "reportes"];
-    } else if (slug === "cafeteria") {
-      professionalRoleLabel = "Barista";
-      professionalRoleLabelPlural = "Baristas";
-      enabledNavItems = ["calendario", "horarios", "clientes", "servicios", "reportes"];
-    } else if (slug === "estudio-tatuaje") {
-      professionalRoleLabel = "Tatuador";
-      professionalRoleLabelPlural = "Tatuadores";
-      enabledNavItems = ["calendario", "horarios", "clientes", "servicios", "equipo", "reportes"];
-    } else if (slug === "consultorio") {
-      professionalRoleLabel = "Médico";
-      professionalRoleLabelPlural = "Médicos";
-      enabledNavItems = ["calendario", "horarios", "clientes", "seguimiento", "servicios", "reportes"];
-    }
-
-    return {
-      businessName: configPayload?.businessName || "Atmósfera",
-      professionalRoleLabel,
-      professionalRoleLabelPlural,
-      enabledNavItems,
-      business: configPayload?.business,
-      appointmentSettings: configPayload?.appointmentSettings
-    };
-  } catch (err) {
-    // Fallback
-    return {
-      businessName: "Atmósfera",
-      professionalRoleLabel: "Profesional",
-      professionalRoleLabelPlural: "Profesionales",
-      enabledNavItems: ["calendario", "horarios", "clientes", "servicios", "equipo", "reportes"]
-    };
-  }
+  return {
+    businessName: configPayload?.businessName || configPayload?.business?.name || "Agenda",
+    professionalRoleLabel: uiSettings.professionalRoleLabel || "Profesional",
+    professionalRoleLabelPlural: uiSettings.professionalRoleLabelPlural || "Profesionales",
+    enabledNavItems: uiSettings.enabledNavItems
+      || ["calendario", "horarios", "clientes", "servicios", "equipo", "reportes"],
+    business: configPayload?.business,
+    appointmentSettings: configPayload?.appointmentSettings,
+    uiSettings: configPayload?.uiSettings
+  };
 }
 
 export async function impersonateBusiness(businessId: string) {

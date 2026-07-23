@@ -1,6 +1,25 @@
 import * as paymentService from "../services/payment.service.js";
 import { ValidationError } from "../utils/appError.js";
 import { logEvent } from "../utils/auditLogger.js";
+import { frontendUrl } from "../config/env.js";
+
+const buildFrontendRedirect = (path, params = {}) => {
+  const target = new URL(path, `${frontendUrl.replace(/\/$/, "")}/`);
+  Object.entries(params).forEach(([key, value]) => {
+    if (value !== undefined && value !== null && value !== "") {
+      target.searchParams.set(key, String(value));
+    }
+  });
+  return target.toString();
+};
+
+const resolveBusinessSlug = async (token) => {
+  try {
+    return await paymentService.getBusinessSlugByTransactionToken(token);
+  } catch {
+    return null;
+  }
+};
 
 // 1. Iniciar pago para una cita
 export const startPayment = async (req, res, next) => {
@@ -32,10 +51,6 @@ export const webpayReturn = async (req, res, next) => {
     // Transbank envía los parámetros por POST (en req.body) o GET (en req.query)
     const tokenWs = req.body?.token_ws || req.query?.token_ws;
     const tbkToken = req.body?.TBK_TOKEN || req.query?.TBK_TOKEN;
-    const slug = req.query?.slug || "barberia";
-
-    const frontendUrl = process.env.FRONTEND_URL || "http://localhost:5173";
-
     // A. El usuario abortó o canceló el pago en la pasarela de Webpay
     if (!tokenWs && tbkToken) {
       await logEvent({
@@ -44,7 +59,11 @@ export const webpayReturn = async (req, res, next) => {
         message: "El usuario abortó o canceló el pago en la pasarela de Webpay.",
         metadata: { tbkToken }
       });
-      return res.redirect(`${frontendUrl}/payment-failed?reason=cancelled_by_user&slug=${slug}`);
+      const businessSlug = await resolveBusinessSlug(tbkToken);
+      return res.redirect(buildFrontendRedirect("/payment-failed", {
+        reason: "cancelled_by_user",
+        slug: businessSlug,
+      }));
     }
 
     // B. Si no hay token de ninguna forma, es una petición inválida
@@ -54,7 +73,7 @@ export const webpayReturn = async (req, res, next) => {
         level: "ERROR",
         message: "Intento de retorno de Webpay sin ningún token."
       });
-      return res.redirect(`${frontendUrl}/payment-failed?reason=missing_token&slug=${slug}`);
+      return res.redirect(buildFrontendRedirect("/payment-failed", { reason: "missing_token" }));
     }
 
     // C. Validar la transacción con Transbank
@@ -63,20 +82,33 @@ export const webpayReturn = async (req, res, next) => {
     if (result.success) {
       // Redirección exitosa: lleva al cliente a la pantalla de éxito en tu frontend
       return res.redirect(
-        `${frontendUrl}/payment-success?appointmentId=${result.appointmentId}&code=${result.authorizationCode}&amount=${result.amount}&slug=${slug}`
+        buildFrontendRedirect("/payment-success", {
+          appointmentId: result.appointmentId,
+          code: result.authorizationCode,
+          amount: result.amount,
+          slug: result.businessSlug,
+        })
       );
     } else {
       // Redirección fallida por rechazo bancario
       return res.redirect(
-        `${frontendUrl}/payment-failed?appointmentId=${result.appointmentId}&reason=rejected&slug=${slug}`
+        buildFrontendRedirect("/payment-failed", {
+          appointmentId: result.appointmentId,
+          reason: "rejected",
+          slug: result.businessSlug,
+        })
       );
     }
   } catch (error) {
     // Redirección por error técnico/servidor
-    const frontendUrl = process.env.FRONTEND_URL || "http://localhost:5173";
-    const slug = req.query.slug || "barberia";
+    const token = req.body?.token_ws || req.query?.token_ws || req.body?.TBK_TOKEN || req.query?.TBK_TOKEN;
+    const businessSlug = await resolveBusinessSlug(token);
     return res.redirect(
-      `${frontendUrl}/payment-failed?reason=server_error&message=${encodeURIComponent(error.message)}&slug=${slug}`
+      buildFrontendRedirect("/payment-failed", {
+        reason: "server_error",
+        message: error.message,
+        slug: businessSlug,
+      })
     );
   }
 };

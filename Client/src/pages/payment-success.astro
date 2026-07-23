@@ -205,7 +205,7 @@
     const appointmentId = params.get("appointmentId") || "";
     const code = params.get("code") || "";
     const amount = params.get("amount") || "";
-    const slug = params.get("slug") || "atmosfera";
+    const slug = params.get("slug");
 
     const appIdEl = document.getElementById("appId") as HTMLElement;
     const authCodeEl = document.getElementById("authCode") as HTMLElement;
@@ -221,7 +221,7 @@
     }
 
     // Actualizar enlace de retorno con el slug
-    backLink.href = `/agenda?slug=${slug}`;
+    backLink.href = slug ? `/agenda?slug=${encodeURIComponent(slug)}` : "/agenda";
   </script>
 </body>
 </html>

@@ -61,12 +61,14 @@ export const initiatePayment = async (appointmentId, paymentType = "deposit") =>
     const buyOrder = appointmentId; // Usamos el ID de la cita como BuyOrder única
     const sessionId = `${appointment.client._id.toString()}_${Date.now()}`; // sessionId único combinando el ID de cliente y timestamp
     
-    // Obtener el slug del negocio asociado a la cita
+    // Validar que el negocio persistido de la cita siga existiendo.
     const business = await businessRepository.findById(businessId);
-    const slug = business ? business.slug : "barberia";
+    if (!business) {
+      throw new NotFoundError("El negocio asociado a la cita no existe");
+    }
     
     // URL de retorno del backend donde Transbank redirigirá al usuario tras el pago
-    const returnUrl = `${backendUrl}/api/payments/webpay-return?slug=${slug}`;
+    const returnUrl = `${backendUrl}/api/payments/webpay-return`;
 
     await logEvent({
       appointmentId,
@@ -205,6 +207,11 @@ export const confirmPayment = async (tokenWs) => {
     }
 
     const userId = appointment.client._id;
+    const businessId = appointment.business?._id || appointment.business;
+    const business = await businessRepository.findById(businessId);
+    if (!business) {
+      throw new NotFoundError("El negocio asociado al pago no existe");
+    }
 
     // Verificar estado pendiente de pago
     if (appointment.status !== "pending_payment") {
@@ -343,6 +350,7 @@ export const confirmPayment = async (tokenWs) => {
       return {
         success: true,
         appointmentId,
+        businessSlug: business.slug,
         amount: commitResponse.amount,
         authorizationCode: commitResponse.authorization_code,
       };
@@ -375,6 +383,7 @@ export const confirmPayment = async (tokenWs) => {
       return {
         success: false,
         appointmentId,
+        businessSlug: business.slug,
         message: "El pago fue rechazado por Transbank",
       };
     }
@@ -396,4 +405,17 @@ export const confirmPayment = async (tokenWs) => {
     });
     throw new ValidationError(`Error al validar el pago con Transbank: ${error.message}`);
   }
+};
+
+export const getBusinessSlugByTransactionToken = async (token) => {
+  if (!token) return null;
+
+  const payment = await paymentRepository.findByTransactionId(token);
+  if (!payment) return null;
+
+  const businessId = payment.business?._id || payment.business;
+  if (!businessId) return null;
+
+  const business = await businessRepository.findById(businessId);
+  return business?.slug || null;
 };
