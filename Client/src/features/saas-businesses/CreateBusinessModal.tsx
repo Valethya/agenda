@@ -40,7 +40,7 @@ export const CreateBusinessModal: React.FC<CreateBusinessModalProps> = ({ onClos
     setForm(previous => ({ ...previous, name, slug: slugifyBusinessName(name) }));
   };
 
-  const handleSubmit = async (event: React.FormEvent) => {
+  const handleSubmit = async (event: React.SubmitEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (!form.name || !form.slug || !form.ownerEmail || !form.ownerPassword) {
       alert('Por favor rellena todos los campos obligatorios');

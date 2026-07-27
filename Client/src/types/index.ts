@@ -16,6 +16,8 @@ export interface Professional {
   business?: string;
 }
 
+export type EntityReference<T extends { _id: string }> = string | T;
+
 export interface Service {
   _id: string;
   name: string;
@@ -32,7 +34,7 @@ export type AppointmentStatus = 'pending' | 'confirmed' | 'cancelled' | 'complet
 export interface Appointment {
   _id: string;
   client: Client;
-  worker: string | Professional; // Professional object if populated, otherwise string id
+  worker: EntityReference<Professional>;
   service: Service;
   date: string | Date;
   startTime: string;
@@ -52,7 +54,7 @@ export interface Break {
 
 export interface Shift {
   _id?: string;
-  worker: string;
+  worker: EntityReference<Professional>;
   dayOfWeek: number; // 0-6 (0 is Sunday)
   isOpen: boolean;
   startTime: string;
@@ -60,28 +62,51 @@ export interface Shift {
   breaks: Break[];
 }
 
+export interface WorkingHour {
+  dayOfWeek: number;
+  isOpen: boolean;
+  startTime: string;
+  endTime: string;
+  breaks: Break[];
+}
+
+export interface AppointmentSettings {
+  slotDuration?: number;
+  bufferTime?: number;
+  minAdvanceHours?: number;
+  maxAdvanceDays?: number;
+  autoConfirmLocalBookings?: boolean;
+}
+
+export interface BusinessUiSettings {
+  professionalRoleLabel?: string;
+  professionalRoleLabelPlural?: string;
+  enabledNavItems?: string[];
+}
+
+export interface BusinessSummary {
+  _id: string;
+  name: string;
+  slug: string;
+}
+
+export interface BusinessConfigPayload {
+  businessName?: string;
+  business?: BusinessSummary;
+  workingHours?: WorkingHour[];
+  appointmentSettings?: AppointmentSettings;
+  uiSettings?: BusinessUiSettings;
+}
+
 export interface BusinessConfig {
   businessName: string;
   professionalRoleLabel: string;
   professionalRoleLabelPlural: string;
   enabledNavItems: string[];
-  business?: {
-    _id: string;
-    name: string;
-    slug: string;
-  };
-  appointmentSettings?: {
-    slotDuration: number;
-    bufferTime: number;
-    minAdvanceHours: number;
-    maxAdvanceDays: number;
-    autoConfirmLocalBookings: boolean;
-  };
-  uiSettings?: {
-    professionalRoleLabel: string;
-    professionalRoleLabelPlural: string;
-    enabledNavItems: string[];
-  };
+  business?: BusinessSummary;
+  workingHours?: WorkingHour[];
+  appointmentSettings?: AppointmentSettings;
+  uiSettings?: BusinessUiSettings;
 }
 
 export type UserRole = 'admin' | 'worker' | 'superadmin' | 'user';
@@ -94,7 +119,7 @@ export interface BusinessMembership {
   role: UserRole;
 }
 
-export interface SessionUser {
+export interface SessionIdentity {
   id?: string;
   _id?: string;
   firstName: string;
@@ -103,9 +128,32 @@ export interface SessionUser {
   role: UserRole;
   businessId?: string;
   businessSlug?: string;
-  memberships: BusinessMembership[];
   isImpersonating?: boolean;
 }
+
+export interface SessionUser extends SessionIdentity {
+  memberships: BusinessMembership[];
+  originalUser?: SessionIdentity | null;
+}
+
+export interface ApiResponse<T> {
+  status: string;
+  message?: string;
+  payload: T;
+}
+
+export interface SessionApiResponse<T extends SessionIdentity = SessionIdentity> extends ApiResponse<T> {
+  status: 'success' | 'succes';
+  user: T;
+}
+
+export type AuthResponse =
+  | SessionApiResponse<SessionIdentity>
+  | {
+      status: 'needs_selection';
+      message?: string;
+      memberships: BusinessMembership[];
+    };
 
 export interface BusinessOwner {
   firstName: string;

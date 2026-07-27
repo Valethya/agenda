@@ -107,8 +107,11 @@ jobs:
       - name: Run frontend policy tests
         run: npm run test:frontend
 
-      - name: Run Astro and TypeScript checks
+      - name: Run Astro checks
         run: npm run check
+
+      - name: Run strict TypeScript checks
+        run: npm run typecheck
 
       - name: Build production frontend
         run: npm run build

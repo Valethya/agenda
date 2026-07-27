@@ -116,7 +116,9 @@ export const CalendarDataProvider: React.FC<{ children: React.ReactNode }> = ({ 
       });
 
       socket.on('calendar_update', refreshData);
-      return () => socket.disconnect();
+      return () => {
+        socket.disconnect();
+      };
     } catch (err) {
       console.error('Error al establecer conexión WebSocket:', err);
     }

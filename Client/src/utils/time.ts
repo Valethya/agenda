@@ -1,3 +1,5 @@
+import type { BusinessConfig, Shift, WorkingHour } from '../types';
+
 export function generateHoras(slotDuration: number = 60, startHour: number = 8, endHour: number = 20): string[] {
   const horas: string[] = [];
   const startMins = startHour * 60;
@@ -58,7 +60,9 @@ export function parseUTCDateToLocal(dateInput: string | Date): Date {
   }
   return new Date(dateInput);
 }
-export function getWorkerDaysOff(workerShifts: any[] = []): number[] {
+export function getWorkerDaysOff(
+  workerShifts: Array<Pick<Shift, 'isOpen' | 'dayOfWeek'>> = []
+): number[] {
   // Si tenemos los turnos reales de la base de datos para este trabajador, los usamos de forma dinámica
   if (workerShifts && workerShifts.length > 0) {
     const workingDays = workerShifts
@@ -78,23 +82,20 @@ export function getWorkerDaysOff(workerShifts: any[] = []): number[] {
   return [0, 1, 2, 3, 4, 5, 6];
 }
 
-export function getBusinessHoursBounds(businessConfig: any) {
+export function getBusinessHoursBounds(
+  businessConfig: Pick<BusinessConfig, 'workingHours'> | null | undefined
+): { startHour: number; endHour: number } {
   let startHour = 8;
   let endHour = 20;
+  const workingHours: WorkingHour[] = businessConfig?.workingHours ?? [];
 
-  if (businessConfig && businessConfig.workingHours && businessConfig.workingHours.length > 0) {
-    const openDays = businessConfig.workingHours.filter((wh: any) => wh.isOpen);
+  if (workingHours.length > 0) {
+    const openDays = workingHours.filter(workingHour => workingHour.isOpen);
     if (openDays.length > 0) {
-      const startTimes = openDays.map((wh: any) => {
-        const [h] = wh.startTime.split(':').map(Number);
-        return h;
-      });
+      const startTimes = openDays.map(workingHour => timeToMinutes(workingHour.startTime) / 60);
       startHour = Math.min(...startTimes);
 
-      const endTimes = openDays.map((wh: any) => {
-        const [h] = wh.endTime.split(':').map(Number);
-        return h;
-      });
+      const endTimes = openDays.map(workingHour => timeToMinutes(workingHour.endTime) / 60);
       endHour = Math.max(...endTimes);
     }
   }
