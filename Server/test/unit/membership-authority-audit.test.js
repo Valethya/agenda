@@ -1339,6 +1339,8 @@ describe("membership authority audit", () => {
           database: "agenda_test",
           report: "./artifacts/no-debe-escribirse.json",
           explicitCodeSha: "not-a-git-sha",
+          railwayGitCommitSha: "",
+          githubSha: "",
           connect: async () => {
             connected = true;
           },
