@@ -35,7 +35,6 @@ export const AppointmentCard: React.FC<AppointmentCardProps> = ({ appointment, s
 
   const statusKey = statusClassMap[appointment.status] || 'pendiente';
   const statusClass = styles[statusKey] || '';
-  const sizeClass = styles[size] || styles.medium;
 
   if (size === 'small') {
     const shortName = appointment.client ? appointment.client.firstName : 'Cita';

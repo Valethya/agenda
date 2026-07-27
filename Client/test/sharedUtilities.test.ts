@@ -8,6 +8,7 @@ import {
 } from '../src/utils/avatar.ts';
 import { getEndOfWeek, getStartOfWeek, getWeekDays } from '../src/utils/calendarDate.ts';
 import {
+  getBusinessHoursBounds,
   timeRangeToSlotSpan,
   timeToMinutes,
   timeToMinutesFromDayStart,
@@ -51,6 +52,27 @@ test('calculates slot spans for regular and overnight ranges', () => {
   assert.equal(timeRangeToSlotSpan('09:00', '10:30', 30, 8), 3);
   assert.equal(timeRangeToSlotSpan('23:30', '00:30', 30, 8), 2);
   assert.equal(timeRangeToSlotSpan('09:00', '09:10', 30, 8), 1);
+});
+
+test('derives calendar bounds from typed business working hours', () => {
+  assert.deepEqual(getBusinessHoursBounds({
+    workingHours: [
+      {
+        dayOfWeek: 1,
+        isOpen: true,
+        startTime: '08:30',
+        endTime: '18:30',
+        breaks: []
+      },
+      {
+        dayOfWeek: 2,
+        isOpen: false,
+        startTime: '09:00',
+        endTime: '17:00',
+        breaks: []
+      }
+    ]
+  }), { startHour: 7.5, endHour: 19.5 });
 });
 
 test('keeps person avatar identity stable', () => {

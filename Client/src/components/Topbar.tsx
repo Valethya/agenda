@@ -60,9 +60,9 @@ export const Topbar: React.FC = () => {
   // Enforce single professional selection in Week View, and lock selection for workers
   React.useEffect(() => {
     if (currentUser?.role === 'worker') {
-      setSelectedProfessionalId(currentUser._id);
+      setSelectedProfessionalId(currentUser._id ?? currentUser.id ?? null);
     } else if (viewType === 'semana' && !selectedProfessionalId && profs.length > 0) {
-      setSelectedProfessionalId(profs[0]._id);
+      setSelectedProfessionalId(profs[0]?._id ?? null);
     }
   }, [viewType, selectedProfessionalId, profs, currentUser]);
 

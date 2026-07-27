@@ -7,6 +7,7 @@
     "build": "astro build",
     "preview": "astro preview",
     "check": "astro check",
+    "typecheck": "tsc --noEmit",
     "test:context": "node --test --experimental-strip-types test/sessionPolicy.test.ts",
     "test:saas-businesses": "node --test --experimental-strip-types test/saasBusinessesRules.test.ts",
     "test:frontend": "node --test --experimental-strip-types test/*.test.ts"
@@ -20,5 +21,8 @@
     "sass": "^1.101.0",
     "socket.io-client": "^4.8.3",
     "typescript": "^5.9.3"
+  },
+  "devDependencies": {
+    "@types/node": "^24.13.3"
   }
 }

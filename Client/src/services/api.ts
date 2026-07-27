@@ -1,10 +1,15 @@
 import type {
   Professional,
   Appointment,
+  ApiResponse,
   Shift,
   BusinessConfig,
+  BusinessConfigPayload,
   CreateSaasBusinessInput,
-  SaasBusiness
+  SaasBusiness,
+  SessionApiResponse,
+  SessionIdentity,
+  SessionUser
 } from '../types';
 
 const configuredApiUrl = import.meta.env.PUBLIC_API_URL;
@@ -14,10 +19,15 @@ if (!configuredApiUrl) {
 }
 
 const API_URL = configuredApiUrl.replace(/\/+$/, '');
-type JsonBody = Record<string, unknown> | unknown[];
+type JsonBody = object;
 
 export interface ApiRequestInit extends Omit<RequestInit, 'body'> {
   body?: BodyInit | JsonBody | null;
+}
+
+interface MessageResponse {
+  status: string;
+  message: string;
 }
 
 interface ApiErrorPayload {
@@ -82,7 +92,7 @@ async function parseResponse(response: Response): Promise<unknown> {
   }
 }
 
-export async function apiFetch<T = any>(path: string, options: ApiRequestInit = {}): Promise<T> {
+export async function apiFetch<T = unknown>(path: string, options: ApiRequestInit = {}): Promise<T> {
   const slug = getBusinessSlug();
   const headers = new Headers(options.headers);
   let body = options.body;
@@ -120,49 +130,49 @@ export async function apiFetch<T = any>(path: string, options: ApiRequestInit = 
 }
 
 export async function getCurrentUser() {
-  return apiFetch<{ status: string; user: any; payload: any }>("/me");
+  return apiFetch<SessionApiResponse<SessionUser>>("/me");
 }
 
 export async function logout() {
-  return apiFetch<{ status: string; message: string }>("/logout", { method: "POST" });
+  return apiFetch<MessageResponse>("/logout", { method: "POST" });
 }
 
 export async function getWorkers() {
-  const data = await apiFetch<{ status: string; payload: Professional[] }>("/users/workers");
+  const data = await apiFetch<ApiResponse<Professional[]>>("/users/workers");
   return data.payload;
 }
 
 export async function getMyAppointments() {
-  const data = await apiFetch<{ status: string; payload: Appointment[] }>("/appointments/my");
+  const data = await apiFetch<ApiResponse<Appointment[]>>("/appointments/my");
   return data.payload;
 }
 
 export async function getWorkerShifts(workerId: string) {
-  const data = await apiFetch<{ status: string; payload: Shift[] }>(`/availability/shifts/${workerId}`);
+  const data = await apiFetch<ApiResponse<Shift[]>>(`/availability/shifts/${workerId}`);
   return data.payload;
 }
 
 export async function confirmAppointment(id: string) {
-  return apiFetch<{ status: string; message: string }>(`/appointments/${id}/confirm`, { method: "PATCH" });
+  return apiFetch<MessageResponse>(`/appointments/${id}/confirm`, { method: "PATCH" });
 }
 
 export async function completeAppointment(id: string) {
-  return apiFetch<{ status: string; message: string }>(`/appointments/${id}/complete`, { method: "PATCH" });
+  return apiFetch<MessageResponse>(`/appointments/${id}/complete`, { method: "PATCH" });
 }
 
 export async function cancelAppointment(id: string) {
-  return apiFetch<{ status: string; message: string }>(`/appointments/${id}/cancel`, { method: "PATCH" });
+  return apiFetch<MessageResponse>(`/appointments/${id}/cancel`, { method: "PATCH" });
 }
 
 export async function switchBusiness(businessId: string) {
-  return apiFetch<{ status: string; message: string; user: any; payload: any }>("/switch-business", {
+  return apiFetch<SessionApiResponse<SessionIdentity>>("/switch-business", {
     method: "POST",
     body: JSON.stringify({ businessId })
   });
 }
 
 export async function getBusinessConfigData(): Promise<BusinessConfig> {
-  const data = await apiFetch<{ status: string; payload: any }>("/business-settings");
+  const data = await apiFetch<ApiResponse<BusinessConfigPayload>>("/business-settings");
   const configPayload = data.payload;
   const uiSettings = configPayload?.uiSettings || {};
 
@@ -173,24 +183,25 @@ export async function getBusinessConfigData(): Promise<BusinessConfig> {
     enabledNavItems: uiSettings.enabledNavItems
       || ["calendario", "horarios", "clientes", "servicios", "equipo", "reportes"],
     business: configPayload?.business,
+    workingHours: configPayload?.workingHours,
     appointmentSettings: configPayload?.appointmentSettings,
     uiSettings: configPayload?.uiSettings
   };
 }
 
 export async function impersonateBusiness(businessId: string) {
-  return apiFetch<{ status: string; message: string; user: any; payload: any }>(`/superadmin/businesses/${businessId}/impersonate`, {
+  return apiFetch<SessionApiResponse<SessionIdentity>>(`/superadmin/businesses/${businessId}/impersonate`, {
     method: "POST"
   });
 }
 
 export async function getSaasBusinesses() {
-  const data = await apiFetch<{ status: string; payload: SaasBusiness[] }>('/superadmin/businesses');
+  const data = await apiFetch<ApiResponse<SaasBusiness[]>>('/superadmin/businesses');
   return data.payload;
 }
 
 export async function toggleSaasBusinessStatus(businessId: string) {
-  const data = await apiFetch<{ status: string; payload: SaasBusiness }>(
+  const data = await apiFetch<ApiResponse<SaasBusiness>>(
     `/superadmin/businesses/${businessId}/status`,
     { method: 'PATCH' }
   );
@@ -198,14 +209,14 @@ export async function toggleSaasBusinessStatus(businessId: string) {
 }
 
 export async function createSaasBusiness(input: CreateSaasBusinessInput) {
-  return apiFetch<{ status: string; payload: SaasBusiness }>('/superadmin/businesses', {
+  return apiFetch<ApiResponse<SaasBusiness>>('/superadmin/businesses', {
     method: 'POST',
     body: input
   });
 }
 
 export async function stopImpersonating() {
-  return apiFetch<{ status: string; message: string; user: any; payload: any }>("/stop-impersonating", {
+  return apiFetch<SessionApiResponse<SessionIdentity>>("/stop-impersonating", {
     method: "POST"
   });
 }

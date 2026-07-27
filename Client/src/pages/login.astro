@@ -282,25 +282,7 @@
 
   <script>
     import { apiFetch } from "../services/api";
-
-    interface MembershipOption {
-      id: string;
-      businessName?: string;
-      role: string;
-    }
-
-    interface SessionUser {
-      role: string;
-      businessSlug?: string;
-    }
-
-    interface AuthResponse {
-      status: string;
-      message?: string;
-      payload?: SessionUser;
-      user?: SessionUser;
-      memberships?: MembershipOption[];
-    }
+    import type { AuthResponse, BusinessMembership, SessionIdentity } from "../types";
 
     const loginForm = document.getElementById("loginForm") as HTMLFormElement;
     const emailInput = document.getElementById("email") as HTMLInputElement;
@@ -339,7 +321,7 @@
           const user = response.payload || response.user;
           handleSuccessfulLogin(user);
         } else if (response && response.status === "needs_selection") {
-          showWorkspaceSelector(response.memberships ?? []);
+          showWorkspaceSelector(response.memberships);
         } else {
           showError(response?.message || "Ocurrió un error inesperado al intentar iniciar sesión.");
           setLoading(false);
@@ -356,7 +338,7 @@
       hideError();
     });
 
-    function showWorkspaceSelector(memberships: MembershipOption[]) {
+    function showWorkspaceSelector(memberships: BusinessMembership[]) {
       setLoading(false);
       loginForm.style.display = "none";
       workspaceSection.style.display = "flex";
@@ -401,7 +383,7 @@
       });
     }
 
-    function handleSuccessfulLogin(user: SessionUser | undefined) {
+    function handleSuccessfulLogin(user: SessionIdentity | undefined) {
       if (!user) {
         showError("No fue posible recuperar los datos de la sesión.");
         setLoading(false);
