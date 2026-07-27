@@ -1,8 +1,16 @@
 # ADR-001 — Autoridad multitenant e identidad progresiva del cliente
 
-**Estado:** Aprobado
-**Fecha:** 21 de julio de 2026
+**Estado:** Aprobado; enmienda de `superadmin` propuesta en 6.2.2-A
+**Fecha original:** 21 de julio de 2026
+**Última revisión:** 27 de julio de 2026
+**Base de contraste:** `master` después del PR #15 (`6326c11`)
 **Ámbito:** Autorización, identidad, clientes y multitenencia
+
+La decisión arquitectónica continúa vigente. El estado de implementación se
+determina mediante el código de `master`, no mediante la fecha original de este
+documento. En la base contrastada, `Membership` ya participa en login, selección
+de negocio y validaciones de profesionales, pero todavía no es la única autoridad
+tenant. El corte definitivo corresponde a 6.2.2.
 
 ## Contexto
 
@@ -18,6 +26,34 @@ Una coincidencia de correo o teléfono ayuda a mantener continuidad operativa, p
 - `User` representará identidad global y privilegios de plataforma, como `superadmin`.
 - `User.role` y `User.business` heredados no autorizarán operaciones tenant-scoped y se retirarán mediante una migración posterior.
 - El negocio activo de una sesión autenticada deberá corresponder a una membresía activa.
+- Toda operación tenant normal, sea de lectura o escritura, requerirá una
+  `Membership` activa con el rol suficiente. Las lecturas globales excepcionales
+  del plano de plataforma se rigen por una política separada y explícita.
+
+### Tratamiento de `superadmin`
+
+- `superadmin` es un privilegio de plataforma derivado exclusivamente de la
+  identidad global. No es un rol tenant y no debe almacenarse en `Membership`.
+- Una sesión global de `superadmin` autoriza rutas del plano de plataforma, como
+  `/superadmin/*`, sin requerir una membresía.
+- Toda inspección global de sólo lectura sobre datos de un tenant estará
+  denegada de forma predeterminada y sólo podrá habilitarse mediante una
+  política de plataforma explícita para esa lectura. Esa excepción no es una
+  operación tenant normal.
+- Abrir o seleccionar un negocio aporta únicamente contexto. La selección por
+  sí sola no concede ningún rol, incluido `admin`.
+- Abrir o seleccionar explícitamente un negocio no convierte al `superadmin` en
+  administrador de ese tenant ni autoriza mutaciones.
+- Para ejecutar una acción que requiera rol tenant, el actor debe utilizar:
+  - una membresía activa con el rol tenant requerido; o
+  - para la futura asistencia mutable, una sesión de soporte independiente,
+    acotada y auditable según 6.4.
+- La impersonación actual no constituye una excepción a esta regla. Mientras se
+  sustituye en 6.4, cualquier sujeto administrativo elegido para impersonación
+  deberá obtener su rol efectivo desde una membresía activa del negocio.
+- Una `Membership` existente con rol `superadmin` será tratada como conflicto de
+  datos porque `superadmin` no es un rol válido dentro de `Membership`. La
+  migración no la corregirá automáticamente.
 
 ### Identidad del cliente
 
@@ -60,6 +96,7 @@ Las comunicaciones necesarias para prestar el servicio se registrarán separadam
 4. Un perfil de un negocio no puede leerse o modificarse desde otro negocio.
 5. La fusión de identidades requiere posesión verificada del contacto y deja evidencia de auditoría.
 6. Las contraseñas aleatorias desconocidas por el cliente quedan prohibidas.
+7. El privilegio global `superadmin` no concede por sí solo un rol tenant.
 
 ## Consecuencias
 
@@ -88,6 +125,9 @@ Las comunicaciones necesarias para prestar el servicio se registrarán separadam
 
 - Usuario con membresía activa accede únicamente al negocio correspondiente.
 - Desactivar la membresía revoca el acceso sin modificar la identidad global.
+- Un `User.role` heredado no concede acceso tenant cuando falta una membresía activa.
+- Una membresía activa determina el rol tenant aunque el rol heredado del usuario sea distinto.
+- Un `superadmin` global no adquiere permisos administrativos tenant por seleccionar un negocio.
 - Contacto probable puede reservar, pero no consultar historial.
 - Verificar el contacto habilita únicamente los recursos autorizados para esa identidad.
 - Negocio A no consulta ni modifica el perfil tenant-scoped del negocio B.
@@ -97,5 +137,8 @@ Las comunicaciones necesarias para prestar el servicio se registrarán separadam
 
 - Esquema definitivo y nombres de los modelos persistidos.
 - Política de retención de contactos probables.
-- Estrategia de migración de `User.role`, `User.business`, turnos y bloqueos.
+- Ejecución y verificación productiva de la migración de `User.role` y
+  `User.business`, cuya estrategia está definida en
+  [`fase-6.2.2-migracion-autoridad-membership.md`](./fase-6.2.2-migracion-autoridad-membership.md).
+- Estrategia separada de migración de turnos y bloqueos para 6.2.3.
 - Arquitectura de dominios y cookies para frontend y backend.

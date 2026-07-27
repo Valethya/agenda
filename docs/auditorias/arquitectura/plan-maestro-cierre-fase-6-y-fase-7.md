@@ -1,15 +1,17 @@
-# Plan maestro de cierre de Fase 6 y preparación de Fase 7
+# Plan maestro de cierre de Fase 6 y estado de Fase 7
 
 **Proyecto:** ATMÓSFERA Agenda
-**Estado del documento:** Plan vigente con decisiones aprobadas de identidad cliente e integración headless
-**Fecha de revisión:** 21 de julio de 2026
+**Estado del documento:** Plan vigente reconciliado con el código y los PR fusionados
+**Fecha original:** 21 de julio de 2026
+**Última revisión:** 27 de julio de 2026
+**Base de contraste:** `master` después del PR #15 (`6326c11`)
 **Alcance:** Backend, multitenencia, seguridad, pagos, impersonación, frontend, pruebas y operación
 
 ## 1. Objetivo
 
-Este documento transforma la revisión integral del proyecto en un plan de cambios verificable. Su propósito es cerrar correctamente la Fase 6 antes de continuar con el refactor de frontend de la Fase 7.
+Este documento transforma la revisión integral del proyecto en un plan de cambios verificable. Su propósito actual es cerrar correctamente la Fase 6, conservando como evidencia los refactors de Fase 7 que ya fueron fusionados.
 
-La recomendación central es no avanzar directamente con la tarea 7.2. Primero se debe completar una etapa de endurecimiento 6.1–6.4 para corregir fronteras de seguridad, autorización y aislamiento multitenant que un refactor del frontend no resolvería.
+Aunque varias tareas de Fase 7 se adelantaron y quedaron verificadas entre los PR #9 y #15, la prioridad vuelve al endurecimiento 6.2–6.4. El responsive 7.8 queda aplazado por decisión de producto hasta estabilizar arquitectura, multitenencia y datos.
 
 ## 2. Principios de ejecución
 
@@ -35,8 +37,21 @@ No se considerará terminada una tarea solamente porque el código compile. Cada
 | Cerrado | Pruebas y CI | La etapa 6.1 dejó 95 pruebas de backend, checks de frontend, build y escaneo de secretos como barreras obligatorias de `master`. |
 | P1 | Sesiones y CSRF | Las cookies cross-site requieren protección explícita para operaciones mutables. |
 | P1 | Dependencias | La auditoría encontró vulnerabilidades conocidas en dependencias directas y transitivas. |
-| Cerrado | Tipado frontend | `astro check` finaliza con 0 errores, 0 advertencias y 0 sugerencias desde el cierre de 7.1. |
-| P2 | Refactor frontend | Es necesario, pero debe realizarse después de estabilizar contratos y límites de autorización. |
+| Cerrado | Tipado frontend | El PR #15 cerró 7.10 con TypeScript estricto, 0 usos productivos de `any`, checks y build en CI. |
+| Aplazado | Responsive 7.8 | Se retomará después de estabilizar arquitectura, multitenencia y datos. |
+
+### Estado consolidado después del PR #15
+
+- 6.1 está cerrada y protegida por CI.
+- 6.2.1 está cerrada mediante los PR #5, #6 y #7.
+- 6.2.2 está en preparación; `Membership` participa en varios flujos, pero aún
+  compite con roles heredados y copias de sesión.
+- 7.7 está cerrada mediante el PR #13.
+- 7.9 está cerrada mediante el PR #14.
+- 7.10 está cerrada mediante el PR #15.
+- 7.1–7.6 también están fusionadas según el registro de cada etapa.
+- 7.8 está aplazada por decisión de producto.
+- 6.2.2 es el siguiente bloque crítico.
 
 ## 4. Etapa 6.1 — Base verificable
 
@@ -142,6 +157,9 @@ Los fallbacks silenciosos pueden iniciar el servidor con una configuración inse
 
 ### 6.2.1 Eliminar la selección implícita del primer negocio
 
+**Estado:** cerrada. Contrato fusionado mediante el PR #5; coherencia de reserva
+y disponibilidad mediante el PR #6; smoke productivo documentado en el PR #7.
+
 **Cambio necesario**
 
 - Requerir un `businessId` o slug válido en toda ruta pública dependiente de un negocio.
@@ -160,12 +178,23 @@ Seleccionar el primer negocio activo convierte una petición incompleta en una o
 
 ### 6.2.2 Hacer que `Membership` sea la autoridad de acceso
 
+**Estado:** preparación documental sobre `master` después del PR #15. La
+estrategia de datos y corte se define en
+[`fase-6.2.2-migracion-autoridad-membership.md`](./fase-6.2.2-migracion-autoridad-membership.md).
+No se han modificado datos productivos.
+
 **Cambio necesario**
 
 - Utilizar la membresía activa para resolver rol y negocio.
 - Reservar el rol global del usuario para privilegios de plataforma, como `superadmin`.
 - Dejar de autorizar mediante `User.business` y roles heredados.
 - Planificar una migración antes de eliminar campos antiguos.
+- Revalidar la membresía activa al seleccionar tenant y antes de autorizar una
+  operación, sin confiar en el rol copiado en la sesión.
+- Mantener `superadmin` como privilegio global del plano de plataforma. La
+  selección de un negocio sólo aporta contexto y no concede automáticamente un
+  rol tenant ni autoriza mutaciones. Cualquier inspección global de sólo lectura
+  requiere una política de plataforma explícita y está denegada por defecto.
 
 **Por qué es necesario**
 
@@ -175,6 +204,9 @@ Dos fuentes de autoridad pueden entregar resultados diferentes para la misma per
 
 - Toda autorización tenant-scoped obtiene rol y negocio desde una membresía activa.
 - Desactivar una membresía revoca el acceso sin modificar al usuario global.
+- `User.role = admin|worker` sin una membresía activa no concede acceso.
+- Un `superadmin` necesita una membresía activa o una futura sesión de soporte
+  acotada para ejecutar acciones que requieran rol tenant.
 
 ### 6.2.3 Añadir negocio a turnos y bloqueos
 
@@ -563,26 +595,28 @@ El servidor puede aceptar solicitudes antes de disponer de base de datos y la di
 - El servicio no anuncia disponibilidad hasta completar sus dependencias críticas.
 - La terminación deja de aceptar tráfico y cierra servidor, sockets, sesiones y MongoDB ordenadamente.
 
-## 9. Fase 7 — Refactor frontend revisado
+## 9. Fase 7 — Refactor frontend reconciliado
 
-La tarea 7.1 quedó implementada y fusionada mediante el PR #1. Su registro se encuentra en [`fase-7.1-api-client-unificado.md`](./fase-7.1-api-client-unificado.md). El cliente canónico todavía debe eliminar el slug predeterminado y adaptarse a las decisiones multitenant cuando los contratos estén estabilizados.
+La tarea 7.1 quedó implementada y fusionada mediante el PR #1. Su registro se encuentra en [`fase-7.1-api-client-unificado.md`](./fase-7.1-api-client-unificado.md). El slug predeterminado se retiró posteriormente en 6.2.1 mediante el PR #5.
 
 ### Orden recomendado
 
-1. **7.1 Unificar API client:** completado; ajustar después de estabilizar contratos.
-2. **7.10 Completar tipado TypeScript:** base cerrada con `astro check` limpio; mantener como barrera durante los refactors.
+1. **7.1 Unificar API client:** completado mediante el PR #1 y ajustado para tenant explícito en el PR #5.
+2. **7.10 Completar tipado TypeScript:** completado mediante el PR #15; TypeScript estricto es barrera de CI.
 3. **7.2 Dividir CalendarContext:** completado mediante el PR #9.
 4. **7.3 Dividir SaasBusinessesView:** completado mediante el PR #10.
 5. **7.4 Extraer utilidades duplicadas:** completado mediante el PR #11.
 6. **7.5 Extraer paleta de colores de avatar:** completado dentro del PR #11.
 7. **7.6 Unificar CalendarDayView y CalendarWeekView:** completado mediante el PR #12.
-8. **7.7 Extraer SVG de Sidebar:** implementado en esta rama; pendiente de fusión.
-9. **7.9 Eliminar correos, slugs y reglas hardcodeadas.**
-10. **7.8 Implementar diseño responsive.**
+8. **7.7 Extraer SVG de Sidebar:** completado mediante el PR #13.
+9. **7.9 Eliminar correos, slugs y reglas hardcodeadas:** completado mediante el PR #14.
+10. **7.8 Implementar diseño responsive:** aplazado por decisión de producto hasta cerrar los bloques críticos de arquitectura, multitenencia y datos.
 
 ### 7.10 Completar tipado antes de dividir componentes
 
-**Estado:** base completada durante 7.1 y verificada nuevamente en 6.1 con 0 errores, 0 advertencias y 0 sugerencias.
+**Estado:** completada mediante el PR #15 con configuración estricta versionada,
+0 usos productivos de `any`, pruebas frontend, `astro check`, `tsc --noEmit` y
+build aprobados.
 
 **Cambio continuo necesario**
 
@@ -635,6 +669,9 @@ El componente mezcla demasiadas responsabilidades y contiene reglas comerciales 
 Los datos de demostración incorporados en la lógica productiva generan resultados incorrectos para nuevos negocios y dificultan el crecimiento SaaS.
 
 ### 7.8 Responsive como cierre
+
+**Estado:** aplazado por decisión de producto. No forma parte del siguiente
+bloque crítico.
 
 **Cambio necesario**
 
@@ -692,18 +729,30 @@ La Fase 6 podrá declararse terminada cuando se cumplan todas estas condiciones:
 4. Arquitectura de dominios de frontend y backend, necesaria para cookies y CSRF.
 5. Alcance permitido del modo soporte: sólo lectura o escritura limitada.
 6. Política de retención y contenido de auditoría.
-7. Estrategia de migración para turnos, bloqueos y campos heredados de usuario.
-8. Política de compatibilidad y actualización de dependencias.
+7. Estrategia de migración de campos heredados de usuario para 6.2.2.
+   **Propuesta, pendiente de aprobación y no ejecutada:** inventario dry-run, respaldo, aplicación
+   idempotente, verificación y rollback definidos en
+   [`fase-6.2.2-migracion-autoridad-membership.md`](./fase-6.2.2-migracion-autoridad-membership.md).
+8. Estrategia de migración para turnos y bloqueos de 6.2.3.
+9. Política de compatibilidad y actualización de dependencias.
 
 ## 13. Siguiente bloque de trabajo recomendado
 
-La red de seguridad inicial quedó cerrada en 6.1. El siguiente bloque debe preparar 6.2 sin modificar todavía datos productivos:
+6.1 y 6.2.1 están cerradas. El siguiente bloque crítico es preparar 6.2.2 y,
+únicamente tras cumplir sus guardas operativas, ejecutarla sin
+mezclar todavía 6.2.3, 6.2.4 ni el responsive:
 
-1. aprobar el ADR de autoridad multitenant e identidad progresiva;
-2. aprobar el ADR del contrato headless y gestión pública de citas;
-3. inventariar los usos actuales de `User.role`, `User.business`, selección del primer negocio y consultas por ID sin ownership;
-4. añadir pruebas negativas específicas para solicitudes sin negocio, slugs inválidos y recursos pertenecientes a otro tenant;
-5. documentar y aprobar la migración de turnos, bloqueos y campos heredados;
-6. implementar 6.2.1 en una rama acotada, sin mezclar todavía la migración del modelo.
+1. aprobar el tratamiento de `superadmin` aclarado en el ADR-001;
+2. implementar el inventario dry-run de usuarios, negocios y membresías;
+3. agregar pruebas negativas del migrador y de revocación de autoridad;
+4. obtener y verificar un respaldo restaurable;
+5. ejecutar el migrador primero sobre una copia de producción;
+6. revisar manualmente todos los conflictos;
+7. aplicar el backfill idempotente en producción únicamente con autorización
+   explícita y conservar los campos heredados;
+8. verificar el resultado antes de desplegar el corte de autoridad HTTP;
+9. cerrar lecturas heredadas y WebSocket en PR separados;
+10. mantener `User.role` y `User.business` durante la ventana de rollback y
+    retirarlos sólo en una migración posterior.
 
-Este orden convierte las decisiones aprobadas en contratos verificables antes de cambiar autorización o datos persistidos.
+El diseño documental no autoriza por sí mismo ninguna escritura productiva.
