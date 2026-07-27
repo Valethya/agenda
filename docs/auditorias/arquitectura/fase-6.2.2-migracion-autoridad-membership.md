@@ -2,12 +2,12 @@
 
 **Proyecto:** ATMÓSFERA Agenda
 
-**Estado:** Propuesta documental para revisión; sin implementación ni ejecución
-productiva
+**Estado:** Contrato aprobado mediante el PR #16; auditor read-only implementado
+y verificado mediante el PR #17, sin ejecución operativa ni productiva
 
 **Fecha:** 27 de julio de 2026
 
-**Base de contraste:** `master` después del PR #15 (`6326c11`)
+**Base de contraste:** `master` después del PR #16 (`5ff906b`)
 
 **Alcance:** Autoridad tenant de administradores y trabajadores, sesiones,
 WebSocket y campos heredados de `User`
@@ -32,7 +32,7 @@ contar con:
 Este documento define el contrato de la migración. No autoriza su ejecución
 contra producción.
 
-## 2. Estado real después del PR #15
+## 2. Estado real después del PR #16
 
 ### Capacidades que ya usan `Membership`
 
@@ -127,8 +127,8 @@ se sustituye en 6.4, el sujeto impersonado debe obtener su autoridad de una
 
 ### Comportamiento
 
-El futuro comando deberá usar `audit` como modo predeterminado. Sin una opción
-explícita de ejecución:
+El comando implementado en el PR #17 usa `audit` como único modo disponible.
+Sin una opción explícita de ejecución:
 
 - no crea, modifica ni elimina documentos;
 - no crea índices;
@@ -150,7 +150,7 @@ exista en la base objetivo:
 El auditor no crea ni repara índices. `safeToApply` será `false` si el índice
 único falta, tiene otra clave u opción, o existen duplicados.
 
-Interfaz prevista:
+Interfaz implementada:
 
 ```bash
 npm run migration:membership-authority -- \
@@ -173,8 +173,11 @@ teléfonos.
 | `missingBusinessReference` | `User.business` no existe o es inválido; bloquea `apply`. |
 | `orphanMembership` | Falta usuario o negocio referenciado; bloquea `apply`. |
 | `duplicateMembership` | Más de una relación para el mismo par; bloquea `apply`. |
+| `snapshotInconsistency` | La agregación independiente de duplicados y la lectura de Memberships no coinciden; bloquea `apply` y exige repetir el audit. |
 | `missingUniqueMembershipIndex` | No existe físicamente el índice único exacto `{ user: 1, business: 1 }`; bloquea `apply`. |
 | `platformRoleInMembership` | Membership con rol `superadmin`; bloquea `apply`. |
+| `unknownMembershipRole` | Membership con un rol distinto de `admin` o `worker`; bloquea `apply`. |
+| `membershipStateConflict` | Membership existente para el par y rol esperados, pero sin estado activo explícito; bloquea `apply`. |
 | `ownerWithoutAdminMembership` | `Business.owner` no posee Membership admin activa. Sólo es elegible si también existe evidencia heredada exacta y no contradictoria; cualquier otro caso bloquea `apply` y exige decisión manual. |
 | `inactiveIdentity` | Usuario inactivo con relación heredada; no genera candidata automática, bloquea `apply` y exige decisión manual. |
 | `legacyClientScope` | `User.role === "user"` con negocio heredado; se excluye y se reserva para 6.2.5. |
@@ -637,18 +640,19 @@ Después de una ventana de observación y fuera del corte inicial:
 
 ## 12. Estado de la preparación
 
-Este PR propone, para revisión, el tratamiento de `superadmin`, las categorías
-de audit, las reglas de backfill, el respaldo, la idempotencia, la verificación,
-el rollback y la matriz de pruebas negativas. Su presencia en este documento no
-significa que estén implementados ni verificados.
+El PR #16 incorporó el tratamiento de `superadmin`, las categorías de audit,
+las reglas de backfill, el respaldo, la idempotencia, la verificación, el
+rollback y la matriz de pruebas negativas. El PR #17 implementa y verifica
+solamente el auditor read-only de 6.2.2-B. No implementa modos mutables ni
+acredita ninguna ejecución operativa o productiva.
 
-Condiciones operativas pendientes:
+Estado de condiciones:
 
-- [ ] Implementación del auditor.
-- [ ] Comprobación automatizada del índice único físico y de duplicados.
+- [x] Implementación del auditor read-only.
+- [x] Comprobación automatizada del índice único físico y de duplicados.
 - [ ] Remediación separada del índice físico, sólo si el audit la exige.
-- [ ] Implementación de checksum sobre payload canónico.
-- [ ] Pruebas negativas implementadas y verdes.
+- [x] Implementación de checksum sobre payload canónico.
+- [x] Pruebas negativas del alcance 6.2.2-B implementadas y verdes.
 - [ ] Respaldo productivo verificado.
 - [ ] Migración ensayada sobre una copia.
 - [ ] Autorización explícita para cualquier escritura productiva.

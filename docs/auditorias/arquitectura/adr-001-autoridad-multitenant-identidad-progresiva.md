@@ -3,7 +3,7 @@
 **Estado:** Aprobado; enmienda de `superadmin` incorporada mediante el PR #16
 **Fecha original:** 21 de julio de 2026
 **Última revisión:** 27 de julio de 2026
-**Base de contraste:** `master` después del PR #15 (`6326c11`)
+**Base de contraste:** `master` después del PR #16 (`5ff906b`)
 **Ámbito:** Autorización, identidad, clientes y multitenencia
 
 La decisión arquitectónica continúa vigente. El estado de implementación se

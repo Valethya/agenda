@@ -3,23 +3,24 @@
 **Proyecto:** ATMÓSFERA Agenda
 
 **Estado:** Registro histórico posterior al PR #3, reconciliado con `master`;
-6.2.1 implementada y cerrada, 6.2.2 en preparación
+6.2.1 implementada y cerrada, 6.2.2-B con auditor read-only implementado
 
 **Fecha original:** 21 de julio de 2026
 
 **Base histórica revisada:** `master` después del merge del PR #3 (`377f54d`)
 
-**Último contraste:** 27 de julio de 2026, `master` después del PR #15
-(`6326c11`)
+**Último contraste:** 27 de julio de 2026, `master` después del PR #16
+(`5ff906b`)
 
 Este documento es un registro histórico del inventario realizado sobre el
 estado posterior al PR #3. Las descripciones detalladas conservan aquellos
 hallazgos y no deben leerse como una fotografía del código actual. En particular,
 6.2.1 ya fue implementada y cerrada mediante los PR #5, #6 y #7. La tabla
 siguiente establece el estado vigente después de contrastar el registro con el
-código y los PR fusionados.
+código de `master`, los PR fusionados y la implementación verificada del PR
+#17.
 
-## 0. Reconciliación con `master` después del PR #15
+## 0. Reconciliación con `master` después del PR #16
 
 | Hallazgo | Estado vigente | Evidencia o etapa |
 |---|---|---|
@@ -313,8 +314,8 @@ el PR documental #7.
 
 ### Trabajos posteriores
 
-- 6.2.2: **en preparación**; reemplazar autoridad heredada por `Membership`
-  según
+- 6.2.2: **en ejecución por etapas**; el PR #16 cerró la preparación documental
+  y el PR #17 implementa y verifica el inventario dry-run read-only según
   [`fase-6.2.2-migracion-autoridad-membership.md`](./fase-6.2.2-migracion-autoridad-membership.md).
 - 6.2.3: migrar turnos y bloqueos para incluir negocio.
 - 6.2.4: aplicar `{ _id, business }` en repositorios y servicios.
@@ -331,11 +332,16 @@ el PR documental #7.
 - [x] Política de negocio inactivo definida: `404` público, `403` para miembro autenticado.
 - [x] 6.2.1-A fusionada mediante el PR #5.
 - [x] 6.2.1-B fusionada mediante el PR #6 y verificada mediante el PR #7.
-- [ ] Estrategia de migración de campos heredados de usuario aprobada para
-      6.2.2. Existe una propuesta documental, pero todavía no está implementada,
-      ensayada ni verificada.
+- [x] Estrategia de migración de campos heredados de usuario aprobada para
+      6.2.2 mediante el PR #16.
+- [x] Inventario dry-run read-only implementado y verificado mediante el PR
+      #17.
+- [ ] Inventario ejecutado y revisado en el entorno operativo autorizado.
+- [ ] Migración mutable implementada, ensayada y verificada.
 - [ ] Estrategia de migración de turnos y bloqueos aprobada.
 
-6.2.1 se encuentra cerrada. El siguiente bloque es preparar 6.2.2 mediante
-inventario dry-run, respaldo verificable y migración idempotente antes del corte
-de autoridad. Los datos productivos permanecen sin cambios.
+6.2.1 y la preparación 6.2.2-A se encuentran cerradas. Tras el inventario
+read-only de 6.2.2-B, el siguiente hito es ejecutarlo y revisarlo únicamente en
+el entorno operativo autorizado. El respaldo verificable, la migración
+idempotente y el corte de autoridad permanecen pendientes. Los datos productivos
+siguen sin cambios.
