@@ -140,5 +140,6 @@ Las comunicaciones necesarias para prestar el servicio se registrarán separadam
 - Ejecución y verificación productiva de la migración de `User.role` y
   `User.business`, cuya estrategia está definida en
   [`fase-6.2.2-migracion-autoridad-membership.md`](./fase-6.2.2-migracion-autoridad-membership.md).
+  El auditor read-only del PR #17 aún no se ha ejecutado contra producción.
 - Estrategia separada de migración de turnos y bloqueos para 6.2.3.
 - Arquitectura de dominios y cookies para frontend y backend.

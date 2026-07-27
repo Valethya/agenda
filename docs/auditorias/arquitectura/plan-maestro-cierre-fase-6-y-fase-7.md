@@ -187,6 +187,11 @@ y corte se define en
 No se han modificado datos productivos ni se ha ejecutado el auditor contra
 ellos.
 
+El auditor exige las tres colecciones físicas, confirma el entorno, registra
+procedencia sanitizada y obtiene una vista coherente mediante sesión snapshot o
+doble lectura completa bloqueante. Estas guardas no sustituyen respaldo,
+remediación, ensayo ni autorización operativa.
+
 **Cambio necesario**
 
 - Utilizar la membresía activa para resolver rol y negocio.
@@ -747,7 +752,8 @@ La Fase 6 podrá declararse terminada cuando se cumplan todas estas condiciones:
 implementa el inventario dry-run de 6.2.2-B. El siguiente hito es obtener
 evidencia operativa segura sin mezclar todavía 6.2.3, 6.2.4 ni el responsive:
 
-1. ejecutar el inventario read-only únicamente contra el entorno autorizado;
+1. ejecutar el inventario read-only únicamente contra el entorno autorizado,
+   confirmando `--environment` y revisando su procedencia;
 2. revisar el informe y resolver manualmente todos los conflictos;
 3. si el índice físico falta o es incorrecto, preparar el PR condicional
    6.2.2-BI después de resolver duplicados y verificar un respaldo restaurable;

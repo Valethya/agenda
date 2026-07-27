@@ -133,31 +133,44 @@ Sin una opción explícita de ejecución:
 - no crea, modifica ni elimina documentos;
 - no crea índices;
 - no actualiza timestamps;
-- produce un informe determinista;
+- produce un payload canónico determinista y separa los metadatos operativos;
 - termina con código distinto de cero cuando encuentra bloqueos.
 
-Antes de calcular candidatas, `audit` deberá comprobar la colección física de
-`Membership`; la declaración del índice en el schema no demuestra que el índice
-exista en la base objetivo:
+Antes de calcular candidatas, `audit` comprueba mediante `listCollections` que
+existan físicamente `users`, `businesses` y `memberships`. Una colección ausente
+no se representa como un arreglo vacío válido: queda como fuente ausente,
+genera `missingRequiredCollection` y fuerza `safeToApply: false`. Una colección
+existente y legítimamente vacía conserva un arreglo vacío.
 
-1. consultar los índices reales de la colección;
-2. exigir un índice con clave exacta `{ user: 1, business: 1 }` y
+Después comprueba la colección física de `Membership`; la declaración del índice
+en el schema no demuestra que el índice exista en la base objetivo:
+
+1. registrar como precondición las colecciones esperadas, observadas y ausentes;
+2. consultar los índices reales de la colección;
+3. exigir un índice con clave exacta `{ user: 1, business: 1 }` y
    `unique: true`;
-3. ejecutar una agregación independiente por `{ user, business }` para detectar
+4. ejecutar una agregación independiente por `{ user, business }` para detectar
    cualquier par con conteo mayor que uno;
-4. registrar ambas comprobaciones como precondiciones del plan.
+5. registrar las comprobaciones como precondiciones del plan.
 
 El auditor no crea ni repara índices. `safeToApply` será `false` si el índice
-único falta, tiene otra clave u opción, o existen duplicados.
+único falta, tiene otra clave u opción, existen duplicados o falta cualquiera de
+las tres colecciones requeridas.
 
 Interfaz implementada:
 
 ```bash
 npm run migration:membership-authority -- \
   --mode=audit \
+  --environment=production \
   --database=agenda \
   --report=./artifacts/membership-authority-audit.json
 ```
+
+`--environment` es obligatorio antes de conectar y sólo acepta `development`,
+`test`, `staging` o `production`. Confirmar el entorno no reemplaza la
+comprobación posterior de que el nombre real de la base coincide exactamente
+con `--database`.
 
 El informe no se versionará si contiene identificadores o información de
 producción. Por defecto utilizará IDs y contadores; no incluirá correos ni
@@ -173,7 +186,8 @@ teléfonos.
 | `missingBusinessReference` | `User.business` no existe o es inválido; bloquea `apply`. |
 | `orphanMembership` | Falta usuario o negocio referenciado; bloquea `apply`. |
 | `duplicateMembership` | Más de una relación para el mismo par; bloquea `apply`. |
-| `snapshotInconsistency` | La agregación independiente de duplicados y la lectura de Memberships no coinciden; bloquea `apply` y exige repetir el audit. |
+| `missingRequiredCollection` | Falta físicamente `users`, `businesses` o `memberships`; se emite un hallazgo por colección, bloquea el informe y exige revisar la base o restauración. |
+| `snapshotInconsistency` | Dos lecturas completas difieren en cualquier dato relevante de autoridad, colecciones, índices o duplicados, o la agregación y la lectura de Memberships no coinciden; bloquea y exige repetir el audit. |
 | `missingUniqueMembershipIndex` | No existe físicamente el índice único exacto `{ user: 1, business: 1 }`; bloquea `apply`. |
 | `platformRoleInMembership` | Membership con rol `superadmin`; bloquea `apply`. |
 | `unknownMembershipRole` | Membership con un rol distinto de `admin` o `worker`; bloquea `apply`. |
@@ -192,8 +206,11 @@ El informe tendrá dos bloques separados:
 
 `canonicalPayload` contendrá únicamente:
 
-- versión del esquema canónico;
+- versión del esquema canónico, incrementada a `2` al incorporar colecciones
+  físicas y coherencia de lectura;
 - nombre exacto de la base;
+- colecciones físicas esperadas, observadas y ausentes;
+- precondición de coherencia con las huellas de las fuentes comparadas;
 - precondición del índice `{ user: 1, business: 1, unique: true }`;
 - conteos de usuarios, negocios y membresías;
 - fuentes relevantes para decidir autoridad:
@@ -216,6 +233,19 @@ código, versión de aplicación, duración, ruta de informe, host, `runId` u ot
 metadatos volátiles. Si resultan útiles para diagnóstico, esos valores vivirán
 exclusivamente en `metadata`.
 
+`metadata` contiene exclusivamente procedencia operativa fuera del checksum:
+
+- `environment`, confirmado mediante `--environment`;
+- `mongoTargetFingerprint`, huella SHA-256 de protocolo, hosts y base
+  sanitizados, sin URI, usuario, contraseña ni query string;
+- `codeSha`, priorizando `RAILWAY_GIT_COMMIT_SHA`, después `GITHUB_SHA`, después
+  `--code-sha` o la variable explícita del auditor, y finalmente `null`;
+- `auditorVersion`;
+- `readStrategy`, con valor `snapshot` o `double-read`;
+- `generatedAt`.
+
+Ni la URI MongoDB ni sus credenciales se almacenan o imprimen.
+
 La canonicalización será exacta:
 
 1. convertir cada ObjectId a su representación hexadecimal minúscula;
@@ -225,6 +255,29 @@ La canonicalización será exacta:
 5. ordenar conflictos por `category`, `user`, `business` y `membership`;
 6. serializar como JSON UTF-8 sin espacios;
 7. calcular `SHA-256` sobre esos bytes.
+
+### Coherencia interna del inventario
+
+Cuando la topología lo admite, el auditor abre una sesión de sólo lectura con
+`readConcern: snapshot`, pasa esa misma sesión a `listCollections`, las tres
+lecturas `find`, `listIndexes` y la agregación de duplicados, y siempre finaliza
+la sesión.
+
+Si la topología rechaza lecturas snapshot, el auditor ejecuta dos lecturas
+completas secuenciales. Calcula una huella canónica de cada lectura que cubre:
+
+- IDs, rol, negocio heredado y estado de `User`;
+- ID, propietario y estado de `Business`;
+- ID, usuario, negocio, rol y estado de `Membership`;
+- colecciones físicas observadas;
+- definición física relevante de índices;
+- pares duplicados.
+
+Sólo acepta el inventario cuando ambas huellas son idénticas. Cualquier cambio,
+incluidas inserciones o eliminaciones sin duplicados, genera
+`snapshotInconsistency`, fuerza `safeToApply: false` y devuelve un código de
+salida distinto de cero. La comparación exclusiva de duplicados no se considera
+suficiente.
 
 ### Concurrencia entre `audit` y `apply`
 
@@ -644,12 +697,16 @@ El PR #16 incorporó el tratamiento de `superadmin`, las categorías de audit,
 las reglas de backfill, el respaldo, la idempotencia, la verificación, el
 rollback y la matriz de pruebas negativas. El PR #17 implementa y verifica
 solamente el auditor read-only de 6.2.2-B. No implementa modos mutables ni
-acredita ninguna ejecución operativa o productiva.
+acredita ninguna ejecución operativa o productiva. El audit no se ha ejecutado
+contra producción.
 
 Estado de condiciones:
 
 - [x] Implementación del auditor read-only.
 - [x] Comprobación automatizada del índice único físico y de duplicados.
+- [x] Comprobación de colecciones físicas requeridas.
+- [x] Lectura snapshot con fallback bloqueante de doble lectura.
+- [x] Procedencia operativa sanitizada fuera del checksum.
 - [ ] Remediación separada del índice físico, sólo si el audit la exige.
 - [x] Implementación de checksum sobre payload canónico.
 - [x] Pruebas negativas del alcance 6.2.2-B implementadas y verdes.
