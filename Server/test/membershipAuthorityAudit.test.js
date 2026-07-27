@@ -2,7 +2,11 @@ import "./setup.js";
 
 import test from "node:test";
 import assert from "node:assert/strict";
+import { mkdtemp, rm } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import mongoose from "mongoose";
+import { TEST_DB_URI } from "./setup.js";
 import { connectDB } from "../src/db/db.js";
 import User from "../src/db/models/user.model.js";
 import Business from "../src/db/models/business.model.js";
@@ -10,14 +14,61 @@ import Membership from "../src/db/models/membership.model.js";
 import { createHash } from "../src/utils/password.js";
 import { cleanTestData } from "./fixtures.js";
 import {
-  buildMembershipAuthorityReport,
-  readMembershipAuthoritySnapshot,
-} from "../scripts/migrations/membership-authority-audit.js";
+  runMembershipAuthorityAudit,
+} from "../scripts/migrations/membership-authority.js";
+
+const MUTATING_COMMANDS = new Set([
+  "insert",
+  "update",
+  "delete",
+  "findandmodify",
+  "bulkwrite",
+  "create",
+  "drop",
+  "createindexes",
+  "dropindexes",
+  "renamecollection",
+  "collmod",
+]);
+
+const snapshotDatabase = async (db) => {
+  const collectionNames = (
+    await db.listCollections({}, { nameOnly: true }).toArray()
+  )
+    .map((collection) => collection.name)
+    .sort();
+  const collections = {};
+
+  for (const collectionName of collectionNames) {
+    const collection = db.collection(collectionName);
+    collections[collectionName] = {
+      documents: await collection.find({}).sort({ _id: 1 }).toArray(),
+      indexes: (await collection.listIndexes().toArray()).sort((left, right) =>
+        String(left.name).localeCompare(String(right.name)),
+      ),
+    };
+  }
+
+  return {
+    collectionNames,
+    collections,
+  };
+};
 
 await connectDB();
 
-test("audit Membership lee colecciones e índices sin modificar la base", async () => {
+test("entrada pública del audit no muta documentos, colecciones ni índices", async () => {
   await cleanTestData();
+  const temporaryDirectory = await mkdtemp(
+    path.join(os.tmpdir(), "membership-authority-e2e-"),
+  );
+  const reportPath = path.join(temporaryDirectory, "audit.json");
+  const auditConnection = await mongoose
+    .createConnection(TEST_DB_URI, {
+      autoIndex: false,
+      monitorCommands: true,
+    })
+    .asPromise();
 
   try {
     await Membership.init();
@@ -45,69 +96,78 @@ test("audit Membership lee colecciones e índices sin modificar la base", async 
       isActive: true,
     });
 
-    const collections = ["users", "businesses", "memberships"];
-    const before = Object.fromEntries(
-      await Promise.all(
-        collections.map(async (name) => [
-          name,
-          await mongoose.connection.db
-            .collection(name)
-            .find({})
-            .sort({ _id: 1 })
-            .toArray(),
-        ]),
-      ),
+    const db = auditConnection.db;
+    assert.match(db.databaseName, /_test$/u);
+    const before = await snapshotDatabase(db);
+    const observedCommands = [];
+    const commandStarted = (event) => {
+      observedCommands.push(event.commandName);
+    };
+    auditConnection.getClient().on("commandStarted", commandStarted);
+
+    let result;
+    try {
+      result = await runMembershipAuthorityAudit({
+        mongoUri: TEST_DB_URI,
+        environment: "test",
+        database: db.databaseName,
+        report: reportPath,
+        explicitCodeSha: "a".repeat(40),
+        railwayGitCommitSha: "",
+        githubSha: "",
+        connect: async (_uri, options) => {
+          assert.deepEqual(options, { autoIndex: false });
+        },
+        disconnect: async () => {},
+        connection: auditConnection,
+        startSession: auditConnection.startSession.bind(auditConnection),
+        now: () => new Date("2026-07-27T00:00:00.000Z"),
+      });
+    } finally {
+      auditConnection.getClient().off("commandStarted", commandStarted);
+    }
+
+    const after = await snapshotDatabase(db);
+    const mutatingCommands = observedCommands.filter((commandName) =>
+      MUTATING_COMMANDS.has(commandName.toLowerCase()),
     );
+    const serializedReport = JSON.stringify(result.report);
 
-    const { snapshot, readStrategy } =
-      await readMembershipAuthoritySnapshot(mongoose.connection.db);
-    const report = buildMembershipAuthorityReport(snapshot, {
-      environment: "test",
-      mongoTargetFingerprint: "integration-test-fingerprint",
-      generatedAt: "2026-07-27T00:00:00.000Z",
-      codeSha: "integration-test",
-      auditorVersion: "integration-test",
-      readStrategy,
-    });
-
-    const after = Object.fromEntries(
-      await Promise.all(
-        collections.map(async (name) => [
-          name,
-          await mongoose.connection.db
-            .collection(name)
-            .find({})
-            .sort({ _id: 1 })
-            .toArray(),
-        ]),
-      ),
-    );
-
-    assert.deepEqual(after, before);
+    assert.deepEqual(after.collectionNames, before.collectionNames);
+    assert.deepEqual(after.collections, before.collections);
+    assert.deepEqual(mutatingCommands, []);
+    assert.equal(observedCommands.includes("listCollections"), true);
+    assert.equal(observedCommands.includes("find"), true);
+    assert.equal(observedCommands.includes("listIndexes"), true);
+    assert.equal(observedCommands.includes("aggregate"), true);
+    assert.equal(result.report.metadata.environment, "test");
+    assert.equal(result.report.metadata.codeShaSource, "explicit");
     assert.equal(
-      report.canonicalPayload.preconditions.membershipUniqueIndex.exactUniqueExists,
-      true,
+      serializedReport.includes(user._id.toHexString()),
+      false,
     );
-    assert.equal(report.canonicalPayload.safeToApply, true);
-    assert.equal(report.canonicalPayload.counts.candidates, 0);
-    assert.equal(report.canonicalPayload.categoryCounts.alreadyConsistent, 1);
-    assert.deepEqual(
-      report.canonicalPayload.preconditions.collections.expected,
-      ["businesses", "memberships", "users"],
-    );
-    assert.deepEqual(
-      report.canonicalPayload.preconditions.collections.missing,
-      [],
-    );
-    assert.equal(
-      report.canonicalPayload.preconditions.snapshotConsistency.consistent,
-      true,
-    );
-    assert.equal(["snapshot", "double-read"].includes(readStrategy), true);
-    assert.equal(JSON.stringify(report).includes("audit-admin@example.com"), false);
-    assert.equal(JSON.stringify(report.canonicalPayload).includes("updatedAt"), false);
+    assert.equal(serializedReport.includes("audit-admin@example.com"), false);
+
+    if (result.report.metadata.readStrategy === "double-read") {
+      assert.equal(result.exitCode, 2);
+      assert.equal(result.report.canonicalPayload.safeToApply, false);
+      assert.equal(
+        result.report.canonicalPayload.preconditions.snapshotConsistency
+          .temporalSnapshotGuaranteed,
+        false,
+      );
+    } else {
+      assert.equal(result.report.metadata.readStrategy, "snapshot");
+      assert.equal(
+        result.report.canonicalPayload.preconditions.snapshotConsistency
+          .temporalSnapshotGuaranteed,
+        true,
+      );
+    }
   } finally {
     await cleanTestData();
+    await auditConnection.close();
     await mongoose.disconnect();
+    await rm(temporaryDirectory, { recursive: true, force: true });
   }
 });
