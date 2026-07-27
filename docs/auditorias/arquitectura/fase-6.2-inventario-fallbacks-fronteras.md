@@ -2,11 +2,57 @@
 
 **Proyecto:** ATMÓSFERA Agenda
 
-**Estado:** Preparación técnica; sin cambios de comportamiento
+**Estado:** Registro histórico posterior al PR #3, reconciliado con `master`;
+6.2.1 implementada y cerrada, 6.2.2 en preparación
 
-**Fecha:** 21 de julio de 2026
+**Fecha original:** 21 de julio de 2026
 
-**Base revisada:** `master` después del merge del PR #3 (`377f54d`)
+**Base histórica revisada:** `master` después del merge del PR #3 (`377f54d`)
+
+**Último contraste:** 27 de julio de 2026, `master` después del PR #15
+(`6326c11`)
+
+Este documento es un registro histórico del inventario realizado sobre el
+estado posterior al PR #3. Las descripciones detalladas conservan aquellos
+hallazgos y no deben leerse como una fotografía del código actual. En particular,
+6.2.1 ya fue implementada y cerrada mediante los PR #5, #6 y #7. La tabla
+siguiente establece el estado vigente después de contrastar el registro con el
+código y los PR fusionados.
+
+## 0. Reconciliación con `master` después del PR #15
+
+| Hallazgo | Estado vigente | Evidencia o etapa |
+|---|---|---|
+| FB-01 — primer negocio activo | Cerrado | PR #5 eliminó el fallback HTTP y exige tenant explícito. |
+| FB-02 — fallback de `superadmin` | Cerrado | PR #5 rechaza negocio ausente o inexistente; PR #8 separó selección de tenant e impersonación en el frontend. |
+| FB-03 — slug `barberia` en API client | Cerrado | PR #5 dejó de inventar un slug y conserva llamadas globales sin header tenant. |
+| FB-04 — slug de pago sustituido | Cerrado como fallback tenant | PR #14 deriva el retorno desde configuración y datos persistidos. La seguridad completa del resultado de pago continúa en 6.3. |
+| IN-01 — fuentes contradictorias | Cerrado | PR #5 exige que todos los identificadores entregados resuelvan al mismo negocio. |
+| IN-02 — ID mal formado | Cerrado | PR #5 valida el ObjectId antes de consultar. |
+| FR-01 — reserva fuera del tenant resuelto | Cerrado | PR #6 valida servicio y profesional contra `req.businessId` antes de crear al invitado; PR #7 registró el smoke productivo. |
+| FR-02 — servicios por ID sin ownership | Abierto | Corresponde a 6.2.4; detalle, actualización y eliminación todavía usan búsquedas por ID puro. |
+| FR-03 — citas autorizadas por rol sin ownership | Abierto | Corresponde a 6.2.4 y 6.3.1. |
+| FR-04 — turnos y bloqueos sin tenant | Abierto | Corresponde a 6.2.3 y 6.2.4; no existe migración aprobada ni campos obligatorios. |
+| FR-05 — autoridad heredada en profesionales | Abierto, parcialmente mitigado | Reserva y disponibilidad consultan `Membership`, pero todavía exigen también `User.role === "worker"`. Se resuelve en 6.2.2. |
+| FR-06 — pago autorizado sólo por ID | Abierto | PR #14 añadió contexto tenant a la ruta, pero el servicio aún no compara la cita con `req.businessId` ni exige una credencial de acción. Corresponde a 6.3.2. |
+
+### Nuevas brechas de autoridad identificadas en el contraste
+
+- `scopeBusiness` confía en `session.user.role` y
+  `session.user.businessId` sin revalidar una membresía activa.
+- `isAdmin` autoriza mediante el rol almacenado en sesión.
+- `/select-membership` confía en la copia temporal de membresías creada durante
+  el login y no vuelve a consultar la base.
+- `/me` no revoca el contexto tenant cuando la membresía activa desaparece.
+- el handshake WebSocket confía en el negocio capturado desde la sesión y no
+  valida la membresía propia del usuario conectado;
+- analítica e impersonación aún consultan `User.business` y `User.role`;
+- `Membership.role` todavía admite `superadmin`, aunque el ADR lo reserva para
+  privilegios globales.
+
+Estas brechas son el alcance de preparación de 6.2.2. No deben mezclarse con el
+ownership por recurso de 6.2.4 ni con el rediseño completo de impersonación de
+6.4.
 
 ## 1. Objetivo
 
@@ -38,7 +84,13 @@ Este inventario no autoriza todavía migraciones, cambios de modelos ni una rees
 ### Superadministración
 
 - Las rutas de plataforma permanecen fuera de `scopeBusiness`.
-- Una operación tenant-scoped del superadministrador requiere selección explícita.
+- Seleccionar un tenant sólo aporta contexto y no concede rol admin.
+- Toda operación tenant normal requiere una `Membership` activa con rol
+  suficiente, también cuando la identidad global es `superadmin`.
+- Una inspección global de sólo lectura sobre datos tenant está denegada por
+  defecto y sólo puede habilitarse mediante una política de plataforma explícita.
+- La futura asistencia mutable se realizará mediante una sesión de soporte
+  separada y auditable de 6.4.
 - Un negocio ausente o inválido nunca cae en el primer negocio activo.
 
 ### Identificadores simultáneos
@@ -235,7 +287,7 @@ El middleware resuelve un negocio, pero `initiatePayment()` carga la cita por ID
 
 Los casos 15–18 pueden permanecer rojos de forma documentada únicamente en una rama local de diagnóstico. No deben publicarse como CI obligatorio hasta acompañarse de la corrección acotada correspondiente.
 
-## 9. Secuencia de implementación recomendada
+## 9. Secuencia histórica y ejecución real
 
 ### PR 6.2.1-A — Contrato de resolución tenant
 
@@ -247,6 +299,8 @@ Los casos 15–18 pueden permanecer rojos de forma documentada únicamente en un
 - conservar rutas globales sin header tenant;
 - actualizar fixtures que dependían del primer negocio.
 
+**Estado real:** fusionado mediante el PR #5.
+
 ### PR 6.2.1-B — Guardas mínimas de coherencia
 
 - pasar `req.businessId` a disponibilidad y reserva;
@@ -254,9 +308,14 @@ Los casos 15–18 pueden permanecer rojos de forma documentada únicamente en un
 - añadir las pruebas negativas confirmadas durante el inventario;
 - no introducir todavía la migración de turnos y bloqueos.
 
+**Estado real:** fusionado mediante el PR #6 y verificado en producción mediante
+el PR documental #7.
+
 ### Trabajos posteriores
 
-- 6.2.2: reemplazar autoridad heredada por `Membership`.
+- 6.2.2: **en preparación**; reemplazar autoridad heredada por `Membership`
+  según
+  [`fase-6.2.2-migracion-autoridad-membership.md`](./fase-6.2.2-migracion-autoridad-membership.md).
 - 6.2.3: migrar turnos y bloqueos para incluir negocio.
 - 6.2.4: aplicar `{ _id, business }` en repositorios y servicios.
 - 6.3: centralizar políticas de citas y pagos.
@@ -270,6 +329,13 @@ Los casos 15–18 pueden permanecer rojos de forma documentada únicamente en un
 - [x] Matriz de pruebas definida.
 - [x] Contrato transitorio de identificadores múltiples definido: deben resolver al mismo tenant.
 - [x] Política de negocio inactivo definida: `404` público, `403` para miembro autenticado.
+- [x] 6.2.1-A fusionada mediante el PR #5.
+- [x] 6.2.1-B fusionada mediante el PR #6 y verificada mediante el PR #7.
+- [ ] Estrategia de migración de campos heredados de usuario aprobada para
+      6.2.2. Existe una propuesta documental, pero todavía no está implementada,
+      ensayada ni verificada.
 - [ ] Estrategia de migración de turnos y bloqueos aprobada.
 
-La implementación acotada de 6.2.1 puede comenzar. La migración de datos continúa bloqueada hasta disponer de estrategia, respaldo y verificación específicos.
+6.2.1 se encuentra cerrada. El siguiente bloque es preparar 6.2.2 mediante
+inventario dry-run, respaldo verificable y migración idempotente antes del corte
+de autoridad. Los datos productivos permanecen sin cambios.
