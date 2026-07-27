@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 
-export const MEMBERSHIP_AUTHORITY_AUDITOR_VERSION = "1.1.0";
+export const MEMBERSHIP_AUTHORITY_AUDITOR_VERSION = "1.2.0";
 
 export const ALLOWED_AUDIT_ENVIRONMENTS = Object.freeze([
   "development",
@@ -21,6 +21,29 @@ export const validateAuditEnvironment = (environment) => {
   }
 
   return environment;
+};
+
+const SHA256_PATTERN = /^[a-f0-9]{64}$/iu;
+const GIT_SHA_PATTERN = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/iu;
+
+export const validateTargetFingerprint = (fingerprint) => {
+  if (!SHA256_PATTERN.test(fingerprint ?? "")) {
+    throw new Error(
+      "El fingerprint esperado debe ser un SHA-256 hexadecimal de 64 caracteres",
+    );
+  }
+
+  return fingerprint.toLowerCase();
+};
+
+export const validateCodeSha = (codeSha) => {
+  if (!GIT_SHA_PATTERN.test(codeSha ?? "")) {
+    throw new Error(
+      "El SHA efectivo del código debe ser hexadecimal y tener 40 o 64 caracteres",
+    );
+  }
+
+  return codeSha.toLowerCase();
 };
 
 const parseMongoTarget = (mongoUri, databaseName) => {
@@ -63,8 +86,86 @@ export const resolveEffectiveCodeSha = ({
   githubSha = process.env.GITHUB_SHA,
   explicitCodeSha =
     process.env.MEMBERSHIP_AUTHORITY_CODE_SHA ?? process.env.AUDITOR_CODE_SHA,
-} = {}) =>
-  railwayGitCommitSha || githubSha || explicitCodeSha || null;
+} = {}) => {
+  const candidates = [
+    ["railway", railwayGitCommitSha],
+    ["github-actions", githubSha],
+    ["explicit", explicitCodeSha],
+  ];
+
+  for (const [source, value] of candidates) {
+    if (value) {
+      return {
+        codeSha: validateCodeSha(value),
+        codeShaSource: source,
+      };
+    }
+  }
+
+  return {
+    codeSha: null,
+    codeShaSource: null,
+  };
+};
+
+export const resolveExpectedTargetFingerprint = ({
+  explicitExpectedTargetFingerprint,
+  environmentExpectedTargetFingerprint =
+    process.env.MEMBERSHIP_AUTHORITY_EXPECTED_TARGET_FINGERPRINT,
+} = {}) => {
+  const value =
+    explicitExpectedTargetFingerprint || environmentExpectedTargetFingerprint;
+  if (!value) {
+    return {
+      expectedTargetFingerprint: null,
+      expectedTargetFingerprintSource: null,
+    };
+  }
+
+  return {
+    expectedTargetFingerprint: validateTargetFingerprint(value),
+    expectedTargetFingerprintSource: explicitExpectedTargetFingerprint
+      ? "cli"
+      : "environment-variable",
+  };
+};
+
+export const validateExpectedMongoTarget = ({
+  environment,
+  observedTargetFingerprint,
+  expectedTargetFingerprint,
+}) => {
+  validateAuditEnvironment(environment);
+  const observed = validateTargetFingerprint(observedTargetFingerprint);
+  const required = environment === "staging" || environment === "production";
+
+  if (required && !expectedTargetFingerprint) {
+    throw new Error(
+      `El entorno ${environment} exige --expected-target-fingerprint`,
+    );
+  }
+
+  if (!expectedTargetFingerprint) {
+    return {
+      required,
+      provided: false,
+      matches: null,
+    };
+  }
+
+  const expected = validateTargetFingerprint(expectedTargetFingerprint);
+  if (expected !== observed) {
+    throw new Error(
+      "El fingerprint del destino MongoDB no coincide con el destino aprobado",
+    );
+  }
+
+  return {
+    required,
+    provided: true,
+    matches: true,
+  };
+};
 
 const redactValue = (message, value) => {
   if (!value || typeof value !== "string") return message;

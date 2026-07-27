@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 
-export const CANONICAL_SCHEMA_VERSION = 2;
+export const CANONICAL_SCHEMA_VERSION = 3;
 
 export const MEMBERSHIP_AUTHORITY_COLLECTIONS = Object.freeze({
   users: "users",
@@ -22,7 +22,10 @@ export const AUDIT_CATEGORIES = Object.freeze([
   "duplicateMembership",
   "missingRequiredCollection",
   "snapshotInconsistency",
+  "temporalSnapshotNotGuaranteed",
   "missingUniqueMembershipIndex",
+  "invalidAuthorityState",
+  "invalidAuthorityIdentifier",
   "platformRoleInMembership",
   "unknownMembershipRole",
   "ownerWithoutAdminMembership",
@@ -36,35 +39,103 @@ const LEGACY_TENANT_ROLES = new Set(["admin", "worker"]);
 const KNOWN_GLOBAL_ROLES = new Set(["user", "worker", "admin", "superadmin"]);
 const RECOGNIZED_MEMBERSHIP_ROLES = new Set(["admin", "worker", "superadmin"]);
 
-const fingerprintInvalidValue = (value) =>
-  `invalid:${createHash("sha256").update(String(value), "utf8").digest("hex")}`;
+const stableFingerprintInput = (value, seen = new WeakSet()) => {
+  if (value === undefined) return "undefined";
+  if (value === null) return "null";
+  if (typeof value === "string") return `string:${value}`;
+  if (typeof value === "boolean") return `boolean:${value}`;
+  if (typeof value === "number") return `number:${String(value)}`;
+  if (typeof value === "bigint") return `bigint:${String(value)}`;
+  if (typeof value === "symbol") return `symbol:${String(value.description ?? "")}`;
+  if (typeof value === "function") return "function";
+
+  if (seen.has(value)) return "circular";
+  seen.add(value);
+  if (Array.isArray(value)) {
+    return `array:[${value
+      .map((entry) => stableFingerprintInput(entry, seen))
+      .join(",")}]`;
+  }
+
+  const entries = Object.keys(value)
+    .sort()
+    .map(
+      (key) =>
+        `${stableFingerprintInput(key, seen)}:${stableFingerprintInput(
+          value[key],
+          seen,
+        )}`,
+    );
+  return `object:{${entries.join(",")}}`;
+};
+
+const fingerprintValue = (prefix, value) =>
+  `${prefix}:${createHash("sha256")
+    .update(stableFingerprintInput(value), "utf8")
+    .digest("hex")}`;
+
+const fingerprintInvalidValue = (value) => fingerprintValue("invalid", value);
 
 const normalizeRole = (value, recognizedRoles) =>
   recognizedRoles.has(value) ? value : fingerprintInvalidValue(value);
 
-const normalizeId = (value) => {
-  if (value === null || value === undefined) return null;
-
-  if (typeof value === "string") {
-    return /^[a-fA-F0-9]{24}$/.test(value)
-      ? value.toLowerCase()
-      : fingerprintInvalidValue(value);
+const classifyIdentifier = (value) => {
+  if (value === null || value === undefined) {
+    return {
+      state: "missing",
+      evidence: null,
+    };
   }
 
-  if (typeof value.toHexString === "function") {
-    return value.toHexString().toLowerCase();
+  let candidate = value;
+  if (typeof value === "object" && typeof value.toHexString === "function") {
+    try {
+      candidate = value.toHexString();
+    } catch {
+      candidate = value;
+    }
+  } else if (typeof value === "object" && typeof value.$oid === "string") {
+    candidate = value.$oid;
   }
 
-  if (typeof value === "object" && typeof value.$oid === "string") {
-    return value.$oid.toLowerCase();
+  if (typeof candidate === "string" && /^[a-fA-F0-9]{24}$/.test(candidate)) {
+    return {
+      state: "valid",
+      evidence: fingerprintValue("id", candidate.toLowerCase()),
+    };
   }
 
-  return fingerprintInvalidValue(value);
+  return {
+    state: "invalid",
+    evidence: fingerprintInvalidValue(value),
+  };
 };
 
-const isObjectId = (value) => typeof value === "string" && /^[a-f0-9]{24}$/.test(value);
-
-const normalizeActive = (value) => value !== false;
+const classifyAuthorityBoolean = (value) => {
+  if (value === true) {
+    return {
+      state: "active",
+      value: true,
+    };
+  }
+  if (value === false) {
+    return {
+      state: "inactive",
+      value: false,
+    };
+  }
+  if (value === undefined) {
+    return {
+      state: "missing",
+      value: null,
+    };
+  }
+  return {
+    state: "invalid",
+    value: null,
+    evidence: fingerprintInvalidValue(value),
+  };
+};
 
 const compareText = (left, right) => {
   const normalizedLeft = String(left ?? "");
@@ -86,35 +157,74 @@ const sortByFields = (items, fields) =>
 const withoutUndefined = (value) =>
   Object.fromEntries(Object.entries(value).filter(([, entry]) => entry !== undefined));
 
-const normalizeUser = (user) => ({
-  id: normalizeId(user._id),
-  business: normalizeId(user.business),
-  role: normalizeRole(user.role, KNOWN_GLOBAL_ROLES),
-  isActive: normalizeActive(user.isActive),
-});
+const normalizeUser = (user) => {
+  const id = classifyIdentifier(user._id);
+  const business = classifyIdentifier(user.business);
+  const active = classifyAuthorityBoolean(user.isActive);
+  return {
+    id: id.evidence,
+    idState: id.state,
+    business: business.evidence,
+    businessState: business.state,
+    role: normalizeRole(user.role, KNOWN_GLOBAL_ROLES),
+    isActive: active.value,
+    isActiveState: active.state,
+    ...(active.evidence ? { isActiveEvidence: active.evidence } : {}),
+  };
+};
 
-const normalizeBusiness = (business) => ({
-  id: normalizeId(business._id),
-  owner: normalizeId(business.owner),
-  isActive: normalizeActive(business.isActive),
-});
+const normalizeBusiness = (business) => {
+  const id = classifyIdentifier(business._id);
+  const owner = classifyIdentifier(business.owner);
+  const active = classifyAuthorityBoolean(business.isActive);
+  return {
+    id: id.evidence,
+    idState: id.state,
+    owner: owner.evidence,
+    ownerState: owner.state,
+    isActive: active.value,
+    isActiveState: active.state,
+    ...(active.evidence ? { isActiveEvidence: active.evidence } : {}),
+  };
+};
 
-const normalizeMembership = (membership) => ({
-  id: normalizeId(membership._id),
-  user: normalizeId(membership.user),
-  business: normalizeId(membership.business),
-  role: normalizeRole(membership.role, RECOGNIZED_MEMBERSHIP_ROLES),
-  isActive: membership.isActive === true,
-});
+const normalizeMembership = (membership) => {
+  const id = classifyIdentifier(membership._id);
+  const user = classifyIdentifier(membership.user);
+  const business = classifyIdentifier(membership.business);
+  const active = classifyAuthorityBoolean(membership.isActive);
+  return {
+    id: id.evidence,
+    idState: id.state,
+    user: user.evidence,
+    userState: user.state,
+    business: business.evidence,
+    businessState: business.state,
+    role: normalizeRole(membership.role, RECOGNIZED_MEMBERSHIP_ROLES),
+    isActive: active.value,
+    isActiveState: active.state,
+    ...(active.evidence ? { isActiveEvidence: active.evidence } : {}),
+  };
+};
 
-const normalizeDuplicatePair = (duplicate) => ({
-  user: normalizeId(duplicate._id?.user ?? duplicate.user),
-  business: normalizeId(duplicate._id?.business ?? duplicate.business),
-  memberships: (duplicate.memberships ?? duplicate.membershipIds ?? [])
-    .map(normalizeId)
-    .sort(compareText),
-  count: Number(duplicate.count),
-});
+const normalizeDuplicatePair = (duplicate) => {
+  const user = classifyIdentifier(duplicate._id?.user ?? duplicate.user);
+  const business = classifyIdentifier(
+    duplicate._id?.business ?? duplicate.business,
+  );
+  const memberships = (duplicate.memberships ?? duplicate.membershipIds ?? [])
+    .map(classifyIdentifier)
+    .sort((left, right) => compareText(left.evidence, right.evidence));
+  return {
+    user: user.evidence,
+    userState: user.state,
+    business: business.evidence,
+    businessState: business.state,
+    memberships: memberships.map((membership) => membership.evidence),
+    membershipStates: memberships.map((membership) => membership.state),
+    count: Number(duplicate.count),
+  };
+};
 
 const normalizeIndex = (index) => ({
   name: typeof index.name === "string" ? index.name : null,
@@ -179,6 +289,38 @@ const finding = (category, blocking, details = {}) =>
     blocking,
     ...details,
   });
+
+const addIdentifierFinding = (
+  findings,
+  { entity, field, state, evidence, record },
+) => {
+  if (state === "valid") return;
+  findings.push(
+    finding("invalidAuthorityIdentifier", true, {
+      entity,
+      field,
+      reason: state === "missing" ? "missing" : "malformed",
+      record,
+      evidence: state === "invalid" ? evidence : undefined,
+    }),
+  );
+};
+
+const addAuthorityStateFinding = (
+  findings,
+  { entity, state, evidence, record },
+) => {
+  if (state === "active" || state === "inactive") return;
+  findings.push(
+    finding("invalidAuthorityState", true, {
+      entity,
+      field: "isActive",
+      reason: state,
+      record,
+      evidence: state === "invalid" ? evidence : undefined,
+    }),
+  );
+};
 
 const pairKey = (user, business) => `${user ?? "<null>"}:${business ?? "<null>"}`;
 
@@ -272,7 +414,9 @@ const normalizeCollectionState = (collectionState) => {
 const normalizeSnapshotConsistency = (snapshotConsistency) => {
   if (
     !snapshotConsistency ||
-    typeof snapshotConsistency.consistent !== "boolean" ||
+    typeof snapshotConsistency.dataConsistentBetweenReads !== "boolean" ||
+    typeof snapshotConsistency.temporalSnapshotGuaranteed !== "boolean" ||
+    !["snapshot", "double-read"].includes(snapshotConsistency.readStrategy) ||
     typeof snapshotConsistency.firstFingerprint !== "string" ||
     typeof snapshotConsistency.secondFingerprint !== "string"
   ) {
@@ -282,7 +426,11 @@ const normalizeSnapshotConsistency = (snapshotConsistency) => {
   }
 
   return {
-    consistent: snapshotConsistency.consistent,
+    dataConsistentBetweenReads:
+      snapshotConsistency.dataConsistentBetweenReads,
+    temporalSnapshotGuaranteed:
+      snapshotConsistency.temporalSnapshotGuaranteed,
+    readStrategy: snapshotConsistency.readStrategy,
     firstFingerprint: snapshotConsistency.firstFingerprint,
     secondFingerprint: snapshotConsistency.secondFingerprint,
   };
@@ -432,14 +580,94 @@ export const buildMembershipAuthorityPayload = ({
     ["id"],
   );
 
-  const usersById = new Map(normalizedUsers.map((user) => [user.id, user]));
+  const usersById = new Map(
+    normalizedUsers
+      .filter((user) => user.idState === "valid")
+      .map((user) => [user.id, user]),
+  );
   const businessesById = new Map(
-    normalizedBusinesses.map((business) => [business.id, business]),
+    normalizedBusinesses
+      .filter((business) => business.idState === "valid")
+      .map((business) => [business.id, business]),
   );
   const membershipsByPair = new Map();
   const membershipsByUser = new Map();
   const findings = [];
   const candidates = [];
+
+  for (const user of normalizedUsers) {
+    addIdentifierFinding(findings, {
+      entity: "User",
+      field: "_id",
+      state: user.idState,
+      evidence: user.id,
+      record: user.id,
+    });
+    if (
+      LEGACY_TENANT_ROLES.has(user.role) ||
+      user.businessState === "invalid"
+    ) {
+      addIdentifierFinding(findings, {
+        entity: "User",
+        field: "business",
+        state: user.businessState,
+        evidence: user.business,
+        record: user.id,
+      });
+    }
+    addAuthorityStateFinding(findings, {
+      entity: "User",
+      state: user.isActiveState,
+      evidence: user.isActiveEvidence,
+      record: user.id,
+    });
+  }
+
+  for (const business of normalizedBusinesses) {
+    addIdentifierFinding(findings, {
+      entity: "Business",
+      field: "_id",
+      state: business.idState,
+      evidence: business.id,
+      record: business.id,
+    });
+    addIdentifierFinding(findings, {
+      entity: "Business",
+      field: "owner",
+      state: business.ownerState,
+      evidence: business.owner,
+      record: business.id,
+    });
+    addAuthorityStateFinding(findings, {
+      entity: "Business",
+      state: business.isActiveState,
+      evidence: business.isActiveEvidence,
+      record: business.id,
+    });
+  }
+
+  for (const membership of normalizedMemberships) {
+    for (const [field, stateField] of [
+      ["_id", "idState"],
+      ["user", "userState"],
+      ["business", "businessState"],
+    ]) {
+      const valueField = field === "_id" ? "id" : field;
+      addIdentifierFinding(findings, {
+        entity: "Membership",
+        field,
+        state: membership[stateField],
+        evidence: membership[valueField],
+        record: membership.id,
+      });
+    }
+    addAuthorityStateFinding(findings, {
+      entity: "Membership",
+      state: membership.isActiveState,
+      evidence: membership.isActiveEvidence,
+      record: membership.id,
+    });
+  }
 
   for (const collection of normalizedCollections.missing) {
     findings.push(
@@ -449,10 +677,18 @@ export const buildMembershipAuthorityPayload = ({
     );
   }
 
-  if (!normalizedConsistency.consistent) {
+  if (!normalizedConsistency.dataConsistentBetweenReads) {
     findings.push(
       finding("snapshotInconsistency", true, {
         reason: "sourceReadsDisagree",
+      }),
+    );
+  }
+  if (!normalizedConsistency.temporalSnapshotGuaranteed) {
+    findings.push(
+      finding("temporalSnapshotNotGuaranteed", true, {
+        reason: "doubleReadIsDiagnosticOnly",
+        readStrategy: normalizedConsistency.readStrategy,
       }),
     );
   }
@@ -467,6 +703,14 @@ export const buildMembershipAuthorityPayload = ({
   }
 
   for (const membership of normalizedMemberships) {
+    if (
+      membership.idState !== "valid" ||
+      membership.userState !== "valid" ||
+      membership.businessState !== "valid"
+    ) {
+      continue;
+    }
+
     const key = pairKey(membership.user, membership.business);
     const pairMemberships = membershipsByPair.get(key) ?? [];
     pairMemberships.push(membership);
@@ -530,7 +774,7 @@ export const buildMembershipAuthorityPayload = ({
       compareText(pairKey(left.user, left.business), pairKey(right.user, right.business)),
     );
 
-  const independentlyDetectedDuplicatePairs = membershipsPresent
+  const normalizedIndependentDuplicatePairs = membershipsPresent
     ? (
         duplicatePairs === undefined
           ? derivedDuplicatePairs
@@ -542,6 +786,42 @@ export const buildMembershipAuthorityPayload = ({
         ),
       )
     : [];
+
+  for (const duplicate of normalizedIndependentDuplicatePairs) {
+    addIdentifierFinding(findings, {
+      entity: "DuplicateMembershipPair",
+      field: "user",
+      state: duplicate.userState ?? "valid",
+      evidence: duplicate.user,
+    });
+    addIdentifierFinding(findings, {
+      entity: "DuplicateMembershipPair",
+      field: "business",
+      state: duplicate.businessState ?? "valid",
+      evidence: duplicate.business,
+    });
+    duplicate.membershipStates?.forEach((state, index) => {
+      addIdentifierFinding(findings, {
+        entity: "DuplicateMembershipPair",
+        field: "memberships",
+        state,
+        evidence: duplicate.memberships[index],
+      });
+    });
+  }
+
+  const independentlyDetectedDuplicatePairs =
+    normalizedIndependentDuplicatePairs.filter(
+      (duplicate) =>
+        (duplicate.userState ?? "valid") === "valid" &&
+        (duplicate.businessState ?? "valid") === "valid" &&
+        (duplicate.membershipStates ?? []).every((state) => state === "valid"),
+    ).map(({ user, business, memberships: ids, count }) => ({
+      user,
+      business,
+      memberships: ids,
+      count,
+    }));
 
   const duplicatePairsByKey = new Map();
   for (const duplicate of [
@@ -580,6 +860,14 @@ export const buildMembershipAuthorityPayload = ({
   }
 
   for (const user of normalizedUsers) {
+    if (
+      user.idState !== "valid" ||
+      user.isActiveState === "missing" ||
+      user.isActiveState === "invalid"
+    ) {
+      continue;
+    }
+
     if (!KNOWN_GLOBAL_ROLES.has(user.role)) {
       findings.push(
         finding("unknownLegacyRole", true, {
@@ -592,7 +880,7 @@ export const buildMembershipAuthorityPayload = ({
     }
 
     if (user.role === "user") {
-      if (user.business !== null) {
+      if (user.businessState === "valid") {
         findings.push(
           finding("legacyClientScope", false, {
             user: user.id,
@@ -605,7 +893,7 @@ export const buildMembershipAuthorityPayload = ({
 
     if (!LEGACY_TENANT_ROLES.has(user.role)) continue;
 
-    const businessReferenceIsValid = isObjectId(user.business);
+    const businessReferenceIsValid = user.businessState === "valid";
     const referencedBusiness = businessReferenceIsValid
       ? businessesById.get(user.business)
       : null;
@@ -624,7 +912,7 @@ export const buildMembershipAuthorityPayload = ({
       );
     }
 
-    if (!user.isActive) {
+    if (user.isActive === false) {
       findings.push(
         finding("inactiveIdentity", true, {
           user: user.id,
@@ -634,14 +922,20 @@ export const buildMembershipAuthorityPayload = ({
       );
     }
 
-    if (!businessReferenceIsValid || !referencedBusiness || !user.isActive) continue;
+    if (
+      !businessReferenceIsValid ||
+      !referencedBusiness ||
+      user.isActive !== true
+    ) {
+      continue;
+    }
 
     const pairMemberships = membershipsByPair.get(pairKey(user.id, user.business)) ?? [];
     if (pairMemberships.length > 1) continue;
 
     if (pairMemberships.length === 0) {
       const activeMembershipsBefore = (membershipsByUser.get(user.id) ?? []).filter(
-        (membership) => membership.isActive,
+        (membership) => membership.isActive === true,
       ).length;
       const candidate = {
         user: user.id,
@@ -681,7 +975,7 @@ export const buildMembershipAuthorityPayload = ({
       continue;
     }
 
-    if (!existing.isActive) {
+    if (existing.isActive !== true) {
       findings.push(
         finding("membershipStateConflict", true, {
           membership: existing.id,
@@ -709,13 +1003,21 @@ export const buildMembershipAuthorityPayload = ({
   );
 
   for (const business of normalizedBusinesses) {
-    if (business.owner === null) continue;
+    if (
+      business.idState !== "valid" ||
+      business.ownerState !== "valid" ||
+      business.isActiveState === "missing" ||
+      business.isActiveState === "invalid"
+    ) {
+      continue;
+    }
 
     const owner = usersById.get(business.owner);
     const ownerMemberships =
       membershipsByPair.get(pairKey(business.owner, business.id)) ?? [];
     const hasActiveAdminMembership = ownerMemberships.some(
-      (membership) => membership.role === "admin" && membership.isActive,
+      (membership) =>
+        membership.role === "admin" && membership.isActive === true,
     );
 
     if (hasActiveAdminMembership) continue;
@@ -937,10 +1239,17 @@ export const isSnapshotReadUnsupported = (error) => {
   );
 };
 
-const attachSnapshotConsistency = (snapshot, firstFingerprint, secondFingerprint) => ({
+const attachSnapshotConsistency = (
+  snapshot,
+  firstFingerprint,
+  secondFingerprint,
+  readStrategy,
+) => ({
   ...snapshot,
   snapshotConsistency: {
-    consistent: firstFingerprint === secondFingerprint,
+    dataConsistentBetweenReads: firstFingerprint === secondFingerprint,
+    temporalSnapshotGuaranteed: readStrategy === "snapshot",
+    readStrategy,
     firstFingerprint,
     secondFingerprint,
   },
@@ -956,7 +1265,12 @@ const readWithSnapshotSession = async (db, startSession) => {
     const snapshot = await readMembershipAuthoritySource(db, session);
     const fingerprint = fingerprintMembershipAuthoritySource(snapshot);
     return {
-      snapshot: attachSnapshotConsistency(snapshot, fingerprint, fingerprint),
+      snapshot: attachSnapshotConsistency(
+        snapshot,
+        fingerprint,
+        fingerprint,
+        "snapshot",
+      ),
       readStrategy: "snapshot",
     };
   } finally {
@@ -975,6 +1289,7 @@ const readWithDoubleRead = async (db) => {
       second,
       firstFingerprint,
       secondFingerprint,
+      "double-read",
     ),
     readStrategy: "double-read",
   };

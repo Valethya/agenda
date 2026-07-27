@@ -1,6 +1,6 @@
 import "dotenv/config";
 
-import { chmod, mkdir, writeFile } from "node:fs/promises";
+import { mkdir, open, unlink } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import mongoose from "mongoose";
@@ -12,8 +12,10 @@ import {
   fingerprintMongoTarget,
   MEMBERSHIP_AUTHORITY_AUDITOR_VERSION,
   resolveEffectiveCodeSha,
+  resolveExpectedTargetFingerprint,
   sanitizeAuditErrorMessage,
   validateAuditEnvironment,
+  validateExpectedMongoTarget,
 } from "./membership-authority-provenance.js";
 
 const EXIT_UNSAFE = 2;
@@ -41,7 +43,16 @@ export const parseMembershipAuthorityArgs = (argv) => {
       separatorIndex === -1 ? undefined : argument.slice(separatorIndex + 1);
     const value = inlineValue ?? argv[index + 1];
 
-    if (!["mode", "environment", "database", "report", "code-sha"].includes(key)) {
+    if (
+      ![
+        "mode",
+        "environment",
+        "database",
+        "report",
+        "code-sha",
+        "expected-target-fingerprint",
+      ].includes(key)
+    ) {
       throw new Error(`Opción no reconocida: --${key}`);
     }
 
@@ -49,7 +60,11 @@ export const parseMembershipAuthorityArgs = (argv) => {
       throw new Error(`Falta valor para --${key}`);
     }
 
-    options[key === "code-sha" ? "codeSha" : key] = value;
+    const optionName = {
+      "code-sha": "codeSha",
+      "expected-target-fingerprint": "expectedTargetFingerprint",
+    }[key] ?? key;
+    options[optionName] = value;
     if (inlineValue === undefined) index += 1;
   }
 
@@ -61,10 +76,43 @@ const usage = () => {
   npm run migration:membership-authority -- \\
     --mode=audit \\
     --environment=production \\
+    --expected-target-fingerprint=<sha256-aprobado> \\
     --database=agenda \\
     --report=./artifacts/membership-authority-audit.json
 
 El único modo disponible en 6.2.2-B es audit. Nunca escribe en MongoDB.`);
+};
+
+export const writeAuditReportSecurely = async (reportPath, auditReport) => {
+  const absoluteReportPath = path.resolve(reportPath);
+  await mkdir(path.dirname(absoluteReportPath), { recursive: true, mode: 0o700 });
+
+  let fileHandle;
+  let created = false;
+  try {
+    fileHandle = await open(absoluteReportPath, "wx", 0o600);
+    created = true;
+    await fileHandle.writeFile(`${JSON.stringify(auditReport, null, 2)}\n`, {
+      encoding: "utf8",
+    });
+    await fileHandle.sync();
+    await fileHandle.chmod(0o600);
+  } catch (error) {
+    if (fileHandle) await fileHandle.close().catch(() => {});
+    fileHandle = null;
+    if (created) await unlink(absoluteReportPath).catch(() => {});
+
+    if (error?.code === "EEXIST") {
+      throw new Error(
+        "La ruta del informe ya existe o es un enlace simbólico; no se sobrescribirá",
+      );
+    }
+    throw error;
+  } finally {
+    if (fileHandle) await fileHandle.close();
+  }
+
+  return absoluteReportPath;
 };
 
 export const runMembershipAuthorityAudit = async ({
@@ -73,6 +121,9 @@ export const runMembershipAuthorityAudit = async ({
   database,
   report,
   explicitCodeSha,
+  explicitExpectedTargetFingerprint,
+  railwayGitCommitSha,
+  githubSha,
   connect = mongoose.connect.bind(mongoose),
   disconnect = mongoose.disconnect.bind(mongoose),
   connection = mongoose.connection,
@@ -84,6 +135,22 @@ export const runMembershipAuthorityAudit = async ({
   if (!database) throw new Error("--database es obligatorio");
   if (!report) throw new Error("--report es obligatorio");
   const targetFingerprint = fingerprintMongoTarget(mongoUri, database);
+  const {
+    expectedTargetFingerprint,
+    expectedTargetFingerprintSource,
+  } = resolveExpectedTargetFingerprint({
+    explicitExpectedTargetFingerprint,
+  });
+  const targetValidation = validateExpectedMongoTarget({
+    environment,
+    observedTargetFingerprint: targetFingerprint,
+    expectedTargetFingerprint,
+  });
+  const { codeSha, codeShaSource } = resolveEffectiveCodeSha({
+    railwayGitCommitSha,
+    githubSha,
+    explicitCodeSha,
+  });
 
   let connected = false;
   try {
@@ -104,23 +171,21 @@ export const runMembershipAuthorityAudit = async ({
           startSession ?? connection.startSession?.bind(connection),
       },
     );
-    const absoluteReportPath = path.resolve(report);
     const auditReport = buildMembershipAuthorityReport(snapshot, {
       environment,
       mongoTargetFingerprint: targetFingerprint,
-      codeSha: resolveEffectiveCodeSha({ explicitCodeSha }),
+      targetValidation: {
+        ...targetValidation,
+        expectedTargetFingerprintSource,
+      },
+      codeSha,
+      codeShaSource,
       auditorVersion: MEMBERSHIP_AUTHORITY_AUDITOR_VERSION,
       readStrategy,
       generatedAt: now().toISOString(),
     });
 
-    await mkdir(path.dirname(absoluteReportPath), { recursive: true, mode: 0o700 });
-    await writeFile(
-      absoluteReportPath,
-      `${JSON.stringify(auditReport, null, 2)}\n`,
-      { encoding: "utf8", mode: 0o600 },
-    );
-    await chmod(absoluteReportPath, 0o600);
+    const absoluteReportPath = await writeAuditReportSecurely(report, auditReport);
 
     return {
       report: auditReport,
@@ -154,6 +219,7 @@ export const main = async (argv = process.argv.slice(2)) => {
     database: options.database,
     report: options.report,
     explicitCodeSha: options.codeSha,
+    explicitExpectedTargetFingerprint: options.expectedTargetFingerprint,
   });
 
   const { canonicalPayload, checksum, metadata } = result.report;

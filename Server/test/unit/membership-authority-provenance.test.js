@@ -5,9 +5,16 @@ import {
   fingerprintMongoTarget,
   MEMBERSHIP_AUTHORITY_AUDITOR_VERSION,
   resolveEffectiveCodeSha,
+  resolveExpectedTargetFingerprint,
   sanitizeAuditErrorMessage,
   validateAuditEnvironment,
+  validateCodeSha,
+  validateExpectedMongoTarget,
+  validateTargetFingerprint,
 } from "../../scripts/migrations/membership-authority-provenance.js";
+
+const sha40 = (character) => character.repeat(40);
+const sha256 = (character) => character.repeat(64);
 
 describe("membership authority provenance", () => {
   it("acepta únicamente entornos operativos documentados", () => {
@@ -26,38 +33,58 @@ describe("membership authority provenance", () => {
   });
 
   it("prioriza Railway, luego GitHub y después el SHA explícito", () => {
-    assert.equal(
+    assert.deepEqual(
       resolveEffectiveCodeSha({
-        railwayGitCommitSha: "railway-sha",
-        githubSha: "github-sha",
-        explicitCodeSha: "explicit-sha",
+        railwayGitCommitSha: sha40("a"),
+        githubSha: sha40("b"),
+        explicitCodeSha: sha40("c"),
       }),
-      "railway-sha",
+      {
+        codeSha: sha40("a"),
+        codeShaSource: "railway",
+      },
     );
-    assert.equal(
+    assert.deepEqual(
       resolveEffectiveCodeSha({
         railwayGitCommitSha: "",
-        githubSha: "github-sha",
-        explicitCodeSha: "explicit-sha",
+        githubSha: sha40("b"),
+        explicitCodeSha: sha40("c"),
       }),
-      "github-sha",
+      {
+        codeSha: sha40("b"),
+        codeShaSource: "github-actions",
+      },
     );
-    assert.equal(
+    assert.deepEqual(
       resolveEffectiveCodeSha({
         railwayGitCommitSha: "",
         githubSha: "",
-        explicitCodeSha: "explicit-sha",
+        explicitCodeSha: sha40("c"),
       }),
-      "explicit-sha",
+      {
+        codeSha: sha40("c"),
+        codeShaSource: "explicit",
+      },
     );
-    assert.equal(
+    assert.deepEqual(
       resolveEffectiveCodeSha({
         railwayGitCommitSha: "",
         githubSha: "",
         explicitCodeSha: "",
       }),
-      null,
+      {
+        codeSha: null,
+        codeShaSource: null,
+      },
     );
+  });
+
+  it("rechaza SHA de código arbitrarios o malformados", () => {
+    assert.equal(validateCodeSha(sha40("A")), sha40("a"));
+    assert.equal(validateCodeSha(sha256("b")), sha256("b"));
+    for (const invalid of ["explicit-sha", "abc123", "g".repeat(40), "a".repeat(39)]) {
+      assert.throws(() => validateCodeSha(invalid), /SHA efectivo del código/);
+    }
   });
 
   it("genera un fingerprint estable sin depender de credenciales u opciones", () => {
@@ -97,6 +124,86 @@ describe("membership authority provenance", () => {
     assert.notEqual(original, otherDatabase);
   });
 
+  it("vincula staging y production con un fingerprint aprobado", () => {
+    const observed = sha256("a");
+    assert.deepEqual(
+      validateExpectedMongoTarget({
+        environment: "production",
+        observedTargetFingerprint: observed,
+        expectedTargetFingerprint: observed,
+      }),
+      {
+        required: true,
+        provided: true,
+        matches: true,
+      },
+    );
+    assert.throws(
+      () =>
+        validateExpectedMongoTarget({
+          environment: "staging",
+          observedTargetFingerprint: observed,
+        }),
+      /exige --expected-target-fingerprint/,
+    );
+    assert.throws(
+      () =>
+        validateExpectedMongoTarget({
+          environment: "staging",
+          observedTargetFingerprint: observed,
+          expectedTargetFingerprint: sha256("b"),
+        }),
+      /no coincide/,
+    );
+  });
+
+  it("permite development y test sin fingerprint, pero valida uno provisto", () => {
+    const observed = sha256("a");
+    assert.deepEqual(
+      validateExpectedMongoTarget({
+        environment: "test",
+        observedTargetFingerprint: observed,
+      }),
+      {
+        required: false,
+        provided: false,
+        matches: null,
+      },
+    );
+    assert.throws(
+      () =>
+        validateExpectedMongoTarget({
+          environment: "development",
+          observedTargetFingerprint: observed,
+          expectedTargetFingerprint: sha256("b"),
+        }),
+      /no coincide/,
+    );
+  });
+
+  it("prioriza el fingerprint explícito sobre la variable de entorno", () => {
+    assert.deepEqual(
+      resolveExpectedTargetFingerprint({
+        explicitExpectedTargetFingerprint: sha256("a"),
+        environmentExpectedTargetFingerprint: sha256("b"),
+      }),
+      {
+        expectedTargetFingerprint: sha256("a"),
+        expectedTargetFingerprintSource: "cli",
+      },
+    );
+    assert.deepEqual(
+      resolveExpectedTargetFingerprint({
+        environmentExpectedTargetFingerprint: sha256("b"),
+      }),
+      {
+        expectedTargetFingerprint: sha256("b"),
+        expectedTargetFingerprintSource: "environment-variable",
+      },
+    );
+    assert.equal(validateTargetFingerprint(sha256("A")), sha256("a"));
+  });
+
   it("redacta URI, usuario y contraseña de mensajes de error", () => {
     const uri =
       "mongodb://private-user:private-pass@cluster.example:27017/agenda?token=secret";
@@ -113,5 +220,6 @@ describe("membership authority provenance", () => {
 
   it("expone una versión estable del auditor", () => {
     assert.match(MEMBERSHIP_AUTHORITY_AUDITOR_VERSION, /^\d+\.\d+\.\d+$/u);
+    assert.equal(MEMBERSHIP_AUTHORITY_AUDITOR_VERSION, "1.2.0");
   });
 });
