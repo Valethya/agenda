@@ -193,9 +193,19 @@ El informe tendrá dos bloques separados:
 - nombre exacto de la base;
 - precondición del índice `{ user: 1, business: 1, unique: true }`;
 - conteos de usuarios, negocios y membresías;
-- candidatas con los campos de autoridad esperados: IDs de usuario y negocio,
-  rol e `isActive`;
-- conflictos con categoría e IDs implicados;
+- fuentes relevantes para decidir autoridad:
+  - de `User`: identificador, negocio heredado, rol heredado y estado activo;
+  - de `Business`: identificador, existencia, propietario y estado activo cuando
+    cualquiera de esos campos participe en una regla;
+  - de `Membership`: identificador, usuario, negocio, rol y estado activo;
+- evidencia legacy utilizada para clasificar cada candidata, incluidos los
+  campos concretos que justifican `eligibleBackfill` o
+  `ownerWithoutAdminMembership`;
+- candidatas con IDs de usuario y negocio, rol, estado activo y resultado de
+  login o selección que cambiaría con el backfill;
+- conflictos, duplicados y categorías bloqueantes con los IDs implicados;
+- cualquier otro campo cuya variación cambie la clasificación, las
+  precondiciones o la decisión de migración;
 - resultado `safeToApply`.
 
 No contendrá ningún timestamp, incluidos `generatedAt` y `updatedAt`, ni SHA de
@@ -213,10 +223,30 @@ La canonicalización será exacta:
 6. serializar como JSON UTF-8 sin espacios;
 7. calcular `SHA-256` sobre esos bytes.
 
-`apply` volverá a construir el mismo payload desde la base y lo comparará con el
-checksum aprobado. Una modificación de datos relevantes para autoridad o un
-conflicto nuevo cambia el payload y obliga a generar un audit nuevo, sin depender
-de timestamps.
+### Concurrencia entre `audit` y `apply`
+
+`updatedAt`, los demás timestamps, la fecha de ejecución, el SHA del código y
+los metadatos operativos permanecen fuera del checksum canónico. Pueden
+conservarse en `metadata` para diagnóstico, pero `updatedAt` nunca será la
+guardia exclusiva de concurrencia.
+
+El checksum representa únicamente los datos relevantes para determinar
+autoridad, conflictos y candidatas de migración. Inmediatamente antes de
+`apply`, el migrador deberá:
+
+1. volver a consultar todas las fuentes;
+2. reconstruir `canonicalPayload` con las mismas reglas y orden del `audit`;
+3. calcular nuevamente el checksum;
+4. compararlo con el checksum aprobado;
+5. abortar sin escrituras y exigir un nuevo `audit` si cambió cualquier dato
+   relevante.
+
+Dentro de la transacción o, si no existe transacción, inmediatamente antes de
+cada escritura, también se revalidarán las precondiciones que afectan a esa
+candidata: existencia e identidad de usuario y negocio, rol y negocio legacy,
+estado activo, evidencia heredada utilizada, ausencia de Membership para el par,
+ausencia de conflictos y duplicados, y vigencia del índice único físico exacto.
+Un cambio relevante aborta el lote aunque `updatedAt` no haya cambiado.
 
 ## 5. Reglas de transformación
 
@@ -320,8 +350,10 @@ Un archivo existente que nunca fue restaurado no se considera un respaldo
 verificado.
 
 La ejecución productiva deberá realizarse en una ventana sin altas, bajas ni
-cambios de membresía concurrentes. Si no es posible pausar esas escrituras, el
-migrador deberá detectar cambios mediante `updatedAt` y abortar.
+cambios de membresía concurrentes. Si no es posible pausar esas escrituras, la
+reconstrucción del payload canónico y la revalidación previa a cada escritura
+deberán detectar cualquier cambio relevante y abortar. `updatedAt` podrá
+registrarse sólo como información diagnóstica.
 
 ## 7. Aplicación idempotente
 
@@ -344,6 +376,8 @@ Guardas obligatorias:
 - producción requiere una confirmación adicional explícita;
 - el plan debe indicar `safeToApply: true`;
 - el checksum debe coincidir;
+- inmediatamente antes del primer write se reconstruye el payload canónico desde
+  las fuentes y su checksum debe seguir coincidiendo con el aprobado;
 - justo antes de escribir se vuelve a comprobar que existe físicamente el
   índice único exacto `{ user: 1, business: 1 }`;
 - justo antes de escribir se vuelve a comprobar que no existen pares
@@ -412,11 +446,14 @@ El rollback elimina exclusivamente las Membership creadas por el `runId`, sólo
 cuando:
 
 - el ID figura en el manifiesto;
-- usuario, negocio, rol y estado aún coinciden con lo creado;
-- `updatedAt` demuestra que no fue modificada posteriormente.
+- usuario, negocio, rol y estado activo aún coinciden exactamente con lo creado;
+- las precondiciones relevantes reconstruidas desde las fuentes confirman que el
+  documento no fue adoptado ni modificado por una decisión posterior.
 
-Si algún documento cambió después de la migración, el rollback se detiene y
-requiere revisión manual.
+`updatedAt` puede conservarse en el manifiesto como dato diagnóstico, pero nunca
+es la única guarda del rollback ni forma parte del checksum canónico. Si cambió
+algún dato relevante después de la migración, el rollback se detiene y requiere
+revisión manual.
 
 ### Después del corte de aplicación
 
@@ -460,22 +497,23 @@ npm run migration:membership-authority -- \
 5. cambiar timestamps o metadatos volátiles no cambia el checksum canónico.
 6. cambiar un campo relevante de autoridad cambia el checksum y exige un plan
    nuevo.
-7. índice único ausente o no único bloquea `apply` antes del primer write.
-8. un par duplicado bloquea `apply` aunque el schema declare el índice.
-9. Membership existente con mismo par y rol queda intacta.
-10. Membership existente con rol diferente bloquea el lote.
-11. `superadmin` tenant bloquea el lote.
-12. referencia huérfana bloquea el lote.
-13. `ownerWithoutAdminMembership` sin evidencia heredada exacta bloquea el lote.
-14. propietario con evidencia heredada exacta usa la regla normal sin inferir
+7. un cambio relevante sin modificación de `updatedAt` también aborta `apply`.
+8. índice único ausente o no único bloquea `apply` antes del primer write.
+9. un par duplicado bloquea `apply` aunque el schema declare el índice.
+10. Membership existente con mismo par y rol queda intacta.
+11. Membership existente con rol diferente bloquea el lote.
+12. `superadmin` tenant bloquea el lote.
+13. referencia huérfana bloquea el lote.
+14. `ownerWithoutAdminMembership` sin evidencia heredada exacta bloquea el lote.
+15. propietario con evidencia heredada exacta usa la regla normal sin inferir
     el rol desde `Business.owner`.
-15. `inactiveIdentity` no genera Membership y bloquea el lote.
-16. ejecutar dos veces no crea duplicados.
-17. rollback sólo considera IDs del manifiesto.
-18. documento modificado después del backfill no se elimina automáticamente.
-19. fallo parcial deja un resultado identificable y verificable mediante
+16. `inactiveIdentity` no genera Membership y bloquea el lote.
+17. ejecutar dos veces no crea duplicados.
+18. rollback sólo considera IDs del manifiesto.
+19. documento modificado después del backfill no se elimina automáticamente.
+20. fallo parcial deja un resultado identificable y verificable mediante
     `runId`.
-20. el plan informa cada cambio esperado entre login único y
+21. el plan informa cada cambio esperado entre login único y
     `needs_selection`.
 
 ### Corte HTTP y sesión
@@ -528,6 +566,30 @@ npm run migration:membership-authority -- \
 - agregar pruebas negativas de base, índice físico, duplicados, propietarios,
   identidades inactivas y conflictos;
 - generar sólo informes locales o artefactos protegidos.
+
+### PR 6.2.2-BI — Remediación condicional del índice físico
+
+Este PR separado sólo será necesario cuando `audit` detecte que falta el índice
+físico exacto `{ user: 1, business: 1 }` con `unique: true`, o que su definición
+es incorrecta. El orden obligatorio será:
+
+1. declarar el resultado como bloqueante, fijar `safeToApply: false` e impedir
+   cualquier backfill;
+2. identificar y resolver los duplicados o contradicciones mediante una
+   actuación separada, respaldada y revisada; nunca corregirlos silenciosamente;
+3. obtener un respaldo y verificar su restauración antes de cualquier escritura
+   de remediación;
+4. crear el índice mediante una migración controlada, acotada y revisada en un
+   PR distinto del backfill;
+5. consultar los índices físicos de MongoDB y comprobar la clave exacta
+   `{ user: 1, business: 1 }` con `unique: true`;
+6. volver a ejecutar `audit` desde cero;
+7. permitir que 6.2.2-C ejecute `apply` únicamente si el índice exacto existe,
+   no quedan duplicados ni contradicciones y el nuevo informe indica
+   `safeToApply: true`.
+
+6.2.2-A no crea el índice ni implementa scripts. La declaración del schema no
+sustituye la comprobación física.
 
 ### PR 6.2.2-C — Backfill, verificación y rollback
 
@@ -584,6 +646,7 @@ Condiciones operativas pendientes:
 
 - [ ] Implementación del auditor.
 - [ ] Comprobación automatizada del índice único físico y de duplicados.
+- [ ] Remediación separada del índice físico, sólo si el audit la exige.
 - [ ] Implementación de checksum sobre payload canónico.
 - [ ] Pruebas negativas implementadas y verdes.
 - [ ] Respaldo productivo verificado.

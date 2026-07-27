@@ -742,7 +742,8 @@ La Fase 6 podrá declararse terminada cuando se cumplan todas estas condiciones:
 únicamente tras cumplir sus guardas operativas, ejecutarla sin
 mezclar todavía 6.2.3, 6.2.4 ni el responsive:
 
-1. aprobar el tratamiento de `superadmin` aclarado en el ADR-001;
+1. tomar como base el tratamiento de `superadmin` incorporado en el ADR-001
+   mediante el PR #16;
 2. implementar el inventario dry-run de usuarios, negocios y membresías;
 3. agregar pruebas negativas del migrador y de revocación de autoridad;
 4. obtener y verificar un respaldo restaurable;

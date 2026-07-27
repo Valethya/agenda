@@ -1,6 +1,6 @@
 # ADR-001 — Autoridad multitenant e identidad progresiva del cliente
 
-**Estado:** Aprobado; enmienda de `superadmin` propuesta en 6.2.2-A
+**Estado:** Aprobado; enmienda de `superadmin` incorporada mediante el PR #16
 **Fecha original:** 21 de julio de 2026
 **Última revisión:** 27 de julio de 2026
 **Base de contraste:** `master` después del PR #15 (`6326c11`)
