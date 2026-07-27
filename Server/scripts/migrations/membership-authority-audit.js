@@ -1,12 +1,16 @@
 import { createHash } from "node:crypto";
 
-export const CANONICAL_SCHEMA_VERSION = 1;
+export const CANONICAL_SCHEMA_VERSION = 2;
 
 export const MEMBERSHIP_AUTHORITY_COLLECTIONS = Object.freeze({
   users: "users",
   businesses: "businesses",
   memberships: "memberships",
 });
+
+export const REQUIRED_MEMBERSHIP_AUTHORITY_COLLECTIONS = Object.freeze(
+  Object.values(MEMBERSHIP_AUTHORITY_COLLECTIONS).sort(),
+);
 
 export const AUDIT_CATEGORIES = Object.freeze([
   "alreadyConsistent",
@@ -16,6 +20,7 @@ export const AUDIT_CATEGORIES = Object.freeze([
   "missingBusinessReference",
   "orphanMembership",
   "duplicateMembership",
+  "missingRequiredCollection",
   "snapshotInconsistency",
   "missingUniqueMembershipIndex",
   "platformRoleInMembership",
@@ -112,11 +117,15 @@ const normalizeDuplicatePair = (duplicate) => ({
 });
 
 const normalizeIndex = (index) => ({
+  name: typeof index.name === "string" ? index.name : null,
   key: Object.entries(index.key ?? {}).map(([field, direction]) => [field, direction]),
   unique: index.unique === true,
   sparse: index.sparse === true,
   partial: index.partialFilterExpression !== undefined,
+  partialFilterExpression: index.partialFilterExpression ?? null,
   collation: index.collation !== undefined,
+  collationDefinition: index.collation ?? null,
+  hidden: index.hidden === true,
 });
 
 export const isExactMembershipUniqueIndex = (index) => {
@@ -143,7 +152,9 @@ export const inspectMembershipIndexes = (indexes = []) => {
       return fields.includes("user") || fields.includes("business");
     })
     .map(normalizeIndex)
-    .sort((left, right) => compareText(JSON.stringify(left.key), JSON.stringify(right.key)));
+    .sort((left, right) =>
+      compareText(serializeCanonicalPayload(left), serializeCanonicalPayload(right)),
+    );
 
   return {
     expectedKey: [
@@ -240,8 +251,141 @@ export const serializeCanonicalPayload = (payload) =>
 export const checksumCanonicalPayload = (payload) =>
   createHash("sha256").update(serializeCanonicalPayload(payload), "utf8").digest("hex");
 
+const normalizeCollectionState = (collectionState) => {
+  if (!collectionState || !Array.isArray(collectionState.observed)) {
+    throw new TypeError(
+      "collectionState.observed es obligatorio para construir el audit",
+    );
+  }
+
+  const expected = [...REQUIRED_MEMBERSHIP_AUTHORITY_COLLECTIONS];
+  const observed = [...new Set(collectionState.observed.map(String))].sort(compareText);
+  const missing = expected.filter((name) => !observed.includes(name));
+
+  return {
+    expected,
+    observed,
+    missing,
+  };
+};
+
+const normalizeSnapshotConsistency = (snapshotConsistency) => {
+  if (
+    !snapshotConsistency ||
+    typeof snapshotConsistency.consistent !== "boolean" ||
+    typeof snapshotConsistency.firstFingerprint !== "string" ||
+    typeof snapshotConsistency.secondFingerprint !== "string"
+  ) {
+    throw new TypeError(
+      "snapshotConsistency completo es obligatorio para construir el audit",
+    );
+  }
+
+  return {
+    consistent: snapshotConsistency.consistent,
+    firstFingerprint: snapshotConsistency.firstFingerprint,
+    secondFingerprint: snapshotConsistency.secondFingerprint,
+  };
+};
+
+const documentsForCollection = (documents, collectionName, collectionState) => {
+  if (!collectionState.observed.includes(collectionName)) return [];
+  if (!Array.isArray(documents)) {
+    throw new TypeError(
+      `La colección observada "${collectionName}" debe tener una lectura válida`,
+    );
+  }
+  return documents;
+};
+
+export const buildMembershipAuthoritySourcePayload = ({
+  databaseName,
+  collectionState,
+  indexes,
+  users,
+  businesses,
+  memberships,
+  duplicatePairs,
+}) => {
+  if (!databaseName || typeof databaseName !== "string") {
+    throw new TypeError("databaseName es obligatorio para construir la fuente");
+  }
+
+  const normalizedCollections = normalizeCollectionState(collectionState);
+  const usersPresent = normalizedCollections.observed.includes(
+    MEMBERSHIP_AUTHORITY_COLLECTIONS.users,
+  );
+  const businessesPresent = normalizedCollections.observed.includes(
+    MEMBERSHIP_AUTHORITY_COLLECTIONS.businesses,
+  );
+  const membershipsPresent = normalizedCollections.observed.includes(
+    MEMBERSHIP_AUTHORITY_COLLECTIONS.memberships,
+  );
+
+  const normalizedUsers = sortByFields(
+    documentsForCollection(
+      users,
+      MEMBERSHIP_AUTHORITY_COLLECTIONS.users,
+      normalizedCollections,
+    ).map(normalizeUser),
+    ["id"],
+  );
+  const normalizedBusinesses = sortByFields(
+    documentsForCollection(
+      businesses,
+      MEMBERSHIP_AUTHORITY_COLLECTIONS.businesses,
+      normalizedCollections,
+    ).map(normalizeBusiness),
+    ["id"],
+  );
+  const normalizedMemberships = sortByFields(
+    documentsForCollection(
+      memberships,
+      MEMBERSHIP_AUTHORITY_COLLECTIONS.memberships,
+      normalizedCollections,
+    ).map(normalizeMembership),
+    ["id"],
+  );
+
+  const normalizedIndexes = membershipsPresent
+    ? (indexes ?? [])
+        .map(normalizeIndex)
+        .sort((left, right) =>
+          compareText(
+            serializeCanonicalPayload(left),
+            serializeCanonicalPayload(right),
+          ),
+        )
+    : null;
+  const normalizedDuplicatePairs = membershipsPresent
+    ? (duplicatePairs ?? [])
+        .map(normalizeDuplicatePair)
+        .sort((left, right) =>
+          compareText(
+            pairKey(left.user, left.business),
+            pairKey(right.user, right.business),
+          ),
+        )
+    : null;
+
+  return {
+    databaseName,
+    collections: normalizedCollections,
+    users: usersPresent ? normalizedUsers : null,
+    businesses: businessesPresent ? normalizedBusinesses : null,
+    memberships: membershipsPresent ? normalizedMemberships : null,
+    indexes: normalizedIndexes,
+    duplicatePairs: normalizedDuplicatePairs,
+  };
+};
+
+export const fingerprintMembershipAuthoritySource = (snapshot) =>
+  checksumCanonicalPayload(buildMembershipAuthoritySourcePayload(snapshot));
+
 export const buildMembershipAuthorityPayload = ({
   databaseName,
+  collectionState,
+  snapshotConsistency,
   indexes = [],
   users = [],
   businesses = [],
@@ -252,10 +396,39 @@ export const buildMembershipAuthorityPayload = ({
     throw new TypeError("databaseName es obligatorio para construir el audit");
   }
 
-  const normalizedUsers = sortByFields(users.map(normalizeUser), ["id"]);
-  const normalizedBusinesses = sortByFields(businesses.map(normalizeBusiness), ["id"]);
+  const normalizedCollections = normalizeCollectionState(collectionState);
+  const normalizedConsistency = normalizeSnapshotConsistency(snapshotConsistency);
+  const usersPresent = normalizedCollections.observed.includes(
+    MEMBERSHIP_AUTHORITY_COLLECTIONS.users,
+  );
+  const businessesPresent = normalizedCollections.observed.includes(
+    MEMBERSHIP_AUTHORITY_COLLECTIONS.businesses,
+  );
+  const membershipsPresent = normalizedCollections.observed.includes(
+    MEMBERSHIP_AUTHORITY_COLLECTIONS.memberships,
+  );
+  const normalizedUsers = sortByFields(
+    documentsForCollection(
+      users,
+      MEMBERSHIP_AUTHORITY_COLLECTIONS.users,
+      normalizedCollections,
+    ).map(normalizeUser),
+    ["id"],
+  );
+  const normalizedBusinesses = sortByFields(
+    documentsForCollection(
+      businesses,
+      MEMBERSHIP_AUTHORITY_COLLECTIONS.businesses,
+      normalizedCollections,
+    ).map(normalizeBusiness),
+    ["id"],
+  );
   const normalizedMemberships = sortByFields(
-    memberships.map(normalizeMembership),
+    documentsForCollection(
+      memberships,
+      MEMBERSHIP_AUTHORITY_COLLECTIONS.memberships,
+      normalizedCollections,
+    ).map(normalizeMembership),
     ["id"],
   );
 
@@ -268,7 +441,23 @@ export const buildMembershipAuthorityPayload = ({
   const findings = [];
   const candidates = [];
 
-  const indexState = inspectMembershipIndexes(indexes);
+  for (const collection of normalizedCollections.missing) {
+    findings.push(
+      finding("missingRequiredCollection", true, {
+        collection,
+      }),
+    );
+  }
+
+  if (!normalizedConsistency.consistent) {
+    findings.push(
+      finding("snapshotInconsistency", true, {
+        reason: "sourceReadsDisagree",
+      }),
+    );
+  }
+
+  const indexState = inspectMembershipIndexes(membershipsPresent ? indexes ?? [] : []);
   if (!indexState.exactUniqueExists) {
     findings.push(
       finding("missingUniqueMembershipIndex", true, {
@@ -341,13 +530,18 @@ export const buildMembershipAuthorityPayload = ({
       compareText(pairKey(left.user, left.business), pairKey(right.user, right.business)),
     );
 
-  const independentlyDetectedDuplicatePairs = (
-    duplicatePairs === undefined
-      ? derivedDuplicatePairs
-      : duplicatePairs.map(normalizeDuplicatePair)
-  ).sort((left, right) =>
-    compareText(pairKey(left.user, left.business), pairKey(right.user, right.business)),
-  );
+  const independentlyDetectedDuplicatePairs = membershipsPresent
+    ? (
+        duplicatePairs === undefined
+          ? derivedDuplicatePairs
+          : duplicatePairs.map(normalizeDuplicatePair)
+      ).sort((left, right) =>
+        compareText(
+          pairKey(left.user, left.business),
+          pairKey(right.user, right.business),
+        ),
+      )
+    : [];
 
   const duplicatePairsByKey = new Map();
   for (const duplicate of [
@@ -361,10 +555,11 @@ export const buildMembershipAuthorityPayload = ({
     findings.push(finding("duplicateMembership", true, duplicate));
   }
 
-  const duplicateScansAgree =
-    serializeCanonicalPayload(derivedDuplicatePairs) ===
-    serializeCanonicalPayload(independentlyDetectedDuplicatePairs);
-  if (!duplicateScansAgree) {
+  const duplicateScansAgree = membershipsPresent
+    ? serializeCanonicalPayload(derivedDuplicatePairs) ===
+      serializeCanonicalPayload(independentlyDetectedDuplicatePairs)
+    : null;
+  if (duplicateScansAgree === false) {
     findings.push(
       finding("snapshotInconsistency", true, {
         reason: "duplicateScansDisagree",
@@ -557,25 +752,30 @@ export const buildMembershipAuthorityPayload = ({
     schemaVersion: CANONICAL_SCHEMA_VERSION,
     databaseName,
     preconditions: {
+      collections: normalizedCollections,
+      snapshotConsistency: normalizedConsistency,
       membershipUniqueIndex: indexState,
       duplicateScan: {
-        independentlyDetectedPairs: independentlyDetectedDuplicatePairs,
-        derivedPairs: derivedDuplicatePairs,
+        performed: membershipsPresent,
+        independentlyDetectedPairs: membershipsPresent
+          ? independentlyDetectedDuplicatePairs
+          : null,
+        derivedPairs: membershipsPresent ? derivedDuplicatePairs : null,
         consistent: duplicateScansAgree,
       },
-      duplicatePairCount: duplicatePairsByKey.size,
+      duplicatePairCount: membershipsPresent ? duplicatePairsByKey.size : null,
     },
     counts: {
-      users: normalizedUsers.length,
-      businesses: normalizedBusinesses.length,
-      memberships: normalizedMemberships.length,
+      users: usersPresent ? normalizedUsers.length : null,
+      businesses: businessesPresent ? normalizedBusinesses.length : null,
+      memberships: membershipsPresent ? normalizedMemberships.length : null,
       candidates: candidates.length,
       findings: sortedFindings.length,
     },
     sources: {
-      users: normalizedUsers,
-      businesses: normalizedBusinesses,
-      memberships: normalizedMemberships,
+      users: usersPresent ? normalizedUsers : null,
+      businesses: businessesPresent ? normalizedBusinesses : null,
+      memberships: membershipsPresent ? normalizedMemberships : null,
     },
     candidates: canonicalCandidateSort(candidates),
     findings: sortedFindings,
@@ -597,18 +797,37 @@ export const buildMembershipAuthorityReport = (snapshot, metadata = {}) => {
   };
 };
 
-const listCollectionNames = async (db) => {
-  const collections = await db.listCollections({}, { nameOnly: true }).toArray();
-  return new Set(collections.map((collection) => collection.name));
+const sessionOption = (session) => (session ? { session } : {});
+
+const listCollectionNames = async (db, session) => {
+  const collections = await db
+    .listCollections({}, { nameOnly: true, ...sessionOption(session) })
+    .toArray();
+  return collections.map((collection) => collection.name).sort(compareText);
 };
 
-const readCollection = async (db, collectionNames, name, projection) => {
-  if (!collectionNames.has(name)) return [];
-  return db.collection(name).find({}, { projection }).sort({ _id: 1 }).toArray();
+const readCollection = async (
+  db,
+  collectionNames,
+  name,
+  projection,
+  session,
+) => {
+  if (!collectionNames.has(name)) return null;
+  return db
+    .collection(name)
+    .find({}, { projection, ...sessionOption(session) })
+    .sort({ _id: 1 })
+    .toArray();
 };
 
-const readDuplicateMembershipPairs = async (db, collectionNames, name) => {
-  if (!collectionNames.has(name)) return [];
+const readDuplicateMembershipPairs = async (
+  db,
+  collectionNames,
+  name,
+  session,
+) => {
+  if (!collectionNames.has(name)) return null;
 
   return db
     .collection(name)
@@ -625,56 +844,153 @@ const readDuplicateMembershipPairs = async (db, collectionNames, name) => {
       },
       { $match: { count: { $gt: 1 } } },
       { $sort: { "_id.user": 1, "_id.business": 1 } },
-    ])
+    ], sessionOption(session))
     .toArray();
 };
 
-export const readMembershipAuthoritySnapshot = async (db) => {
+const readMembershipAuthoritySource = async (db, session) => {
   if (!db?.databaseName) {
     throw new TypeError("Se requiere una conexión MongoDB con databaseName");
   }
 
-  const names = await listCollectionNames(db);
+  const observedCollectionNames = await listCollectionNames(db, session);
+  const names = new Set(observedCollectionNames);
   const { users, businesses, memberships } = MEMBERSHIP_AUTHORITY_COLLECTIONS;
 
-  const [
-    userDocuments,
-    businessDocuments,
-    membershipDocuments,
-    indexes,
-    duplicatePairs,
-  ] =
-    await Promise.all([
-      readCollection(db, names, users, {
-        _id: 1,
-        business: 1,
-        role: 1,
-        isActive: 1,
-      }),
-      readCollection(db, names, businesses, {
-        _id: 1,
-        owner: 1,
-        isActive: 1,
-      }),
-      readCollection(db, names, memberships, {
-        _id: 1,
-        user: 1,
-        business: 1,
-        role: 1,
-        isActive: 1,
-      }),
-      names.has(memberships)
-        ? db.collection(memberships).listIndexes().toArray()
-        : Promise.resolve([]),
-      readDuplicateMembershipPairs(db, names, memberships),
-    ]);
+  const userDocuments = await readCollection(
+    db,
+    names,
+    users,
+    {
+      _id: 1,
+      business: 1,
+      role: 1,
+      isActive: 1,
+    },
+    session,
+  );
+  const businessDocuments = await readCollection(
+    db,
+    names,
+    businesses,
+    {
+      _id: 1,
+      owner: 1,
+      isActive: 1,
+    },
+    session,
+  );
+  const membershipDocuments = await readCollection(
+    db,
+    names,
+    memberships,
+    {
+      _id: 1,
+      user: 1,
+      business: 1,
+      role: 1,
+      isActive: 1,
+    },
+    session,
+  );
+  const indexes = names.has(memberships)
+    ? await db
+        .collection(memberships)
+        .listIndexes(sessionOption(session))
+        .toArray()
+    : null;
+  const duplicatePairs = await readDuplicateMembershipPairs(
+    db,
+    names,
+    memberships,
+    session,
+  );
 
   return {
     databaseName: db.databaseName,
+    collectionState: {
+      observed: observedCollectionNames,
+    },
     indexes,
     users: userDocuments,
     businesses: businessDocuments,
     memberships: membershipDocuments,
     duplicatePairs,
   };
+};
+
+const SNAPSHOT_UNSUPPORTED_CODES = new Set([20, 72, 115, 263, 303]);
+const SNAPSHOT_UNSUPPORTED_CODE_NAMES = new Set([
+  "CommandNotSupported",
+  "IllegalOperation",
+  "InvalidOptions",
+  "OperationNotSupportedInTransaction",
+]);
+
+export const isSnapshotReadUnsupported = (error) => {
+  if (!error) return false;
+  if (SNAPSHOT_UNSUPPORTED_CODES.has(error.code)) return true;
+  if (SNAPSHOT_UNSUPPORTED_CODE_NAMES.has(error.codeName)) return true;
+
+  return /(?:read concern|snapshot).*(?:not supported|only supported)|replica set member|mongos|standalone/iu.test(
+    String(error.message ?? ""),
+  );
+};
+
+const attachSnapshotConsistency = (snapshot, firstFingerprint, secondFingerprint) => ({
+  ...snapshot,
+  snapshotConsistency: {
+    consistent: firstFingerprint === secondFingerprint,
+    firstFingerprint,
+    secondFingerprint,
+  },
+});
+
+const readWithSnapshotSession = async (db, startSession) => {
+  let session;
+  try {
+    session = await startSession({
+      snapshot: true,
+      causalConsistency: false,
+    });
+    const snapshot = await readMembershipAuthoritySource(db, session);
+    const fingerprint = fingerprintMembershipAuthoritySource(snapshot);
+    return {
+      snapshot: attachSnapshotConsistency(snapshot, fingerprint, fingerprint),
+      readStrategy: "snapshot",
+    };
+  } finally {
+    if (session) await session.endSession();
+  }
+};
+
+const readWithDoubleRead = async (db) => {
+  const first = await readMembershipAuthoritySource(db);
+  const second = await readMembershipAuthoritySource(db);
+  const firstFingerprint = fingerprintMembershipAuthoritySource(first);
+  const secondFingerprint = fingerprintMembershipAuthoritySource(second);
+
+  return {
+    snapshot: attachSnapshotConsistency(
+      second,
+      firstFingerprint,
+      secondFingerprint,
+    ),
+    readStrategy: "double-read",
+  };
+};
+
+export const readMembershipAuthoritySnapshot = async (
+  db,
+  { startSession = db?.client?.startSession?.bind(db.client) } = {},
+) => {
+  if (startSession) {
+    try {
+      return await readWithSnapshotSession(db, startSession);
+    } catch (error) {
+      if (!isSnapshotReadUnsupported(error)) throw error;
+    }
+  }
+
+  return readWithDoubleRead(db);
 };

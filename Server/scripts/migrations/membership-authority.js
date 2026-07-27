@@ -8,6 +8,13 @@ import {
   buildMembershipAuthorityReport,
   readMembershipAuthoritySnapshot,
 } from "./membership-authority-audit.js";
+import {
+  fingerprintMongoTarget,
+  MEMBERSHIP_AUTHORITY_AUDITOR_VERSION,
+  resolveEffectiveCodeSha,
+  sanitizeAuditErrorMessage,
+  validateAuditEnvironment,
+} from "./membership-authority-provenance.js";
 
 const EXIT_UNSAFE = 2;
 
@@ -34,7 +41,7 @@ export const parseMembershipAuthorityArgs = (argv) => {
       separatorIndex === -1 ? undefined : argument.slice(separatorIndex + 1);
     const value = inlineValue ?? argv[index + 1];
 
-    if (!["mode", "database", "report"].includes(key)) {
+    if (!["mode", "environment", "database", "report", "code-sha"].includes(key)) {
       throw new Error(`Opción no reconocida: --${key}`);
     }
 
@@ -42,7 +49,7 @@ export const parseMembershipAuthorityArgs = (argv) => {
       throw new Error(`Falta valor para --${key}`);
     }
 
-    options[key] = value;
+    options[key === "code-sha" ? "codeSha" : key] = value;
     if (inlineValue === undefined) index += 1;
   }
 
@@ -53,6 +60,7 @@ const usage = () => {
   console.log(`Uso:
   npm run migration:membership-authority -- \\
     --mode=audit \\
+    --environment=production \\
     --database=agenda \\
     --report=./artifacts/membership-authority-audit.json
 
@@ -61,16 +69,21 @@ El único modo disponible en 6.2.2-B es audit. Nunca escribe en MongoDB.`);
 
 export const runMembershipAuthorityAudit = async ({
   mongoUri,
+  environment,
   database,
   report,
+  explicitCodeSha,
   connect = mongoose.connect.bind(mongoose),
   disconnect = mongoose.disconnect.bind(mongoose),
   connection = mongoose.connection,
+  startSession,
   now = () => new Date(),
 }) => {
+  validateAuditEnvironment(environment);
   if (!mongoUri) throw new Error("MONGO_URI es obligatoria");
   if (!database) throw new Error("--database es obligatorio");
   if (!report) throw new Error("--report es obligatorio");
+  const targetFingerprint = fingerprintMongoTarget(mongoUri, database);
 
   let connected = false;
   try {
@@ -84,11 +97,21 @@ export const runMembershipAuthorityAudit = async ({
       );
     }
 
-    const snapshot = await readMembershipAuthoritySnapshot(connection.db);
+    const { snapshot, readStrategy } = await readMembershipAuthoritySnapshot(
+      connection.db,
+      {
+        startSession:
+          startSession ?? connection.startSession?.bind(connection),
+      },
+    );
     const absoluteReportPath = path.resolve(report);
     const auditReport = buildMembershipAuthorityReport(snapshot, {
+      environment,
+      mongoTargetFingerprint: targetFingerprint,
+      codeSha: resolveEffectiveCodeSha({ explicitCodeSha }),
+      auditorVersion: MEMBERSHIP_AUTHORITY_AUDITOR_VERSION,
+      readStrategy,
       generatedAt: now().toISOString(),
-      codeSha: process.env.GITHUB_SHA || null,
     });
 
     await mkdir(path.dirname(absoluteReportPath), { recursive: true, mode: 0o700 });
@@ -123,15 +146,21 @@ export const main = async (argv = process.argv.slice(2)) => {
     );
   }
 
+  validateAuditEnvironment(options.environment);
+
   const result = await runMembershipAuthorityAudit({
     mongoUri: process.env.MONGO_URI,
+    environment: options.environment,
     database: options.database,
     report: options.report,
+    explicitCodeSha: options.codeSha,
   });
 
-  const { canonicalPayload, checksum } = result.report;
+  const { canonicalPayload, checksum, metadata } = result.report;
   console.log(`Audit Membership completado en modo read-only.`);
+  console.log(`Entorno confirmado: ${metadata.environment}`);
   console.log(`Base: ${canonicalPayload.databaseName}`);
+  console.log(`Estrategia de lectura: ${metadata.readStrategy}`);
   console.log(`Checksum: ${checksum.value}`);
   console.log(`Candidatas: ${canonicalPayload.counts.candidates}`);
   console.log(`Bloqueos: ${canonicalPayload.findings.filter((item) => item.blocking).length}`);
@@ -151,7 +180,12 @@ if (isDirectExecution) {
       process.exitCode = exitCode;
     })
     .catch((error) => {
-      console.error(`Audit Membership rechazado: ${error.message}`);
+      console.error(
+        `Audit Membership rechazado: ${sanitizeAuditErrorMessage(
+          error,
+          process.env.MONGO_URI,
+        )}`,
+      );
       process.exitCode = 1;
     });
 }

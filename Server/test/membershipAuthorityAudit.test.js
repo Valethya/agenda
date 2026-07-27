@@ -59,10 +59,15 @@ test("audit Membership lee colecciones e índices sin modificar la base", async 
       ),
     );
 
-    const snapshot = await readMembershipAuthoritySnapshot(mongoose.connection.db);
+    const { snapshot, readStrategy } =
+      await readMembershipAuthoritySnapshot(mongoose.connection.db);
     const report = buildMembershipAuthorityReport(snapshot, {
+      environment: "test",
+      mongoTargetFingerprint: "integration-test-fingerprint",
       generatedAt: "2026-07-27T00:00:00.000Z",
       codeSha: "integration-test",
+      auditorVersion: "integration-test",
+      readStrategy,
     });
 
     const after = Object.fromEntries(
@@ -86,6 +91,19 @@ test("audit Membership lee colecciones e índices sin modificar la base", async 
     assert.equal(report.canonicalPayload.safeToApply, true);
     assert.equal(report.canonicalPayload.counts.candidates, 0);
     assert.equal(report.canonicalPayload.categoryCounts.alreadyConsistent, 1);
+    assert.deepEqual(
+      report.canonicalPayload.preconditions.collections.expected,
+      ["businesses", "memberships", "users"],
+    );
+    assert.deepEqual(
+      report.canonicalPayload.preconditions.collections.missing,
+      [],
+    );
+    assert.equal(
+      report.canonicalPayload.preconditions.snapshotConsistency.consistent,
+      true,
+    );
+    assert.equal(["snapshot", "double-read"].includes(readStrategy), true);
     assert.equal(JSON.stringify(report).includes("audit-admin@example.com"), false);
     assert.equal(JSON.stringify(report.canonicalPayload).includes("updatedAt"), false);
   } finally {

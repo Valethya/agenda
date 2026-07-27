@@ -10,6 +10,7 @@ import {
   checksumCanonicalPayload,
   inspectMembershipIndexes,
   isExactMembershipUniqueIndex,
+  readMembershipAuthoritySnapshot,
   serializeCanonicalPayload,
 } from "../../scripts/migrations/membership-authority-audit.js";
 import {
@@ -29,12 +30,80 @@ const exactIndex = {
 
 const snapshot = (overrides = {}) => ({
   databaseName: "agenda_test",
+  collectionState: {
+    observed: ["businesses", "memberships", "users"],
+  },
+  snapshotConsistency: {
+    consistent: true,
+    firstFingerprint: "fixture",
+    secondFingerprint: "fixture",
+  },
   indexes: [exactIndex],
   users: [],
   businesses: [],
   memberships: [],
   ...overrides,
 });
+
+const sourceRead = (overrides = {}) => ({
+  collections: ["users", "businesses", "memberships"],
+  indexes: [exactIndex],
+  users: [],
+  businesses: [],
+  memberships: [],
+  duplicatePairs: [],
+  ...overrides,
+});
+
+const createSequencedDb = (reads, calls = []) => {
+  let readIndex = -1;
+  const current = () => reads[Math.min(readIndex, reads.length - 1)];
+
+  return {
+    databaseName: "agenda_test",
+    listCollections(_filter, options) {
+      readIndex += 1;
+      calls.push({ operation: "listCollections", options });
+      return {
+        async toArray() {
+          return current().collections.map((name) => ({ name }));
+        },
+      };
+    },
+    collection(name) {
+      return {
+        find(_filter, options) {
+          calls.push({ operation: `find:${name}`, options });
+          return {
+            sort() {
+              return {
+                async toArray() {
+                  return current()[name];
+                },
+              };
+            },
+          };
+        },
+        listIndexes(options) {
+          calls.push({ operation: `listIndexes:${name}`, options });
+          return {
+            async toArray() {
+              return current().indexes;
+            },
+          };
+        },
+        aggregate(_pipeline, options) {
+          calls.push({ operation: `aggregate:${name}`, options });
+          return {
+            async toArray() {
+              return current().duplicatePairs;
+            },
+          };
+        },
+      };
+    },
+  };
+};
 
 const categories = (payload, category) =>
   payload.findings.filter((finding) => finding.category === category);
@@ -82,6 +151,350 @@ describe("membership authority audit", () => {
     assert.equal(payload.safeToApply, false);
     assert.equal(payload.preconditions.membershipUniqueIndex.exactUniqueExists, false);
     assert.equal(categories(payload, "missingUniqueMembershipIndex").length, 1);
+  });
+
+  for (const collection of ["users", "businesses", "memberships"]) {
+    it(`bloquea cuando falta la colección física ${collection}`, async () => {
+      const incompleteRead = sourceRead({
+        collections: ["users", "businesses", "memberships"].filter(
+          (name) => name !== collection,
+        ),
+        [collection]: null,
+        ...(collection === "memberships"
+          ? { indexes: null, duplicatePairs: null }
+          : {}),
+      });
+      const result = await readMembershipAuthoritySnapshot(
+        createSequencedDb([incompleteRead, structuredClone(incompleteRead)]),
+        { startSession: null },
+      );
+      const payload = buildMembershipAuthorityPayload(result.snapshot);
+
+      assert.equal(payload.safeToApply, false);
+      assert.equal(payload.sources[collection], null);
+      assert.equal(payload.counts[collection], null);
+      assert.deepEqual(categories(payload, "missingRequiredCollection"), [
+        {
+          category: "missingRequiredCollection",
+          blocking: true,
+          collection,
+        },
+      ]);
+      assert.deepEqual(
+        payload.preconditions.collections.expected,
+        ["businesses", "memberships", "users"],
+      );
+      assert.equal(
+        payload.preconditions.collections.observed.includes(collection),
+        false,
+      );
+    });
+  }
+
+  it("acepta colecciones físicas existentes aunque estén vacías", async () => {
+    const emptyRead = sourceRead();
+    const result = await readMembershipAuthoritySnapshot(
+      createSequencedDb([emptyRead, structuredClone(emptyRead)]),
+      { startSession: null },
+    );
+    const payload = buildMembershipAuthorityPayload(result.snapshot);
+
+    assert.equal(payload.safeToApply, true);
+    assert.equal(payload.schemaVersion, 2);
+    assert.deepEqual(payload.sources, {
+      users: [],
+      businesses: [],
+      memberships: [],
+    });
+    assert.equal(categories(payload, "missingRequiredCollection").length, 0);
+  });
+
+  it("bloquea una restauración incompleta con sólo memberships e índice", async () => {
+    const incompleteRead = sourceRead({
+      collections: ["memberships"],
+      users: null,
+      businesses: null,
+    });
+    const result = await readMembershipAuthoritySnapshot(
+      createSequencedDb([incompleteRead, structuredClone(incompleteRead)]),
+      { startSession: null },
+    );
+    const payload = buildMembershipAuthorityPayload(result.snapshot);
+
+    assert.equal(payload.safeToApply, false);
+    assert.deepEqual(
+      categories(payload, "missingRequiredCollection").map(
+        (finding) => finding.collection,
+      ),
+      ["businesses", "users"],
+    );
+    assert.equal(
+      payload.preconditions.membershipUniqueIndex.exactUniqueExists,
+      true,
+    );
+  });
+
+  const coherentUserId = id(41);
+  const coherentBusinessId = id(42);
+  const secondBusinessId = id(43);
+  const coherentMembershipId = id(44);
+  const secondMembershipId = id(45);
+  const coherentRead = sourceRead({
+    users: [
+      {
+        _id: coherentUserId,
+        role: "admin",
+        business: coherentBusinessId,
+        isActive: true,
+      },
+    ],
+    businesses: [
+      {
+        _id: coherentBusinessId,
+        owner: coherentUserId,
+        isActive: true,
+      },
+      {
+        _id: secondBusinessId,
+        isActive: true,
+      },
+    ],
+    memberships: [
+      {
+        _id: coherentMembershipId,
+        user: coherentUserId,
+        business: coherentBusinessId,
+        role: "admin",
+        isActive: true,
+      },
+    ],
+  });
+
+  const consistencyChanges = [
+    {
+      name: "cambio de rol",
+      mutate: (read) => ({
+        ...read,
+        users: [{ ...read.users[0], role: "worker" }],
+      }),
+    },
+    {
+      name: "cambio de negocio heredado",
+      mutate: (read) => ({
+        ...read,
+        users: [{ ...read.users[0], business: secondBusinessId }],
+      }),
+    },
+    {
+      name: "cambio de propietario",
+      mutate: (read) => ({
+        ...read,
+        businesses: [{ ...read.businesses[0], owner: null }, read.businesses[1]],
+      }),
+    },
+    {
+      name: "activación o desactivación de Membership",
+      mutate: (read) => ({
+        ...read,
+        memberships: [{ ...read.memberships[0], isActive: false }],
+      }),
+    },
+    {
+      name: "inserción de Membership sin duplicados",
+      mutate: (read) => ({
+        ...read,
+        memberships: [
+          ...read.memberships,
+          {
+            _id: secondMembershipId,
+            user: coherentUserId,
+            business: secondBusinessId,
+            role: "worker",
+            isActive: true,
+          },
+        ],
+      }),
+    },
+    {
+      name: "eliminación de Membership sin duplicados",
+      mutate: (read) => ({
+        ...read,
+        memberships: [],
+      }),
+    },
+    {
+      name: "cambio de índice",
+      mutate: (read) => ({
+        ...read,
+        indexes: [{ name: "_id_", key: { _id: 1 }, unique: true }],
+      }),
+    },
+  ];
+
+  for (const change of consistencyChanges) {
+    it(`bloquea double-read ante ${change.name}`, async () => {
+      const result = await readMembershipAuthoritySnapshot(
+        createSequencedDb([coherentRead, change.mutate(coherentRead)]),
+        { startSession: null },
+      );
+      const payload = buildMembershipAuthorityPayload(result.snapshot);
+
+      assert.equal(result.readStrategy, "double-read");
+      assert.equal(
+        payload.preconditions.snapshotConsistency.consistent,
+        false,
+      );
+      assert.equal(categories(payload, "snapshotInconsistency").length, 1);
+      assert.equal(payload.safeToApply, false);
+    });
+  }
+
+  it("acepta dos lecturas completas idénticas", async () => {
+    const result = await readMembershipAuthoritySnapshot(
+      createSequencedDb([coherentRead, structuredClone(coherentRead)]),
+      { startSession: null },
+    );
+    const payload = buildMembershipAuthorityPayload(result.snapshot);
+
+    assert.equal(result.readStrategy, "double-read");
+    assert.equal(payload.preconditions.snapshotConsistency.consistent, true);
+    assert.equal(categories(payload, "snapshotInconsistency").length, 0);
+    assert.equal(payload.safeToApply, true);
+  });
+
+  it("devuelve código no cero cuando double-read detecta un cambio", async () => {
+    const temporaryDirectory = await mkdtemp(
+      path.join(os.tmpdir(), "membership-authority-inconsistent-"),
+    );
+    const reportPath = path.join(temporaryDirectory, "audit.json");
+
+    try {
+      const changedRead = {
+        ...coherentRead,
+        users: [{ ...coherentRead.users[0], role: "worker" }],
+      };
+      const result = await runMembershipAuthorityAudit({
+        mongoUri: "mongodb://127.0.0.1:27017/agenda_test",
+        environment: "test",
+        database: "agenda_test",
+        report: reportPath,
+        connect: async () => {},
+        disconnect: async () => {},
+        connection: {
+          db: createSequencedDb([coherentRead, changedRead]),
+        },
+        startSession: null,
+      });
+
+      assert.equal(result.exitCode, 2);
+      assert.equal(result.report.canonicalPayload.safeToApply, false);
+      assert.equal(
+        categories(
+          result.report.canonicalPayload,
+          "snapshotInconsistency",
+        ).length,
+        1,
+      );
+    } finally {
+      await rm(temporaryDirectory, { recursive: true, force: true });
+    }
+  });
+
+  it("usa la misma sesión snapshot en todas las lecturas y siempre la cierra", async () => {
+    const calls = [];
+    const session = {
+      async endSession() {
+        calls.push({ operation: "endSession" });
+      },
+    };
+    const result = await readMembershipAuthoritySnapshot(
+      createSequencedDb([coherentRead], calls),
+      {
+        startSession: async (options) => {
+          assert.deepEqual(options, {
+            snapshot: true,
+            causalConsistency: false,
+          });
+          return session;
+        },
+      },
+    );
+
+    assert.equal(result.readStrategy, "snapshot");
+    assert.equal(
+      calls
+        .filter((call) => call.options)
+        .every((call) => call.options.session === session),
+      true,
+    );
+    assert.equal(calls.at(-1).operation, "endSession");
+  });
+
+  it("usa double-read cuando la topología rechaza readConcern snapshot", async () => {
+    let sessionEnded = false;
+    const reads = [coherentRead, structuredClone(coherentRead)];
+    const db = createSequencedDb(reads);
+    const originalListCollections = db.listCollections.bind(db);
+    let snapshotAttempt = true;
+    db.listCollections = (...args) => {
+      if (snapshotAttempt) {
+        snapshotAttempt = false;
+        const error = new Error("Snapshot reads are not supported on standalone");
+        error.code = 72;
+        throw error;
+      }
+      return originalListCollections(...args);
+    };
+
+    const result = await readMembershipAuthoritySnapshot(db, {
+      startSession: async () => ({
+        async endSession() {
+          sessionEnded = true;
+        },
+      }),
+    });
+
+    assert.equal(sessionEnded, true);
+    assert.equal(result.readStrategy, "double-read");
+    assert.equal(result.snapshot.snapshotConsistency.consistent, true);
+  });
+
+  it("cierra la sesión snapshot y desconecta ante un error de lectura", async () => {
+    let sessionEnded = false;
+    let disconnected = false;
+    const secretUri =
+      "mongodb://private-user:private-pass@cluster.example:27017/agenda_test";
+
+    await assert.rejects(
+      () =>
+        runMembershipAuthorityAudit({
+          mongoUri: secretUri,
+          environment: "test",
+          database: "agenda_test",
+          report: "./artifacts/no-debe-escribirse.json",
+          connect: async () => {},
+          disconnect: async () => {
+            disconnected = true;
+          },
+          connection: {
+            db: {
+              databaseName: "agenda_test",
+              listCollections() {
+                throw new Error("fallo de lectura controlado");
+              },
+            },
+          },
+          startSession: async () => ({
+            async endSession() {
+              sessionEnded = true;
+            },
+          }),
+        }),
+      /fallo de lectura controlado/,
+    );
+
+    assert.equal(sessionEnded, true);
+    assert.equal(disconnected, true);
   });
 
   it("genera una candidata determinista y expone el cambio de login", () => {
@@ -456,10 +869,18 @@ describe("membership authority audit", () => {
     const first = buildMembershipAuthorityReport(source, {
       generatedAt: "2026-07-27T00:00:00.000Z",
       codeSha: "first",
+      environment: "test",
+      mongoTargetFingerprint: "first-target",
+      auditorVersion: "1.0.0",
+      readStrategy: "snapshot",
     });
     const second = buildMembershipAuthorityReport(source, {
       generatedAt: "2026-07-28T00:00:00.000Z",
       codeSha: "second",
+      environment: "production",
+      mongoTargetFingerprint: "second-target",
+      auditorVersion: "2.0.0",
+      readStrategy: "double-read",
     });
 
     assert.equal(first.checksum.value, second.checksum.value);
@@ -537,14 +958,18 @@ describe("membership authority audit", () => {
     assert.deepEqual(
       parseMembershipAuthorityArgs([
         "--mode=audit",
+        "--environment=test",
         "--database",
         "agenda_test",
         "--report=./artifacts/audit.json",
+        "--code-sha=explicit-sha",
       ]),
       {
         mode: "audit",
+        environment: "test",
         database: "agenda_test",
         report: "./artifacts/audit.json",
+        codeSha: "explicit-sha",
       },
     );
 
@@ -559,12 +984,39 @@ describe("membership authority audit", () => {
     );
   });
 
+  it("rechaza entorno ausente o inválido antes de conectar", async () => {
+    let connected = false;
+    const common = {
+      mongoUri: "mongodb://127.0.0.1:27017/agenda_test",
+      database: "agenda_test",
+      report: "./artifacts/no-debe-escribirse.json",
+      connect: async () => {
+        connected = true;
+      },
+    };
+
+    await assert.rejects(
+      () => runMembershipAuthorityAudit(common),
+      /--environment es obligatorio/,
+    );
+    await assert.rejects(
+      () =>
+        runMembershipAuthorityAudit({
+          ...common,
+          environment: "external-production",
+        }),
+      /Entorno no permitido/,
+    );
+    assert.equal(connected, false);
+  });
+
   it("rechaza una base distinta de la confirmada y siempre desconecta", async () => {
     let disconnected = false;
     await assert.rejects(
       () =>
         runMembershipAuthorityAudit({
           mongoUri: "mongodb://127.0.0.1:27017/otra_test",
+          environment: "test",
           database: "agenda_test",
           report: "./artifacts/no-debe-escribirse.json",
           connect: async () => {},
@@ -641,7 +1093,9 @@ describe("membership authority audit", () => {
 
     try {
       const result = await runMembershipAuthorityAudit({
-        mongoUri: "mongodb://127.0.0.1:27017/agenda_test",
+        mongoUri:
+          "mongodb://audit-user:audit-password@127.0.0.1:27017/agenda_test?authSource=admin&token=private-token",
+        environment: "test",
         database: "agenda_test",
         report: reportPath,
         connect: async (_uri, options) => {
@@ -658,7 +1112,11 @@ describe("membership authority audit", () => {
       assert.equal(result.report.canonicalPayload.safeToApply, true);
       assert.equal(disconnected, true);
       assert.deepEqual(
-        calls.filter((call) => /insert|update|delete|createIndex|dropIndex/.test(call)),
+        calls.filter((call) =>
+          /insert|update|delete|bulkWrite|createIndex|dropIndex|findOneAndUpdate|replaceOne/u.test(
+            call,
+          ),
+        ),
         [],
       );
 
@@ -668,6 +1126,22 @@ describe("membership authority audit", () => {
       assert.equal(
         persistedReport.metadata.generatedAt,
         "2026-07-27T00:00:00.000Z",
+      );
+      assert.equal(persistedReport.metadata.environment, "test");
+      assert.equal(persistedReport.metadata.readStrategy, "double-read");
+      assert.equal(persistedReport.metadata.auditorVersion, "1.1.0");
+      assert.match(
+        persistedReport.metadata.mongoTargetFingerprint,
+        /^[a-f0-9]{64}$/u,
+      );
+      assert.equal(JSON.stringify(persistedReport).includes("audit-user"), false);
+      assert.equal(
+        JSON.stringify(persistedReport).includes("audit-password"),
+        false,
+      );
+      assert.equal(
+        JSON.stringify(persistedReport).includes("private-token"),
+        false,
       );
       assert.equal(calls.includes("aggregate:memberships"), true);
     } finally {
