@@ -163,18 +163,26 @@ Interfaz implementada:
 npm run migration:membership-authority -- \
   --mode=audit \
   --environment=production \
+  --expected-target-fingerprint=<sha256-aprobado> \
   --database=agenda \
   --report=./artifacts/membership-authority-audit.json
 ```
 
 `--environment` es obligatorio antes de conectar y sólo acepta `development`,
-`test`, `staging` o `production`. Confirmar el entorno no reemplaza la
-comprobación posterior de que el nombre real de la base coincide exactamente
-con `--database`.
+`test`, `staging` o `production`. En `staging` y `production` también es
+obligatorio el fingerprint aprobado del destino. El auditor calcula el
+fingerprint observado con el mismo algoritmo y aborta antes de conectar —y, por
+tanto, antes de leer colecciones— si falta o no coincide. La opción explícita
+tiene precedencia sobre
+`MEMBERSHIP_AUTHORITY_EXPECTED_TARGET_FINGERPRINT`. En `development` y `test`
+el fingerprint puede omitirse; si se entrega, también debe coincidir. Confirmar
+el entorno no reemplaza la comprobación posterior de que el nombre real de la
+base coincide exactamente con `--database`.
 
 El informe no se versionará si contiene identificadores o información de
-producción. Por defecto utilizará IDs y contadores; no incluirá correos ni
-teléfonos.
+producción. Utiliza evidencias SHA-256 estables y no reversibles para
+identificadores válidos o malformados; no incluye ObjectId sin pseudonimizar,
+correos ni teléfonos.
 
 ### Categorías obligatorias
 
@@ -188,7 +196,10 @@ teléfonos.
 | `duplicateMembership` | Más de una relación para el mismo par; bloquea `apply`. |
 | `missingRequiredCollection` | Falta físicamente `users`, `businesses` o `memberships`; se emite un hallazgo por colección, bloquea el informe y exige revisar la base o restauración. |
 | `snapshotInconsistency` | Dos lecturas completas difieren en cualquier dato relevante de autoridad, colecciones, índices o duplicados, o la agregación y la lectura de Memberships no coinciden; bloquea y exige repetir el audit. |
+| `temporalSnapshotNotGuaranteed` | La topología sólo permitió doble lectura. El resultado es diagnóstico, nunca equivale a un snapshot temporal ni habilita `safeToApply`. |
 | `missingUniqueMembershipIndex` | No existe físicamente el índice único exacto `{ user: 1, business: 1 }`; bloquea `apply`. |
+| `invalidAuthorityState` | `isActive` está ausente o contiene un valor distinto de `true` o `false`; conserva la diferencia entre ausencia e invalidez y bloquea. |
+| `invalidAuthorityIdentifier` | Un identificador o referencia requerido está ausente o malformado; registra únicamente evidencia pseudonimizada, no lo usa para correlacionar relaciones y bloquea. |
 | `platformRoleInMembership` | Membership con rol `superadmin`; bloquea `apply`. |
 | `unknownMembershipRole` | Membership con un rol distinto de `admin` o `worker`; bloquea `apply`. |
 | `membershipStateConflict` | Membership existente para el par y rol esperados, pero sin estado activo explícito; bloquea `apply`. |
@@ -206,8 +217,8 @@ El informe tendrá dos bloques separados:
 
 `canonicalPayload` contendrá únicamente:
 
-- versión del esquema canónico, incrementada a `2` al incorporar colecciones
-  físicas y coherencia de lectura;
+- versión del esquema canónico, incrementada a `3` al incorporar validación
+  estricta de estados e identificadores y garantía temporal explícita;
 - nombre exacto de la base;
 - colecciones físicas esperadas, observadas y ausentes;
 - precondición de coherencia con las huellas de las fuentes comparadas;
@@ -221,9 +232,10 @@ El informe tendrá dos bloques separados:
 - evidencia legacy utilizada para clasificar cada candidata, incluidos los
   campos concretos que justifican `eligibleBackfill` o
   `ownerWithoutAdminMembership`;
-- candidatas con IDs de usuario y negocio, rol, estado activo y resultado de
-  login o selección que cambiaría con el backfill;
-- conflictos, duplicados y categorías bloqueantes con los IDs implicados;
+- candidatas con evidencias pseudonimizadas de usuario y negocio, rol, estado
+  activo y resultado de login o selección que cambiaría con el backfill;
+- conflictos, duplicados y categorías bloqueantes con evidencias
+  pseudonimizadas estables;
 - cualquier otro campo cuya variación cambie la clasificación, las
   precondiciones o la decisión de migración;
 - resultado `safeToApply`.
@@ -239,7 +251,11 @@ exclusivamente en `metadata`.
 - `mongoTargetFingerprint`, huella SHA-256 de protocolo, hosts y base
   sanitizados, sin URI, usuario, contraseña ni query string;
 - `codeSha`, priorizando `RAILWAY_GIT_COMMIT_SHA`, después `GITHUB_SHA`, después
-  `--code-sha` o la variable explícita del auditor, y finalmente `null`;
+  `--code-sha` o la variable explícita del auditor, y finalmente `null`; sólo
+  admite SHA hexadecimales de Git de 40 o 64 caracteres;
+- `codeShaSource`, con `railway`, `github-actions`, `explicit` o `null`;
+- `targetValidation`, que registra si la comprobación era obligatoria, si se
+  proporcionó un fingerprint, si coincidió y si procedió de CLI o variable;
 - `auditorVersion`;
 - `readStrategy`, con valor `snapshot` o `double-read`;
 - `generatedAt`.
@@ -248,7 +264,9 @@ Ni la URI MongoDB ni sus credenciales se almacenan o imprimen.
 
 La canonicalización será exacta:
 
-1. convertir cada ObjectId a su representación hexadecimal minúscula;
+1. validar cada ObjectId y convertirlo en evidencia SHA-256 estable y no
+   reversible; un valor ausente o malformado conserva ese estado y nunca
+   participa como relación válida;
 2. omitir valores `undefined` y rechazar tipos no previstos;
 3. ordenar recursivamente las claves de cada objeto;
 4. ordenar candidatas por `user`, `business` y `role`;
@@ -261,7 +279,8 @@ La canonicalización será exacta:
 Cuando la topología lo admite, el auditor abre una sesión de sólo lectura con
 `readConcern: snapshot`, pasa esa misma sesión a `listCollections`, las tres
 lecturas `find`, `listIndexes` y la agregación de duplicados, y siempre finaliza
-la sesión.
+la sesión. Sólo esta estrategia puede registrar
+`temporalSnapshotGuaranteed: true`.
 
 Si la topología rechaza lecturas snapshot, el auditor ejecuta dos lecturas
 completas secuenciales. Calcula una huella canónica de cada lectura que cubre:
@@ -273,11 +292,24 @@ completas secuenciales. Calcula una huella canónica de cada lectura que cubre:
 - definición física relevante de índices;
 - pares duplicados.
 
-Sólo acepta el inventario cuando ambas huellas son idénticas. Cualquier cambio,
-incluidas inserciones o eliminaciones sin duplicados, genera
-`snapshotInconsistency`, fuerza `safeToApply: false` y devuelve un código de
-salida distinto de cero. La comparación exclusiva de duplicados no se considera
-suficiente.
+La doble lectura distingue `dataConsistentBetweenReads`, pero siempre registra
+`temporalSnapshotGuaranteed: false`, genera
+`temporalSnapshotNotGuaranteed` y fuerza `safeToApply: false`, incluso cuando
+ambas huellas coinciden. Si difieren, además genera `snapshotInconsistency`.
+Incluye inserciones o eliminaciones sin duplicados; comparar exclusivamente
+duplicados no es suficiente. Este fallback es diagnóstico y no se presenta como
+equivalente a una lectura snapshot.
+
+### Evidencia read-only y archivo local
+
+La prueba E2E ejecuta `runMembershipAuthorityAudit`, captura antes y después los
+documentos, nombres de colecciones e índices de toda la base `_test`, y usa
+command monitoring para rechazar comandos mutantes. La afirmación read-only se
+limita a esa entrada pública y a esa topología controlada.
+
+El informe local se crea de forma exclusiva con permisos `0600`: rechaza
+symlinks y destinos preexistentes, no los sobrescribe y elimina el archivo
+parcial si falla una escritura iniciada.
 
 ### Concurrencia entre `audit` y `apply`
 
@@ -700,13 +732,31 @@ solamente el auditor read-only de 6.2.2-B. No implementa modos mutables ni
 acredita ninguna ejecución operativa o productiva. El audit no se ha ejecutado
 contra producción.
 
+Una futura ejecución real queda bloqueada hasta acreditar, fuera de este PR:
+
+- credencial MongoDB estrictamente de sólo lectura;
+- fingerprint aprobado y verificado para el entorno;
+- topología compatible con una sesión snapshot real;
+- política aprobada de acceso, conservación y eliminación del informe;
+- evidencia de ejecución controlada en una topología equivalente a producción.
+
+La doble lectura no satisface el gate de topología. Estas condiciones no se han
+ejecutado ni verificado contra `staging`, Railway, Atlas o producción.
+
 Estado de condiciones:
 
 - [x] Implementación del auditor read-only.
 - [x] Comprobación automatizada del índice único físico y de duplicados.
 - [x] Comprobación de colecciones físicas requeridas.
-- [x] Lectura snapshot con fallback bloqueante de doble lectura.
+- [x] Lectura snapshot con fallback diagnóstico de doble lectura siempre
+      bloqueante.
 - [x] Procedencia operativa sanitizada fuera del checksum.
+- [x] Prueba E2E read-only sobre entrada pública y base `_test` controlada.
+- [ ] Credencial operativa estrictamente read-only verificada.
+- [ ] Fingerprint operativo aprobado para el entorno de ejecución.
+- [ ] Topología operativa compatible con snapshot verificada.
+- [ ] Política de acceso, conservación y eliminación del informe aprobada.
+- [ ] Ensayo controlado en topología equivalente a producción.
 - [ ] Remediación separada del índice físico, sólo si el audit la exige.
 - [x] Implementación de checksum sobre payload canónico.
 - [x] Pruebas negativas del alcance 6.2.2-B implementadas y verdes.

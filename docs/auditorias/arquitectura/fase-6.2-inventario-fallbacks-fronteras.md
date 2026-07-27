@@ -316,7 +316,9 @@ el PR documental #7.
 
 - 6.2.2: **en ejecución por etapas**; el PR #16 cerró la preparación documental
   y el PR #17 implementa y verifica el inventario dry-run read-only con
-  colecciones requeridas, lectura coherente y procedencia sanitizada según
+  colecciones requeridas, estados e identificadores estrictos, snapshot
+  temporal verificable, fallback diagnóstico bloqueante y procedencia
+  sanitizada según
   [`fase-6.2.2-migracion-autoridad-membership.md`](./fase-6.2.2-migracion-autoridad-membership.md).
 - 6.2.3: migrar turnos y bloqueos para incluir negocio.
 - 6.2.4: aplicar `{ _id, business }` en repositorios y servicios.
@@ -337,8 +339,11 @@ el PR documental #7.
       6.2.2 mediante el PR #16.
 - [x] Inventario dry-run read-only implementado y verificado mediante el PR
       #17.
-- [x] Colecciones físicas, coherencia de snapshot y procedencia del auditor
-      cubiertas por pruebas.
+- [x] Colecciones físicas, validación estricta, snapshot temporal, fallback
+      diagnóstico, procedencia y entrada pública read-only cubiertos por
+      pruebas.
+- [ ] Credencial read-only, fingerprint aprobado, topología snapshot y política
+      del informe acreditados para una ejecución operativa.
 - [ ] Inventario ejecutado y revisado en el entorno operativo autorizado.
 - [ ] Migración mutable implementada, ensayada y verificada.
 - [ ] Estrategia de migración de turnos y bloqueos aprobada.

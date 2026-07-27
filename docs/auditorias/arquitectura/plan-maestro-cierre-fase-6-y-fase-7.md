@@ -188,9 +188,11 @@ No se han modificado datos productivos ni se ha ejecutado el auditor contra
 ellos.
 
 El auditor exige las tres colecciones físicas, confirma el entorno, registra
-procedencia sanitizada y obtiene una vista coherente mediante sesión snapshot o
-doble lectura completa bloqueante. Estas guardas no sustituyen respaldo,
-remediación, ensayo ni autorización operativa.
+procedencia sanitizada, valida estados e identificadores sin inferir valores y
+sólo puede garantizar una vista temporal mediante sesión snapshot. La doble
+lectura completa es diagnóstico bloqueante y nunca habilita `safeToApply`.
+Estas guardas no sustituyen respaldo, remediación, ensayo ni autorización
+operativa.
 
 **Cambio necesario**
 
@@ -752,19 +754,23 @@ La Fase 6 podrá declararse terminada cuando se cumplan todas estas condiciones:
 implementa el inventario dry-run de 6.2.2-B. El siguiente hito es obtener
 evidencia operativa segura sin mezclar todavía 6.2.3, 6.2.4 ni el responsive:
 
-1. ejecutar el inventario read-only únicamente contra el entorno autorizado,
-   confirmando `--environment` y revisando su procedencia;
-2. revisar el informe y resolver manualmente todos los conflictos;
-3. si el índice físico falta o es incorrecto, preparar el PR condicional
+1. antes de ejecutar el inventario fuera de pruebas, acreditar una credencial
+   estrictamente read-only, fingerprint aprobado, topología snapshot, política
+   del informe y ensayo en topología equivalente a producción;
+2. ejecutar el inventario read-only únicamente contra el entorno autorizado,
+   confirmando `--environment`, validando el fingerprint y revisando su
+   procedencia;
+3. revisar el informe y resolver manualmente todos los conflictos;
+4. si el índice físico falta o es incorrecto, preparar el PR condicional
    6.2.2-BI después de resolver duplicados y verificar un respaldo restaurable;
-4. obtener y verificar un respaldo restaurable antes de cualquier escritura;
-5. implementar `apply`, `verify` y `rollback` en 6.2.2-C;
-6. ensayar la migración completa sobre una copia restaurada;
-7. aplicar el backfill idempotente en producción únicamente con autorización
+5. obtener y verificar un respaldo restaurable antes de cualquier escritura;
+6. implementar `apply`, `verify` y `rollback` en 6.2.2-C;
+7. ensayar la migración completa sobre una copia restaurada;
+8. aplicar el backfill idempotente en producción únicamente con autorización
    explícita y conservar los campos heredados;
-8. verificar el resultado antes de desplegar el corte de autoridad HTTP;
-9. cerrar lecturas heredadas y WebSocket en PR separados;
-10. mantener `User.role` y `User.business` durante la ventana de rollback y
+9. verificar el resultado antes de desplegar el corte de autoridad HTTP;
+10. cerrar lecturas heredadas y WebSocket en PR separados;
+11. mantener `User.role` y `User.business` durante la ventana de rollback y
     retirarlos sólo en una migración posterior.
 
 El diseño documental no autoriza por sí mismo ninguna escritura productiva.

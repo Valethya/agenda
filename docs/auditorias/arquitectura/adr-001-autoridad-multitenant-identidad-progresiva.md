@@ -141,5 +141,8 @@ Las comunicaciones necesarias para prestar el servicio se registrarán separadam
   `User.business`, cuya estrategia está definida en
   [`fase-6.2.2-migracion-autoridad-membership.md`](./fase-6.2.2-migracion-autoridad-membership.md).
   El auditor read-only del PR #17 aún no se ha ejecutado contra producción.
+  Su futura ejecución exige credencial estrictamente read-only, fingerprint
+  aprobado, topología con snapshot temporal y política de conservación del
+  informe; el fallback de doble lectura es sólo diagnóstico.
 - Estrategia separada de migración de turnos y bloqueos para 6.2.3.
 - Arquitectura de dominios y cookies para frontend y backend.
