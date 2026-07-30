@@ -3,7 +3,7 @@
 **Estado:** Aprobado; enmienda de `superadmin` incorporada mediante el PR #16
 **Fecha original:** 21 de julio de 2026
 **Última revisión:** 27 de julio de 2026
-**Base de contraste:** `master` después del PR #15 (`6326c11`)
+**Base de contraste:** `master` después del PR #16 (`5ff906b`)
 **Ámbito:** Autorización, identidad, clientes y multitenencia
 
 La decisión arquitectónica continúa vigente. El estado de implementación se
@@ -140,5 +140,9 @@ Las comunicaciones necesarias para prestar el servicio se registrarán separadam
 - Ejecución y verificación productiva de la migración de `User.role` y
   `User.business`, cuya estrategia está definida en
   [`fase-6.2.2-migracion-autoridad-membership.md`](./fase-6.2.2-migracion-autoridad-membership.md).
+  El auditor read-only del PR #17 aún no se ha ejecutado contra producción.
+  Su futura ejecución exige credencial estrictamente read-only, fingerprint
+  aprobado, topología con snapshot temporal y política de conservación del
+  informe; el fallback de doble lectura es sólo diagnóstico.
 - Estrategia separada de migración de turnos y bloqueos para 6.2.3.
 - Arquitectura de dominios y cookies para frontend y backend.

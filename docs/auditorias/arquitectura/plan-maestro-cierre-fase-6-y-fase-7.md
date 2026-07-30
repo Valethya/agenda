@@ -1,10 +1,11 @@
 # Plan maestro de cierre de Fase 6 y estado de Fase 7
 
 **Proyecto:** ATMÓSFERA Agenda
-**Estado del documento:** Plan vigente reconciliado con el código y los PR fusionados
+**Estado del documento:** Plan vigente reconciliado con `master` y con la
+implementación verificada del PR #17
 **Fecha original:** 21 de julio de 2026
 **Última revisión:** 27 de julio de 2026
-**Base de contraste:** `master` después del PR #15 (`6326c11`)
+**Base de contraste:** `master` después del PR #16 (`5ff906b`)
 **Alcance:** Backend, multitenencia, seguridad, pagos, impersonación, frontend, pruebas y operación
 
 ## 1. Objetivo
@@ -40,12 +41,13 @@ No se considerará terminada una tarea solamente porque el código compile. Cada
 | Cerrado | Tipado frontend | El PR #15 cerró 7.10 con TypeScript estricto, 0 usos productivos de `any`, checks y build en CI. |
 | Aplazado | Responsive 7.8 | Se retomará después de estabilizar arquitectura, multitenencia y datos. |
 
-### Estado consolidado después del PR #15
+### Estado consolidado después del PR #16
 
 - 6.1 está cerrada y protegida por CI.
 - 6.2.1 está cerrada mediante los PR #5, #6 y #7.
-- 6.2.2 está en preparación; `Membership` participa en varios flujos, pero aún
-  compite con roles heredados y copias de sesión.
+- 6.2.2-A está cerrada mediante el PR #16. El PR #17 implementa y verifica el
+  inventario dry-run read-only de 6.2.2-B; el corte de autoridad sigue
+  pendiente.
 - 7.7 está cerrada mediante el PR #13.
 - 7.9 está cerrada mediante el PR #14.
 - 7.10 está cerrada mediante el PR #15.
@@ -178,10 +180,19 @@ Seleccionar el primer negocio activo convierte una petición incompleta en una o
 
 ### 6.2.2 Hacer que `Membership` sea la autoridad de acceso
 
-**Estado:** preparación documental sobre `master` después del PR #15. La
-estrategia de datos y corte se define en
+**Estado:** contrato documental cerrado mediante el PR #16 e inventario dry-run
+read-only implementado y verificado mediante el PR #17. La estrategia de datos
+y corte se define en
 [`fase-6.2.2-migracion-autoridad-membership.md`](./fase-6.2.2-migracion-autoridad-membership.md).
-No se han modificado datos productivos.
+No se han modificado datos productivos ni se ha ejecutado el auditor contra
+ellos.
+
+El auditor exige las tres colecciones físicas, confirma el entorno, registra
+procedencia sanitizada, valida estados e identificadores sin inferir valores y
+sólo puede garantizar una vista temporal mediante sesión snapshot. La doble
+lectura completa es diagnóstico bloqueante y nunca habilita `safeToApply`.
+Estas guardas no sustituyen respaldo, remediación, ensayo ni autorización
+operativa.
 
 **Cambio necesario**
 
@@ -730,30 +741,36 @@ La Fase 6 podrá declararse terminada cuando se cumplan todas estas condiciones:
 5. Alcance permitido del modo soporte: sólo lectura o escritura limitada.
 6. Política de retención y contenido de auditoría.
 7. Estrategia de migración de campos heredados de usuario para 6.2.2.
-   **Propuesta, pendiente de aprobación y no ejecutada:** inventario dry-run, respaldo, aplicación
-   idempotente, verificación y rollback definidos en
+   **Aprobada mediante el PR #16 y no ejecutada:** inventario dry-run, respaldo,
+   aplicación idempotente, verificación y rollback definidos en
    [`fase-6.2.2-migracion-autoridad-membership.md`](./fase-6.2.2-migracion-autoridad-membership.md).
+   El PR #17 implementa y verifica sólo el inventario read-only.
 8. Estrategia de migración para turnos y bloqueos de 6.2.3.
 9. Política de compatibilidad y actualización de dependencias.
 
 ## 13. Siguiente bloque de trabajo recomendado
 
-6.1 y 6.2.1 están cerradas. El siguiente bloque crítico es preparar 6.2.2 y,
-únicamente tras cumplir sus guardas operativas, ejecutarla sin
-mezclar todavía 6.2.3, 6.2.4 ni el responsive:
+6.1, 6.2.1 y la preparación documental 6.2.2-A están cerradas. El PR #17
+implementa el inventario dry-run de 6.2.2-B. El siguiente hito es obtener
+evidencia operativa segura sin mezclar todavía 6.2.3, 6.2.4 ni el responsive:
 
-1. tomar como base el tratamiento de `superadmin` incorporado en el ADR-001
-   mediante el PR #16;
-2. implementar el inventario dry-run de usuarios, negocios y membresías;
-3. agregar pruebas negativas del migrador y de revocación de autoridad;
-4. obtener y verificar un respaldo restaurable;
-5. ejecutar el migrador primero sobre una copia de producción;
-6. revisar manualmente todos los conflictos;
-7. aplicar el backfill idempotente en producción únicamente con autorización
+1. antes de ejecutar el inventario fuera de pruebas, acreditar una credencial
+   estrictamente read-only, fingerprint aprobado, topología snapshot, política
+   del informe y ensayo en topología equivalente a producción;
+2. ejecutar el inventario read-only únicamente contra el entorno autorizado,
+   confirmando `--environment`, validando el fingerprint y revisando su
+   procedencia;
+3. revisar el informe y resolver manualmente todos los conflictos;
+4. si el índice físico falta o es incorrecto, preparar el PR condicional
+   6.2.2-BI después de resolver duplicados y verificar un respaldo restaurable;
+5. obtener y verificar un respaldo restaurable antes de cualquier escritura;
+6. implementar `apply`, `verify` y `rollback` en 6.2.2-C;
+7. ensayar la migración completa sobre una copia restaurada;
+8. aplicar el backfill idempotente en producción únicamente con autorización
    explícita y conservar los campos heredados;
-8. verificar el resultado antes de desplegar el corte de autoridad HTTP;
-9. cerrar lecturas heredadas y WebSocket en PR separados;
-10. mantener `User.role` y `User.business` durante la ventana de rollback y
+9. verificar el resultado antes de desplegar el corte de autoridad HTTP;
+10. cerrar lecturas heredadas y WebSocket en PR separados;
+11. mantener `User.role` y `User.business` durante la ventana de rollback y
     retirarlos sólo en una migración posterior.
 
 El diseño documental no autoriza por sí mismo ninguna escritura productiva.

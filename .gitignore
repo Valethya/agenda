@@ -3,5 +3,6 @@ node_modules
 .astro
 dist
 build
+Server/artifacts/
 *.log
 .DS_Store
