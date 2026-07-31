@@ -1,11 +1,14 @@
 # Plan maestro de cierre de Fase 6 y estado de Fase 7
 
 **Proyecto:** ATMÓSFERA Agenda
-**Estado del documento:** Plan vigente reconciliado con `master` y con la
-implementación verificada del PR #17
+**Estado del documento:** Plan vigente reconciliado con `master`; 6.2.2-B tiene
+su implementación read-only cerrada mediante los PR #17 y #19 y su ejecución
+operativa permanece pendiente sobre la nueva baseline; incluye la rebaseline
+preproductiva del PR #18
 **Fecha original:** 21 de julio de 2026
-**Última revisión:** 27 de julio de 2026
-**Base de contraste:** `master` después del PR #16 (`5ff906b`)
+**Última revisión:** 31 de julio de 2026
+**Base de contraste:** `master` después del PR #19
+(`d38711ab874134c7460be5ab4b8a77a96a51f3f5`)
 **Alcance:** Backend, multitenencia, seguridad, pagos, impersonación, frontend, pruebas y operación
 
 ## 1. Objetivo
@@ -41,13 +44,23 @@ No se considerará terminada una tarea solamente porque el código compile. Cada
 | Cerrado | Tipado frontend | El PR #15 cerró 7.10 con TypeScript estricto, 0 usos productivos de `any`, checks y build en CI. |
 | Aplazado | Responsive 7.8 | Se retomará después de estabilizar arquitectura, multitenencia y datos. |
 
-### Estado consolidado después del PR #16
+### Estado consolidado después del PR #19
 
 - 6.1 está cerrada y protegida por CI.
 - 6.2.1 está cerrada mediante los PR #5, #6 y #7.
-- 6.2.2-A está cerrada mediante el PR #16. El PR #17 implementa y verifica el
-  inventario dry-run read-only de 6.2.2-B; el corte de autoridad sigue
-  pendiente.
+- 6.2.2-A está cerrada mediante el PR #16. 6.2.2-B tiene su implementación
+  read-only cerrada mediante los PR #17 y #19; su ejecución operativa permanece
+  pendiente sobre la nueva baseline.
+- No existen datos productivos. Las bases ficticias `agenda-dev` y `agenda`
+  fueron eliminadas manualmente por la operadora el 31 de julio de 2026;
+  `agenda_test` permanece como base de pruebas, sin asumir que sea el destino
+  utilizado por cada ejecución de CI.
+- La eliminación manual constituye una atestación de la operadora realizada
+  fuera del repositorio. GitHub no demuestra el contenido previo de las bases y
+  no almacenará capturas, URI, credenciales ni evidencia sensible; cualquier
+  registro operativo adicional permanecerá fuera del código y sin secretos.
+- 6.2.2-C se redefine para establecer una baseline preproductiva limpia de
+  Atmósfera y DAM; el corte de autoridad sigue pendiente.
 - 7.7 está cerrada mediante el PR #13.
 - 7.9 está cerrada mediante el PR #14.
 - 7.10 está cerrada mediante el PR #15.
@@ -180,12 +193,16 @@ Seleccionar el primer negocio activo convierte una petición incompleta en una o
 
 ### 6.2.2 Hacer que `Membership` sea la autoridad de acceso
 
-**Estado:** contrato documental cerrado mediante el PR #16 e inventario dry-run
-read-only implementado y verificado mediante el PR #17. La estrategia de datos
-y corte se define en
+**Estado:** contrato documental cerrado mediante el PR #16. 6.2.2-B tiene su
+implementación read-only cerrada mediante los PR #17 y #19; su ejecución operativa
+permanece pendiente sobre la nueva baseline. La rebaseline del PR #18 registra
+que no existe información productiva que migrar y sustituye el backfill actual
+por un bootstrap limpio. La estrategia de datos y corte se define en
 [`fase-6.2.2-migracion-autoridad-membership.md`](./fase-6.2.2-migracion-autoridad-membership.md).
-No se han modificado datos productivos ni se ha ejecutado el auditor contra
-ellos.
+Las bases ficticias anteriores fueron eliminadas manualmente fuera del
+repositorio según la atestación operativa de la operadora. Ningún PR ejecutó
+borrados o migraciones sobre MongoDB, y GitHub no constituye evidencia del
+contenido previo de esas bases.
 
 El auditor exige las tres colecciones físicas, confirma el entorno, registra
 procedencia sanitizada, valida estados e identificadores sin inferir valores y
@@ -193,6 +210,15 @@ sólo puede garantizar una vista temporal mediante sesión snapshot. La doble
 lectura completa es diagnóstico bloqueante y nunca habilita `safeToApply`.
 Estas guardas no sustituyen respaldo, remediación, ensayo ni autorización
 operativa.
+
+El PR #19 integró la corrección que sólo admite BSON `ObjectId` físicos:
+referencias string, representaciones `$oid` y objetos meramente convertibles
+son bloqueantes y no participan en correlaciones. Esta garantía no formó parte
+del PR #17 original; conserva `CANONICAL_SCHEMA_VERSION = 4` y
+`MEMBERSHIP_AUTHORITY_AUDITOR_VERSION = "1.3.0"`. La ejecución operativa del
+auditor sobre la nueva baseline y la normalización de sus seeds y fixtures para
+producir BSON `ObjectId` reales continúan pendientes. Ningún PR ha creado la
+nueva base, ejecutado el bootstrap o realizado el corte de autoridad.
 
 **Cambio necesario**
 
@@ -741,36 +767,48 @@ La Fase 6 podrá declararse terminada cuando se cumplan todas estas condiciones:
 5. Alcance permitido del modo soporte: sólo lectura o escritura limitada.
 6. Política de retención y contenido de auditoría.
 7. Estrategia de migración de campos heredados de usuario para 6.2.2.
-   **Aprobada mediante el PR #16 y no ejecutada:** inventario dry-run, respaldo,
-   aplicación idempotente, verificación y rollback definidos en
+   **Aprobada mediante el PR #16 y conservada como contingencia:** inventario
+   dry-run, respaldo, aplicación idempotente, verificación y rollback definidos
+   en
    [`fase-6.2.2-migracion-autoridad-membership.md`](./fase-6.2.2-migracion-autoridad-membership.md).
-   El PR #17 implementa y verifica sólo el inventario read-only.
+   El PR #17 implementó y verificó el inventario read-only original y el PR #19
+   endureció su validación de tipos BSON. La rebaseline preproductiva del PR
+   #18 evita implementar un backfill sin destinatario, pero no declara
+   completados respaldo, apply, verify o rollback.
 8. Estrategia de migración para turnos y bloqueos de 6.2.3.
 9. Política de compatibilidad y actualización de dependencias.
 
 ## 13. Siguiente bloque de trabajo recomendado
 
-6.1, 6.2.1 y la preparación documental 6.2.2-A están cerradas. El PR #17
-implementa el inventario dry-run de 6.2.2-B. El siguiente hito es obtener
-evidencia operativa segura sin mezclar todavía 6.2.3, 6.2.4 ni el responsive:
+6.1, 6.2.1 y 6.2.2-A están cerradas. 6.2.2-B tiene cerrada su implementación
+read-only mediante los PR #17 y #19, pero conserva pendiente su ejecución operativa
+sobre la nueva baseline. No existe un conjunto productivo que migrar. El
+siguiente hito es construir una baseline preproductiva coherente sin mezclar
+todavía 6.2.3, 6.2.4 ni el responsive:
 
-1. antes de ejecutar el inventario fuera de pruebas, acreditar una credencial
-   estrictamente read-only, fingerprint aprobado, topología snapshot, política
-   del informe y ensayo en topología equivalente a producción;
-2. ejecutar el inventario read-only únicamente contra el entorno autorizado,
-   confirmando `--environment`, validando el fingerprint y revisando su
-   procedencia;
-3. revisar el informe y resolver manualmente todos los conflictos;
-4. si el índice físico falta o es incorrecto, preparar el PR condicional
-   6.2.2-BI después de resolver duplicados y verificar un respaldo restaurable;
-5. obtener y verificar un respaldo restaurable antes de cualquier escritura;
-6. implementar `apply`, `verify` y `rollback` en 6.2.2-C;
-7. ensayar la migración completa sobre una copia restaurada;
-8. aplicar el backfill idempotente en producción únicamente con autorización
-   explícita y conservar los campos heredados;
-9. verificar el resultado antes de desplegar el corte de autoridad HTTP;
-10. cerrar lecturas heredadas y WebSocket en PR separados;
-11. mantener `User.role` y `User.business` durante la ventana de rollback y
-    retirarlos sólo en una migración posterior.
+1. normalizar seeds y fixtures de Atmósfera y DAM para que generen BSON
+   `ObjectId` reales y usen claves estables;
+2. crear toda autoridad tenant inicial mediante Membership activa y mantener
+   `superadmin` exclusivamente como privilegio global;
+3. preparar un bootstrap explícito, idempotente y separado del arranque normal;
+   no debe duplicar negocios, usuarios o Memberships, debe detectar estados
+   parciales, fallar de forma segura ante estados inesperados y no ejecutarse al
+   desplegar, iniciar Railway o arrancar el servidor;
+4. crear y verificar de forma controlada el índice único físico, sin depender
+   de `autoIndex`,
+   `{ user: 1, business: 1 }`;
+5. crear la nueva base de desarrollo sólo después de fusionar y verificar la
+   baseline;
+6. verificar después del bootstrap las colecciones, los documentos esperados y
+   el índice físico;
+7. ejecutar operativamente el auditor read-only como gate posterior sobre la
+   nueva base y exigir un informe seguro;
+8. desplegar el corte de autoridad HTTP y sesión en un PR separado;
+9. cerrar lecturas heredadas y WebSocket en otro PR;
+10. conservar el contrato de migración completo como contingencia: si aparece
+   información real antes del corte, detener la rebaseline e implementar
+   respaldo, `apply`, `verify` y `rollback` antes de escribir;
+11. retirar `User.role` y `User.business` únicamente después de comprobar que
+    no quedan lecturas productivas y de cerrar la ventana de compatibilidad.
 
 El diseño documental no autoriza por sí mismo ninguna escritura productiva.
