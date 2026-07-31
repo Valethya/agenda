@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 
-export const MEMBERSHIP_AUTHORITY_AUDITOR_VERSION = "1.2.0";
+export const MEMBERSHIP_AUTHORITY_AUDITOR_VERSION = "1.3.0";
 
 export const ALLOWED_AUDIT_ENVIRONMENTS = Object.freeze([
   "development",

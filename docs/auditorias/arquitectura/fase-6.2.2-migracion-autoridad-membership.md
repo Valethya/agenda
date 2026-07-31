@@ -184,6 +184,16 @@ producción. Utiliza evidencias SHA-256 estables y no reversibles para
 identificadores válidos o malformados; no incluye ObjectId sin pseudonimizar,
 correos ni teléfonos.
 
+La validez exige además el tipo físico correcto: sólo una instancia BSON
+`ObjectId` entregada por MongoDB o por el driver oficial participa en mapas,
+pares, correlaciones o candidatas. Un string hexadecimal de 24 caracteres sigue
+siendo corrupción de tipo aunque pueda convertirse a `ObjectId`; tampoco se
+aceptan representaciones Extended JSON `{ $oid: "..." }` ni objetos ordinarios
+que expongan `toHexString()`. Todos esos valores generan
+`invalidAuthorityIdentifier`, conservan únicamente evidencia pseudonimizada en
+un dominio distinto del usado por los BSON `ObjectId` válidos y bloquean el
+informe.
+
 ### Categorías obligatorias
 
 | Categoría | Tratamiento |
@@ -199,7 +209,7 @@ correos ni teléfonos.
 | `temporalSnapshotNotGuaranteed` | La topología sólo permitió doble lectura. El resultado es diagnóstico, nunca equivale a un snapshot temporal ni habilita `safeToApply`. |
 | `missingUniqueMembershipIndex` | No existe físicamente el índice único exacto `{ user: 1, business: 1 }`; bloquea `apply`. |
 | `invalidAuthorityState` | `isActive` está ausente o contiene un valor distinto de `true` o `false`; conserva la diferencia entre ausencia e invalidez y bloquea. |
-| `invalidAuthorityIdentifier` | Un identificador o referencia requerido está ausente o malformado; registra únicamente evidencia pseudonimizada, no lo usa para correlacionar relaciones y bloquea. |
+| `invalidAuthorityIdentifier` | Un identificador o referencia requerido está ausente, malformado o posee un tipo físico distinto de BSON `ObjectId`; registra únicamente evidencia pseudonimizada, no lo usa para correlacionar relaciones y bloquea. Strings hexadecimales, objetos `$oid` y objetos convertibles nunca son relaciones válidas. |
 | `platformRoleInMembership` | Membership con rol `superadmin`; bloquea `apply`. |
 | `unknownMembershipRole` | Membership con un rol distinto de `admin` o `worker`; bloquea `apply`. |
 | `membershipStateConflict` | Membership existente para el par y rol esperados, pero sin estado activo explícito; bloquea `apply`. |
@@ -217,8 +227,11 @@ El informe tendrá dos bloques separados:
 
 `canonicalPayload` contendrá únicamente:
 
-- versión del esquema canónico, incrementada a `3` al incorporar validación
-  estricta de estados e identificadores y garantía temporal explícita;
+- versión del esquema canónico `4`. La versión `3` incorporó estados e
+  identificadores estrictos y garantía temporal explícita; la versión `4`
+  cambia la semántica canónica para que sólo BSON `ObjectId` físicos sean
+  válidos y para que sus representaciones textuales o convertibles queden como
+  corrupción bloqueante;
 - nombre exacto de la base;
 - colecciones físicas esperadas, observadas y ausentes;
 - precondición de coherencia con las huellas de las fuentes comparadas;
@@ -264,8 +277,9 @@ Ni la URI MongoDB ni sus credenciales se almacenan o imprimen.
 
 La canonicalización será exacta:
 
-1. validar cada ObjectId y convertirlo en evidencia SHA-256 estable y no
-   reversible; un valor ausente o malformado conserva ese estado y nunca
+1. validar que cada identificador sea físicamente una instancia BSON `ObjectId`
+   del driver y convertirlo en evidencia SHA-256 estable y no reversible; un
+   valor ausente, textual, convertible o malformado conserva ese estado y nunca
    participa como relación válida;
 2. omitir valores `undefined` y rechazar tipos no previstos;
 3. ordenar recursivamente las claves de cada objeto;
@@ -343,7 +357,8 @@ Un cambio relevante aborta el lote aunque `updatedAt` no haya cambiado.
 Se podrá crear una Membership únicamente cuando:
 
 1. `User.role` heredado sea `admin` o `worker`;
-2. `User.business` sea un ObjectId válido;
+2. `User.business` sea un BSON `ObjectId` físico válido, no una representación
+   textual convertible;
 3. el usuario esté activo;
 4. usuario y negocio existan;
 5. no exista Membership para ese par;

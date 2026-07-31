@@ -97,6 +97,16 @@ test("entrada pública del audit no muta documentos, colecciones ni índices", a
     });
 
     const db = auditConnection.db;
+    const corruptMembershipId = new mongoose.Types.ObjectId();
+    const corruptUserReference = user._id.toHexString();
+    await db.collection("memberships").insertOne({
+      _id: corruptMembershipId,
+      user: corruptUserReference,
+      business: business._id,
+      role: "admin",
+      isActive: true,
+    });
+
     assert.match(db.databaseName, /_test$/u);
     const before = await snapshotDatabase(db);
     const observedCommands = [];
@@ -142,15 +152,38 @@ test("entrada pública del audit no muta documentos, colecciones ni índices", a
     assert.equal(observedCommands.includes("aggregate"), true);
     assert.equal(result.report.metadata.environment, "test");
     assert.equal(result.report.metadata.codeShaSource, "explicit");
+    assert.equal(result.exitCode, 2);
+    assert.equal(result.report.canonicalPayload.safeToApply, false);
+    assert.equal(
+      result.report.canonicalPayload.findings.some(
+        (finding) =>
+          finding.category === "invalidAuthorityIdentifier" &&
+          finding.entity === "Membership" &&
+          finding.field === "user" &&
+          finding.reason === "malformed" &&
+          /^invalid:[a-f0-9]{64}$/u.test(finding.evidence),
+      ),
+      true,
+    );
+    assert.equal(
+      result.report.canonicalPayload.sources.memberships.some(
+        (membership) =>
+          membership.idState === "valid" && membership.userState === "invalid",
+      ),
+      true,
+    );
     assert.equal(
       serializedReport.includes(user._id.toHexString()),
+      false,
+    );
+    assert.equal(serializedReport.includes(corruptUserReference), false);
+    assert.equal(
+      serializedReport.includes(corruptMembershipId.toHexString()),
       false,
     );
     assert.equal(serializedReport.includes("audit-admin@example.com"), false);
 
     if (result.report.metadata.readStrategy === "double-read") {
-      assert.equal(result.exitCode, 2);
-      assert.equal(result.report.canonicalPayload.safeToApply, false);
       assert.equal(
         result.report.canonicalPayload.preconditions.snapshotConsistency
           .temporalSnapshotGuaranteed,
