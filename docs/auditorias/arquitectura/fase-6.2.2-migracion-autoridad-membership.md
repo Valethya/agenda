@@ -2,12 +2,17 @@
 
 **Proyecto:** ATMÓSFERA Agenda
 
-**Estado:** Contrato aprobado mediante el PR #16; auditor read-only implementado
-y verificado mediante el PR #17, sin ejecución operativa ni productiva
+**Estado:** Contrato aprobado mediante el PR #16; 6.2.2-B tiene su
+implementación read-only cerrada mediante los PR #17 y #19, pero su ejecución
+operativa permanece pendiente sobre la nueva baseline; rebaseline
+preproductiva incorporada mediante el PR #18, sin datos productivos que migrar
 
-**Fecha:** 27 de julio de 2026
+**Fecha original:** 27 de julio de 2026
 
-**Base de contraste:** `master` después del PR #16 (`5ff906b`)
+**Última revisión:** 31 de julio de 2026
+
+**Base de contraste:** `master` después del PR #19
+(`d38711ab874134c7460be5ab4b8a77a96a51f3f5`)
 
 **Alcance:** Autoridad tenant de administradores y trabajadores, sesiones,
 WebSocket y campos heredados de `User`
@@ -19,8 +24,11 @@ WebSocket y campos heredados de `User`
 ## 1. Objetivo
 
 Preparar el corte mediante el cual una `Membership` activa será la única fuente
-de rol y acceso dentro de un negocio, sin modificar datos productivos antes de
-contar con:
+de rol y acceso dentro de un negocio.
+
+El contrato de migración segura continúa vigente como contingencia para
+cualquier entorno que llegue a contener datos reales o no descartables antes
+del corte. En ese caso, no podrá modificarse información sin contar con:
 
 1. inventario dry-run;
 2. pruebas negativas;
@@ -29,10 +37,49 @@ contar con:
 5. verificación posterior;
 6. rollback acotado y comprobable.
 
-Este documento define el contrato de la migración. No autoriza su ejecución
-contra producción.
+En el estado actual no existe un conjunto de datos productivo que requiera
+backfill. La ejecución vigente será un bootstrap limpio y verificable; no una
+migración destructiva de datos heredados. Este documento no autoriza por sí
+mismo ninguna ejecución contra un entorno con datos reales.
 
-## 2. Estado real después del PR #16
+## 2. Estado real después del PR #19
+
+### Rebaseline preproductiva
+
+El 31 de julio de 2026 se confirmó que las bases existentes contenían
+exclusivamente información ficticia y descartable, sin clientes ni operación
+real. La operadora eliminó manualmente en MongoDB Atlas las bases `agenda-dev`
+y `agenda`. La base `agenda_test` se conservó como entorno de pruebas; su uso
+concreto deberá confirmarse antes de depender de ella fuera de la suite.
+
+La eliminación no fue ejecutada por código, por este repositorio ni por el
+auditor del PR #17. Constituye una atestación operativa de la operadora sobre
+una actuación manual fuera del repositorio: GitHub no puede demostrar por sí
+solo el contenido previo de esas bases. No se almacenarán en el repositorio
+capturas, URI, credenciales ni evidencia sensible. Cualquier registro operativo
+adicional se mantendrá fuera del código y sin secretos. Este PR tampoco crea
+bases, colecciones, índices o datos.
+
+Consecuencias:
+
+- no existe información productiva que respaldar, transformar o restaurar;
+- `apply`, `verify` y `rollback` no se implementarán para el estado descartado;
+- los requisitos de respaldo y migración productiva no se consideran
+  completados: quedan **no aplicables al estado preproductivo actual** y se
+  reactivarán antes de admitir datos reales heredados;
+- la próxima base de desarrollo se creará desde un bootstrap explícito,
+  idempotente y separado del arranque normal, con claves estables para Atmósfera
+  y DAM, membresías coherentes e índices verificados;
+- el bootstrap no se ejecutará automáticamente al desplegar, iniciar Railway o
+  arrancar el servidor; detectará estados parciales o inesperados y fallará de
+  forma segura sin duplicar negocios, usuarios o Memberships;
+- el auditor read-only se conserva como gate del bootstrap y como protección
+  para futuras migraciones.
+
+Si aparece cualquier dato real o no descartable antes del corte, esta
+rebaseline deja de ser aplicable: se deberá ejecutar el audit, revisar
+conflictos, verificar respaldo y restauración e implementar el flujo
+idempotente originalmente definido antes de escribir.
 
 ### Capacidades que ya usan `Membership`
 
@@ -135,6 +182,16 @@ Sin una opción explícita de ejecución:
 - no actualiza timestamps;
 - produce un payload canónico determinista y separa los metadatos operativos;
 - termina con código distinto de cero cuando encuentra bloqueos.
+
+El endurecimiento que exige tipos BSON `ObjectId` físicos quedó integrado
+mediante el PR #19. Esta garantía no formó parte del PR #17 original. Un string
+hexadecimal convertible, una representación `$oid` o un objeto ordinario
+convertible constituyen corrupción bloqueante, generan
+`invalidAuthorityIdentifier` y no participan en correlaciones, candidatas,
+pares ni duplicados. El PR #19 conserva `CANONICAL_SCHEMA_VERSION = 4` y
+`MEMBERSHIP_AUTHORITY_AUDITOR_VERSION = "1.3.0"`. La ejecución operativa sobre
+la nueva baseline continúa pendiente y sus seeds y fixtures también deberán
+generar BSON `ObjectId` reales.
 
 Antes de calcular candidatas, `audit` comprueba mediante `listCollections` que
 existan físicamente `users`, `businesses` y `memberships`. Una colección ausente
@@ -664,6 +721,10 @@ npm run migration:membership-authority -- \
 
 ### PR 6.2.2-B — Inventario dry-run
 
+La implementación read-only original quedó cerrada mediante el PR #17 y su
+validación estricta de tipos BSON `ObjectId` quedó integrada mediante el PR
+#19. Su ejecución operativa sobre la nueva baseline sigue pendiente.
+
 - implementar modo `audit`;
 - añadir fixtures con roles heredados contradictorios;
 - agregar pruebas negativas de base, índice físico, duplicados, propietarios,
@@ -687,30 +748,53 @@ es incorrecta. El orden obligatorio será:
 5. consultar los índices físicos de MongoDB y comprobar la clave exacta
    `{ user: 1, business: 1 }` con `unique: true`;
 6. volver a ejecutar `audit` desde cero;
-7. permitir que 6.2.2-C ejecute `apply` únicamente si el índice exacto existe,
-   no quedan duplicados ni contradicciones y el nuevo informe indica
-   `safeToApply: true`.
+7. permitir que un futuro PR de migración ejecute `apply` únicamente si el
+   índice exacto existe, no quedan duplicados ni contradicciones y el nuevo
+   informe indica `safeToApply: true`.
 
 6.2.2-A no crea el índice ni implementa scripts. La declaración del schema no
 sustituye la comprobación física.
 
-### PR 6.2.2-C — Backfill, verificación y rollback
+### PR 6.2.2-C — Baseline preproductiva
 
-- implementar `apply`, `verify` y `rollback`;
-- registrar manifiesto;
-- agregar pruebas de checksum, idempotencia, concurrencia y rollback;
-- no ejecutar todavía contra producción.
+En el estado actual, este PR sustituye el backfill porque las bases descartables
+ya fueron retiradas y no existe información productiva que transformar:
 
-### Punto operativo obligatorio
+- normalizar seeds y fixtures para que todo admin o worker tenant tenga una
+  `Membership` activa con rol válido;
+- mantener `superadmin` exclusivamente en la identidad global y no crearle una
+  Membership implícita;
+- preparar un bootstrap explícito, separado del arranque normal e idempotente
+  para una base vacía, sin depender de `autoIndex` ni de scripts heredados
+  destructivos;
+- usar claves estables para Atmósfera y DAM, no duplicar negocios, usuarios o
+  Memberships, detectar una inicialización parcial y fallar de forma segura
+  ante cualquier estado inesperado;
+- impedir que el bootstrap se ejecute automáticamente durante un deploy, al
+  iniciar Railway o al arrancar el servidor;
+- crear y comprobar de forma controlada el índice físico exacto
+  `{ user: 1, business: 1 }` con `unique: true`;
+- generar únicamente datos iniciales controlados de desarrollo para Atmósfera
+  y DAM con BSON `ObjectId` reales en IDs y referencias;
+- verificar después del bootstrap las colecciones, los documentos esperados y
+  la definición del índice físico;
+- ejecutar el auditor sobre la base nueva como gate posterior y exigir un
+  resultado seguro antes de usarla para desarrollo funcional, conservando la
+  validación estricta ya integrada de BSON `ObjectId` físicos;
+- no implementar ni exponer modos `apply`, `verify` o `rollback` mientras no
+  exista un conjunto heredado que deba preservarse.
 
-- respaldo verificado;
-- ensayo sobre copia;
-- revisión manual de conflictos;
-- autorización explícita;
-- aplicación productiva;
-- verificación y repetición idempotente.
+La creación de la nueva base y la carga de seeds serán pasos explícitos y
+posteriores al merge del código correspondiente; no son efectos automáticos de
+este PR documental.
 
-Este punto no se ejecutará como consecuencia automática de fusionar un PR.
+### Contingencia para datos heredados futuros
+
+La especificación de backfill, manifiesto, checksum, idempotencia, verificación,
+respaldo y rollback de las secciones anteriores permanece vigente. Si antes del
+corte aparece información real o no descartable, se deberá preparar un PR
+separado que implemente `apply`, `verify` y `rollback`, ensayarlo sobre una copia
+restaurada y obtener autorización explícita antes de cualquier escritura.
 
 ### PR 6.2.2-D — Corte HTTP y sesión
 
@@ -742,13 +826,19 @@ Después de una ventana de observación y fuera del corte inicial:
 
 El PR #16 incorporó el tratamiento de `superadmin`, las categorías de audit,
 las reglas de backfill, el respaldo, la idempotencia, la verificación, el
-rollback y la matriz de pruebas negativas. El PR #17 implementa y verifica
-solamente el auditor read-only de 6.2.2-B. No implementa modos mutables ni
-acredita ninguna ejecución operativa o productiva. El audit no se ha ejecutado
-contra producción.
+rollback y la matriz de pruebas negativas. El PR #17 implementó y verificó el
+auditor read-only original de 6.2.2-B. El PR #19 endureció su validación para
+admitir únicamente BSON `ObjectId` físicos, sin atribuir retroactivamente esa
+garantía al PR #17. La rebaseline del PR #18 documenta que no existe
+información productiva que migrar; no declara completadas las operaciones que
+nunca ocurrieron. Ninguno de estos PR ejecutó el auditor sobre la nueva
+baseline, creó esa base, ejecutó el bootstrap o desplegó el corte de autoridad.
 
-Una futura ejecución real queda bloqueada hasta acreditar, fuera de este PR:
+La validación estricta de BSON `ObjectId` físicos ya está integrada mediante el
+PR #19 y constituye una precondición técnica satisfecha. Una futura ejecución
+sobre datos reales continúa bloqueada hasta acreditar:
 
+- seeds y fixtures que generen BSON `ObjectId` reales;
 - credencial MongoDB estrictamente de sólo lectura;
 - fingerprint aprobado y verificado para el entorno;
 - topología compatible con una sesión snapshot real;
@@ -756,7 +846,7 @@ Una futura ejecución real queda bloqueada hasta acreditar, fuera de este PR:
 - evidencia de ejecución controlada en una topología equivalente a producción.
 
 La doble lectura no satisface el gate de topología. Estas condiciones no se han
-ejecutado ni verificado contra `staging`, Railway, Atlas o producción.
+ejecutado ni verificado contra un entorno con datos reales.
 
 Estado de condiciones:
 
@@ -775,10 +865,22 @@ Estado de condiciones:
 - [ ] Remediación separada del índice físico, sólo si el audit la exige.
 - [x] Implementación de checksum sobre payload canónico.
 - [x] Pruebas negativas del alcance 6.2.2-B implementadas y verdes.
-- [ ] Respaldo productivo verificado.
-- [ ] Migración ensayada sobre una copia.
-- [ ] Autorización explícita para cualquier escritura productiva.
-- [ ] Backfill productivo ejecutado y verificado.
+- [x] Atestación de la operadora sobre el estado preproductivo y la ausencia de
+      datos reales; no constituye evidencia reproducible del repositorio.
+- [x] Atestación de la operadora sobre la eliminación manual y externa de las
+      bases ficticias `agenda-dev` y `agenda`; `agenda_test` se conservó como
+      base de pruebas.
+- [x] Validación estricta de tipo BSON `ObjectId` integrada mediante el PR #19.
+- [ ] Seeds y fixtures de la baseline generan BSON `ObjectId` reales.
+- [ ] Baseline limpia de Atmósfera y DAM implementada en seeds y fixtures.
+- [ ] Bootstrap explícito, idempotente y fail-closed implementado.
+- [ ] Índice físico único creado y verificado en la nueva base de desarrollo.
+- [ ] Auditor ejecutado con resultado seguro sobre la nueva baseline.
+- [ ] Respaldo productivo verificado, no aplicable mientras no existan datos
+      reales.
+- [ ] Migración ensayada sobre una copia, no aplicable a la baseline vacía.
+- [ ] Autorización explícita para cualquier escritura productiva futura.
+- [ ] Backfill productivo ejecutado y verificado, no aplicable al estado actual.
 - [ ] Corte de autoridad desplegado.
 
 Mientras los puntos pendientes no se cumplan, `Membership` todavía no puede
