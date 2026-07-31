@@ -220,6 +220,6 @@ describe("membership authority provenance", () => {
 
   it("expone una versión estable del auditor", () => {
     assert.match(MEMBERSHIP_AUTHORITY_AUDITOR_VERSION, /^\d+\.\d+\.\d+$/u);
-    assert.equal(MEMBERSHIP_AUTHORITY_AUDITOR_VERSION, "1.2.0");
+    assert.equal(MEMBERSHIP_AUTHORITY_AUDITOR_VERSION, "1.3.0");
   });
 });

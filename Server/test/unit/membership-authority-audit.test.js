@@ -11,6 +11,7 @@ import {
 } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { mongo } from "mongoose";
 import {
   buildMembershipAuthorityPayload,
   buildMembershipAuthorityReport,
@@ -31,9 +32,24 @@ import {
   fingerprintMongoTarget,
 } from "../../scripts/migrations/membership-authority-provenance.js";
 
-const id = (value) => value.toString(16).padStart(24, "0");
+const hexId = (value) => value.toString(16).padStart(24, "0");
+const id = (value) => new mongo.ObjectId(hexId(value));
 const evidenceId = (value) =>
-  `id:${createHash("sha256").update(`string:${value}`, "utf8").digest("hex")}`;
+  `id:${createHash("sha256")
+    .update(`string:${value.toHexString()}`, "utf8")
+    .digest("hex")}`;
+const cloneRead = (value) => {
+  if (value instanceof mongo.ObjectId) {
+    return new mongo.ObjectId(value.toHexString());
+  }
+  if (Array.isArray(value)) return value.map(cloneRead);
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, entry]) => [key, cloneRead(entry)]),
+    );
+  }
+  return value;
+};
 const sha40 = (character) => character.repeat(40);
 const sha256 = (character) => character.repeat(64);
 
@@ -357,6 +373,189 @@ describe("membership authority audit", () => {
     assert.equal(serialized.includes(evidenceId(userId)), true);
   });
 
+  const physicalIdentifierCases = [
+    {
+      label: "BSON ObjectId real",
+      value: id(141),
+      expectedState: "valid",
+      expectedReason: null,
+    },
+    {
+      label: "string hexadecimal de 24 caracteres",
+      value: "0123456789abcdefabcdefab",
+      expectedState: "invalid",
+      expectedReason: "malformed",
+    },
+    {
+      label: "string hexadecimal en mayúsculas",
+      value: "0123456789ABCDEFABCDEFAB",
+      expectedState: "invalid",
+      expectedReason: "malformed",
+    },
+    {
+      label: "objeto Extended JSON con $oid",
+      value: { $oid: "0123456789abcdefabcdefab" },
+      expectedState: "invalid",
+      expectedReason: "malformed",
+    },
+    {
+      label: "número",
+      value: 141,
+      expectedState: "invalid",
+      expectedReason: "malformed",
+    },
+    {
+      label: "objeto arbitrario con toHexString",
+      value: { toHexString: () => "0123456789abcdefabcdefab" },
+      expectedState: "invalid",
+      expectedReason: "malformed",
+    },
+    {
+      label: "null",
+      value: null,
+      expectedState: "missing",
+      expectedReason: "missing",
+    },
+    {
+      label: "undefined",
+      value: undefined,
+      expectedState: "missing",
+      expectedReason: "missing",
+    },
+  ];
+
+  for (const identifierCase of physicalIdentifierCases) {
+    it(`clasifica ${identifierCase.label} por su tipo físico`, () => {
+      const payload = buildMembershipAuthorityPayload(
+        snapshot({
+          memberships: [
+            {
+              _id: identifierCase.value,
+              user: id(142),
+              business: id(143),
+              role: "worker",
+              isActive: true,
+            },
+          ],
+        }),
+      );
+      const normalized = payload.sources.memberships[0];
+      const identifierFinding = categories(
+        payload,
+        "invalidAuthorityIdentifier",
+      ).find(
+        (item) => item.entity === "Membership" && item.field === "_id",
+      );
+
+      assert.equal(normalized.idState, identifierCase.expectedState);
+      if (identifierCase.expectedState === "valid") {
+        assert.equal(identifierFinding, undefined);
+        assert.equal(normalized.id, evidenceId(identifierCase.value));
+        assert.match(normalized.id, /^id:[a-f0-9]{64}$/u);
+      } else {
+        assert.equal(identifierFinding.reason, identifierCase.expectedReason);
+        assert.equal(payload.safeToApply, false);
+        if (identifierCase.expectedState === "invalid") {
+          assert.match(identifierFinding.evidence, /^invalid:[a-f0-9]{64}$/u);
+          assert.equal(identifierFinding.evidence.startsWith("id:"), false);
+        } else {
+          assert.equal("evidence" in identifierFinding, false);
+        }
+      }
+    });
+  }
+
+  for (const field of ["user", "business"]) {
+    it(`no correlaciona Membership.${field} string con el ObjectId BSON equivalente`, () => {
+      const userId = new mongo.ObjectId("0123456789abcdefabcdefab");
+      const businessId = id(144);
+      const membershipId = id(145);
+      const membership = {
+        _id: membershipId,
+        user: userId,
+        business: businessId,
+        role: "admin",
+        isActive: true,
+      };
+      membership[field] = membership[field].toHexString();
+
+      const payload = buildMembershipAuthorityPayload(
+        snapshot({
+          users: [
+            {
+              _id: userId,
+              role: "admin",
+              business: businessId,
+              isActive: true,
+            },
+          ],
+          businesses: [
+            {
+              _id: businessId,
+              owner: userId,
+              isActive: true,
+            },
+          ],
+          memberships: [membership],
+        }),
+      );
+      const findingForReference = categories(
+        payload,
+        "invalidAuthorityIdentifier",
+      ).find(
+        (item) => item.entity === "Membership" && item.field === field,
+      );
+      const serialized = JSON.stringify(payload);
+
+      assert.equal(payload.sources.memberships[0][`${field}State`], "invalid");
+      assert.equal(categories(payload, "alreadyConsistent").length, 0);
+      assert.equal(findingForReference.reason, "malformed");
+      assert.match(findingForReference.evidence, /^invalid:[a-f0-9]{64}$/u);
+      assert.notEqual(
+        findingForReference.evidence,
+        evidenceId(field === "user" ? userId : businessId),
+      );
+      assert.equal(serialized.includes(membership[field]), false);
+      assert.equal(payload.safeToApply, false);
+    });
+  }
+
+  it("no genera eligibleBackfill desde User.business almacenado como string", () => {
+    const userId = id(146);
+    const businessId = new mongo.ObjectId("abcdefabcdefabcdefabcdef");
+    const textualBusiness = businessId.toHexString();
+    const payload = buildMembershipAuthorityPayload(
+      snapshot({
+        users: [
+          {
+            _id: userId,
+            role: "admin",
+            business: textualBusiness,
+            isActive: true,
+          },
+        ],
+        businesses: [
+          {
+            _id: businessId,
+            owner: userId,
+            isActive: true,
+          },
+        ],
+      }),
+    );
+    const invalidBusiness = categories(
+      payload,
+      "invalidAuthorityIdentifier",
+    ).find((item) => item.entity === "User" && item.field === "business");
+
+    assert.equal(payload.sources.users[0].businessState, "invalid");
+    assert.equal(categories(payload, "eligibleBackfill").length, 0);
+    assert.equal(payload.candidates.length, 0);
+    assert.match(invalidBusiness.evidence, /^invalid:[a-f0-9]{64}$/u);
+    assert.equal(JSON.stringify(payload).includes(textualBusiness), false);
+    assert.equal(payload.safeToApply, false);
+  });
+
   for (const collection of ["users", "businesses", "memberships"]) {
     it(`bloquea cuando falta la colección física ${collection}`, async () => {
       const incompleteRead = sourceRead({
@@ -369,7 +568,7 @@ describe("membership authority audit", () => {
           : {}),
       });
       const result = await readMembershipAuthoritySnapshot(
-        createSequencedDb([incompleteRead, structuredClone(incompleteRead)]),
+        createSequencedDb([incompleteRead, cloneRead(incompleteRead)]),
         { startSession: null },
       );
       const payload = buildMembershipAuthorityPayload(result.snapshot);
@@ -398,13 +597,13 @@ describe("membership authority audit", () => {
   it("distingue colecciones existentes vacías aunque double-read sea diagnóstico", async () => {
     const emptyRead = sourceRead();
     const result = await readMembershipAuthoritySnapshot(
-      createSequencedDb([emptyRead, structuredClone(emptyRead)]),
+      createSequencedDb([emptyRead, cloneRead(emptyRead)]),
       { startSession: null },
     );
     const payload = buildMembershipAuthorityPayload(result.snapshot);
 
     assert.equal(payload.safeToApply, false);
-    assert.equal(payload.schemaVersion, 3);
+    assert.equal(payload.schemaVersion, 4);
     assert.deepEqual(payload.sources, {
       users: [],
       businesses: [],
@@ -421,7 +620,7 @@ describe("membership authority audit", () => {
       businesses: null,
     });
     const result = await readMembershipAuthoritySnapshot(
-      createSequencedDb([incompleteRead, structuredClone(incompleteRead)]),
+      createSequencedDb([incompleteRead, cloneRead(incompleteRead)]),
       { startSession: null },
     );
     const payload = buildMembershipAuthorityPayload(result.snapshot);
@@ -556,7 +755,7 @@ describe("membership authority audit", () => {
 
   it("mantiene double-read estable como diagnóstico bloqueante", async () => {
     const result = await readMembershipAuthoritySnapshot(
-      createSequencedDb([coherentRead, structuredClone(coherentRead)]),
+      createSequencedDb([coherentRead, cloneRead(coherentRead)]),
       { startSession: null },
     );
     const payload = buildMembershipAuthorityPayload(result.snapshot);
@@ -655,7 +854,7 @@ describe("membership authority audit", () => {
 
   it("usa double-read cuando la topología rechaza readConcern snapshot", async () => {
     let sessionEnded = false;
-    const reads = [coherentRead, structuredClone(coherentRead)];
+    const reads = [coherentRead, cloneRead(coherentRead)];
     const db = createSequencedDb(reads);
     const originalListCollections = db.listCollections.bind(db);
     let snapshotAttempt = true;
@@ -943,6 +1142,48 @@ describe("membership authority audit", () => {
     assert.equal(payload.preconditions.duplicateScan.consistent, false);
     assert.equal(categories(payload, "snapshotInconsistency").length, 1);
     assert.equal(categories(payload, "duplicateMembership").length, 1);
+  });
+
+  it("rechaza identificadores string devueltos por la agregación de duplicados", () => {
+    const userId = id(147);
+    const businessId = id(148);
+    const firstMembershipId = id(149);
+    const secondMembershipId = id(150);
+    const textualUserId = userId.toHexString();
+    const textualMembershipId = firstMembershipId.toHexString();
+    const payload = buildMembershipAuthorityPayload(
+      snapshot({
+        duplicatePairs: [
+          {
+            _id: {
+              user: textualUserId,
+              business: businessId,
+            },
+            memberships: [textualMembershipId, secondMembershipId],
+            count: 2,
+          },
+        ],
+      }),
+    );
+    const aggregateIdentifierFindings = categories(
+      payload,
+      "invalidAuthorityIdentifier",
+    ).filter((finding) => finding.entity === "DuplicateMembershipPair");
+    const serialized = JSON.stringify(payload);
+
+    assert.equal(aggregateIdentifierFindings.length, 2);
+    assert.equal(
+      aggregateIdentifierFindings.every(
+        (finding) =>
+          finding.reason === "malformed" &&
+          /^invalid:[a-f0-9]{64}$/u.test(finding.evidence),
+      ),
+      true,
+    );
+    assert.equal(categories(payload, "duplicateMembership").length, 0);
+    assert.equal(serialized.includes(textualUserId), false);
+    assert.equal(serialized.includes(textualMembershipId), false);
+    assert.equal(payload.safeToApply, false);
   });
 
   it("bloquea ownerWithoutAdminMembership sin evidencia legacy exacta", () => {
@@ -1477,7 +1718,7 @@ describe("membership authority audit", () => {
       );
       assert.equal(persistedReport.metadata.environment, "test");
       assert.equal(persistedReport.metadata.readStrategy, "double-read");
-      assert.equal(persistedReport.metadata.auditorVersion, "1.2.0");
+      assert.equal(persistedReport.metadata.auditorVersion, "1.3.0");
       assert.equal(persistedReport.metadata.codeSha, sha40("c"));
       assert.equal(persistedReport.metadata.codeShaSource, "explicit");
       assert.match(

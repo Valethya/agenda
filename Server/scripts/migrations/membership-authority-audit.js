@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
+import { mongo } from "mongoose";
 
-export const CANONICAL_SCHEMA_VERSION = 3;
+export const CANONICAL_SCHEMA_VERSION = 4;
 
 export const MEMBERSHIP_AUTHORITY_COLLECTIONS = Object.freeze({
   users: "users",
@@ -87,21 +88,10 @@ const classifyIdentifier = (value) => {
     };
   }
 
-  let candidate = value;
-  if (typeof value === "object" && typeof value.toHexString === "function") {
-    try {
-      candidate = value.toHexString();
-    } catch {
-      candidate = value;
-    }
-  } else if (typeof value === "object" && typeof value.$oid === "string") {
-    candidate = value.$oid;
-  }
-
-  if (typeof candidate === "string" && /^[a-fA-F0-9]{24}$/.test(candidate)) {
+  if (value instanceof mongo.ObjectId) {
     return {
       state: "valid",
-      evidence: fingerprintValue("id", candidate.toLowerCase()),
+      evidence: fingerprintValue("id", value.toHexString()),
     };
   }
 
