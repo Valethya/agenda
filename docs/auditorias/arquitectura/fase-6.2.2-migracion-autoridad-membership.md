@@ -11,8 +11,8 @@ preproductiva incorporada mediante el PR #18, sin datos productivos que migrar
 
 **Última revisión:** 31 de julio de 2026
 
-**Base de contraste:** `master` después del PR #19
-(`d38711ab874134c7460be5ab4b8a77a96a51f3f5`)
+**Base de contraste:** `master` después del PR #18
+(`02c11750180d90da211594f69a131b5b54d025f4`)
 
 **Alcance:** Autoridad tenant de administradores y trabajadores, sesiones,
 WebSocket y campos heredados de `User`
@@ -781,12 +781,84 @@ ya fueron retiradas y no existe información productiva que transformar:
 - ejecutar el auditor sobre la base nueva como gate posterior y exigir un
   resultado seguro antes de usarla para desarrollo funcional, conservando la
   validación estricta ya integrada de BSON `ObjectId` físicos;
-- no implementar ni exponer modos `apply`, `verify` o `rollback` mientras no
-  exista un conjunto heredado que deba preservarse.
+- no implementar ni exponer modos `apply`, `verify` o `rollback` en el migrador
+  de datos heredados mientras no exista un conjunto que deba preservarse. El
+  `apply` explícito del bootstrap sólo crea la baseline nueva y no ejecuta un
+  backfill.
 
 La creación de la nueva base y la carga de seeds serán pasos explícitos y
 posteriores al merge del código correspondiente; no son efectos automáticos de
 este PR documental.
+
+#### Bootstrap implementado, ejecución pendiente
+
+La implementación técnica de 6.2.2-C incorpora el comando separado
+`bootstrap:membership-baseline`. No está importado por `src/index.js`, no forma
+parte de `start` o `dev` y sólo acepta los entornos `development` y `test`.
+`staging` y `production` quedan rechazados por esta versión preproductiva.
+
+El comando ofrece dos modos distintos del auditor de 6.2.2-B:
+
+- `plan` sólo lee las colecciones de autoridad y clasifica el destino como
+  `empty`, `ready` o `partial`;
+- `apply` exige además la confirmación literal
+  `CREATE_MEMBERSHIP_BASELINE`, crea únicamente la baseline de autoridad y
+  verifica el resultado.
+
+Ambos modos exigen nombre de base y fingerprint SHA-256 aprobado del destino.
+La conexión utiliza `autoIndex: false`, nunca imprime la URI y valida que el
+nombre real de la base coincida con el confirmado.
+
+La baseline utiliza claves lógicas estables: los slugs `atmosfera` y `dam`,
+cuatro identidades proporcionadas mediante variables de entorno y las parejas
+usuario-negocio. Los correos y contraseñas no se almacenan en el repositorio ni
+se incluyen en el plan. Se exige un correo único y una contraseña de al menos
+doce caracteres para cada identidad:
+
+- `BASELINE_ATMOSFERA_ADMIN_EMAIL` y
+  `BASELINE_ATMOSFERA_ADMIN_PASSWORD`;
+- `BASELINE_ATMOSFERA_WORKER_EMAIL` y
+  `BASELINE_ATMOSFERA_WORKER_PASSWORD`;
+- `BASELINE_DAM_ADMIN_EMAIL` y `BASELINE_DAM_ADMIN_PASSWORD`;
+- `BASELINE_DAM_WORKER_EMAIL` y `BASELINE_DAM_WORKER_PASSWORD`.
+
+La primera aplicación crea dos negocios, cuatro usuarios y cuatro Memberships
+activas con roles `admin` o `worker`. Los `_id` y todas las referencias se
+generan como BSON `ObjectId` físicos. `superadmin` no forma parte de la baseline
+tenant. El alcance no incluye servicios, turnos, reservas ni configuración
+funcional; esos datos pertenecen a bloques posteriores y no deben ocultar el
+gate de autoridad.
+
+El preflight se comporta de forma fail-closed:
+
+1. una base sin documentos de autoridad es elegible;
+2. una baseline completa y exacta con el índice requerido produce un no-op
+   idempotente y no recalcula contraseñas;
+3. un subconjunto de las colecciones requeridas, cualquier colección ajena a
+   la baseline, una inicialización parcial, documentos inesperados, referencias
+   no BSON o contradicciones bloquean antes de escribir;
+4. un índice compuesto `{ user: 1, business: 1 }` existente pero incorrecto
+   bloquea y no se elimina ni modifica automáticamente;
+5. si falta el índice en una base elegible, `apply` lo crea de forma explícita
+   con `unique: true` y comprueba físicamente su definición;
+6. si falla una inserción, la compensación elimina sólo los documentos con los
+   BSON `ObjectId` reservados por esa ejecución.
+
+Los seeds destructivos heredados `seed-atmosfera.js` y `seed-dam.js` quedan
+desactivados e indican utilizar el nuevo comando. Esta implementación no ha sido
+ejecutada contra Atlas, Railway ni ninguna base externa. Después de una futura
+ejecución controlada todavía será obligatorio comprobar colecciones,
+documentos e índice y ejecutar el auditor read-only como gate independiente.
+
+Ejemplo de preflight, sin credenciales reales:
+
+```bash
+npm run bootstrap:membership-baseline -- \
+  --mode=plan \
+  --environment=development \
+  --database=agenda_dev \
+  --expected-target-fingerprint=<sha256-aprobado>
+```
 
 ### Contingencia para datos heredados futuros
 
@@ -871,9 +943,10 @@ Estado de condiciones:
       bases ficticias `agenda-dev` y `agenda`; `agenda_test` se conservó como
       base de pruebas.
 - [x] Validación estricta de tipo BSON `ObjectId` integrada mediante el PR #19.
-- [ ] Seeds y fixtures de la baseline generan BSON `ObjectId` reales.
-- [ ] Baseline limpia de Atmósfera y DAM implementada en seeds y fixtures.
-- [ ] Bootstrap explícito, idempotente y fail-closed implementado.
+- [x] Manifest y pruebas de la baseline generan BSON `ObjectId` reales.
+- [x] Baseline de autoridad de Atmósfera y DAM implementada, sin ejecución
+      operativa.
+- [x] Bootstrap explícito, idempotente y fail-closed implementado y probado.
 - [ ] Índice físico único creado y verificado en la nueva base de desarrollo.
 - [ ] Auditor ejecutado con resultado seguro sobre la nueva baseline.
 - [ ] Respaldo productivo verificado, no aplicable mientras no existan datos
