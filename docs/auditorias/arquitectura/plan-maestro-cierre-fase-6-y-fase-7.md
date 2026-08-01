@@ -231,8 +231,19 @@ El bootstrap crea exclusivamente dos negocios, cuatro usuarios y cuatro
 Memberships activas con BSON `ObjectId` físicos. Detecta una base vacía, una
 baseline completa o un estado parcial; el estado parcial, las referencias de
 tipo incorrecto y las contradicciones bloquean antes de escribir. Una
-repetición sobre la baseline exacta es un no-op. Los seeds destructivos
-anteriores de Atmósfera y DAM quedan desactivados.
+repetición sobre la baseline exacta es un no-op sólo cuando las credenciales
+declaradas verifican contra los hashes almacenados. Una contraseña distinta,
+un hash inválido o un fallo de verificación produce un estado `partial`; no se
+rotan contraseñas automáticamente.
+
+Las ejecuciones `apply` se serializan mediante un lock atómico de clave estable
+en una colección técnica controlada. El lock tiene propietario y expiración de
+treinta minutos, no se roba mientras está activo y sólo lo libera su
+propietario. Una vez adquirido, el bootstrap vuelve a leer todo el estado antes
+de decidir si crea, aborta o termina como no-op. Si la comprobación posterior a
+las escrituras no es concluyente, no declara éxito ni compensa a ciegas: informa
+un resultado desconocido y exige ejecutar `plan` antes de reintentar. Los seeds
+destructivos anteriores de Atmósfera y DAM quedan desactivados.
 
 Esta implementación todavía no ha creado la nueva base, no ha aplicado el
 bootstrap en un entorno externo, no ha verificado operativamente el índice y
@@ -812,7 +823,8 @@ preproductiva sin mezclar todavía 6.2.3, 6.2.4 ni el responsive:
    fingerprint del destino de desarrollo;
 3. ejecutar primero `plan` y conservar su evidencia operativa sin secretos;
 4. ejecutar `apply` de forma manual y controlada únicamente si el preflight
-   declara la base elegible;
+   declara la base elegible; no lanzar escritores concurrentes y, ante un
+   resultado desconocido, volver obligatoriamente a `plan` antes de reintentar;
 5. crear y verificar de forma controlada el índice único físico, sin depender
    de `autoIndex`,
    `{ user: 1, business: 1 }`;
