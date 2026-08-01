@@ -612,13 +612,20 @@ export const createBaselineDocuments = async (db, manifest, passwordHasher) => {
   await db.collection("memberships").insertMany(memberships, { ordered: true });
 };
 
+const openIsolatedMongooseConnection = async (mongoUri, options) => {
+  const isolatedConnection = mongoose.createConnection(mongoUri, options);
+  await isolatedConnection.asPromise();
+  return isolatedConnection;
+};
+
 export const runMembershipBaselineBootstrap = async ({
   mongoUri,
   options,
   environment = process.env,
-  connect = mongoose.connect.bind(mongoose),
-  disconnect = mongoose.disconnect.bind(mongoose),
-  connection = mongoose.connection,
+  connect,
+  disconnect,
+  connection,
+  openConnection = openIsolatedMongooseConnection,
   passwordHasher = hashPassword,
   passwordVerifier = isValidPassword,
   acquireLock = acquireMembershipBaselineLock,
@@ -642,21 +649,29 @@ export const runMembershipBaselineBootstrap = async ({
     );
   }
 
-  let connected = false;
+  let activeConnection;
+  let closeConnection;
   try {
-    await connect(mongoUri, {
+    const connectionOptions = {
       dbName: validatedOptions.database,
       autoIndex: false,
-    });
-    connected = true;
+    };
+    if (typeof connect === "function") {
+      await connect(mongoUri, connectionOptions);
+      activeConnection = connection;
+      closeConnection = disconnect;
+    } else {
+      activeConnection = await openConnection(mongoUri, connectionOptions);
+      closeConnection = activeConnection.close.bind(activeConnection);
+    }
 
-    const actualDatabase = connection.db?.databaseName;
+    const actualDatabase = activeConnection?.db?.databaseName;
     if (actualDatabase !== validatedOptions.database) {
       throw new Error("La base conectada no coincide con la base confirmada");
     }
 
     if (validatedOptions.mode === "plan") {
-      const source = await readSource(connection.db);
+      const source = await readSource(activeConnection.db);
       const plan = await buildVerifiedMembershipBaselinePlan(
         source,
         manifest,
@@ -668,10 +683,10 @@ export const runMembershipBaselineBootstrap = async ({
     const ownerId = ownerIdFactory();
     let lockAcquired = false;
     try {
-      await acquireLock(connection.db, { ownerId });
+      await acquireLock(activeConnection.db, { ownerId });
       lockAcquired = true;
 
-      const source = await readSource(connection.db);
+      const source = await readSource(activeConnection.db);
       const plan = await buildVerifiedMembershipBaselinePlan(
         source,
         manifest,
@@ -689,14 +704,14 @@ export const runMembershipBaselineBootstrap = async ({
       let mutationStarted = false;
       try {
         mutationStarted = true;
-        await ensureBaselineStorage(connection.db, source);
+        await ensureBaselineStorage(activeConnection.db, source);
         if (plan.state === "empty") {
-          await createDocuments(connection.db, manifest, passwordHasher);
+          await createDocuments(activeConnection.db, manifest, passwordHasher);
         }
 
         let verification;
         try {
-          const verificationSource = await readSource(connection.db);
+          const verificationSource = await readSource(activeConnection.db);
           verification = await buildVerifiedMembershipBaselinePlan(
             verificationSource,
             manifest,
@@ -726,7 +741,7 @@ export const runMembershipBaselineBootstrap = async ({
     } finally {
       if (lockAcquired) {
         try {
-          const released = await releaseLock(connection.db, { ownerId });
+          const released = await releaseLock(activeConnection.db, { ownerId });
           if (released !== true) throw new Error("lock ownership changed");
         } catch {
           throw new MembershipBaselineUnknownResultError();
@@ -734,7 +749,7 @@ export const runMembershipBaselineBootstrap = async ({
       }
     }
   } finally {
-    if (connected) await disconnect();
+    if (typeof closeConnection === "function") await closeConnection();
   }
 };
 
