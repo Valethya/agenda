@@ -7,8 +7,8 @@ operativa permanece pendiente sobre la nueva baseline; incluye la rebaseline
 preproductiva del PR #18
 **Fecha original:** 21 de julio de 2026
 **Última revisión:** 31 de julio de 2026
-**Base de contraste:** `master` después del PR #19
-(`d38711ab874134c7460be5ab4b8a77a96a51f3f5`)
+**Base de contraste:** `master` después del PR #18
+(`02c11750180d90da211594f69a131b5b54d025f4`)
 **Alcance:** Backend, multitenencia, seguridad, pagos, impersonación, frontend, pruebas y operación
 
 ## 1. Objetivo
@@ -219,6 +219,36 @@ del PR #17 original; conserva `CANONICAL_SCHEMA_VERSION = 4` y
 auditor sobre la nueva baseline y la normalización de sus seeds y fixtures para
 producir BSON `ObjectId` reales continúan pendientes. Ningún PR ha creado la
 nueva base, ejecutado el bootstrap o realizado el corte de autoridad.
+
+La implementación técnica de 6.2.2-C incorpora un comando separado para la
+baseline de autoridad de Atmósfera y DAM con modos `plan` y `apply`. Exige
+fingerprint del destino, nombre de base, credenciales suministradas fuera del
+repositorio y confirmación literal para escribir. Sólo admite `development` y
+`test`, conecta con `autoIndex: false` y no se ejecuta desde `start`, `dev`,
+Railway o el despliegue.
+
+El bootstrap crea exclusivamente dos negocios, cuatro usuarios y cuatro
+Memberships activas con BSON `ObjectId` físicos. Detecta una base vacía, una
+baseline completa o un estado parcial; el estado parcial, las referencias de
+tipo incorrecto y las contradicciones bloquean antes de escribir. Una
+repetición sobre la baseline exacta es un no-op sólo cuando las credenciales
+declaradas verifican contra los hashes almacenados. Una contraseña distinta,
+un hash inválido o un fallo de verificación produce un estado `partial`; no se
+rotan contraseñas automáticamente.
+
+Las ejecuciones `apply` se serializan mediante un lock atómico de clave estable
+en una colección técnica controlada. El lock tiene propietario y expiración de
+treinta minutos, no se roba mientras está activo y sólo lo libera su
+propietario. Una vez adquirido, el bootstrap vuelve a leer todo el estado antes
+de decidir si crea, aborta o termina como no-op. Si la comprobación posterior a
+las escrituras no es concluyente, no declara éxito ni compensa a ciegas: informa
+un resultado desconocido y exige ejecutar `plan` antes de reintentar. Los seeds
+destructivos anteriores de Atmósfera y DAM quedan desactivados.
+
+Esta implementación todavía no ha creado la nueva base, no ha aplicado el
+bootstrap en un entorno externo, no ha verificado operativamente el índice y
+no ha ejecutado el auditor sobre la nueva baseline. Servicios, turnos,
+configuración funcional y corte de autoridad permanecen fuera de este PR.
 
 **Cambio necesario**
 
@@ -783,32 +813,33 @@ La Fase 6 podrá declararse terminada cuando se cumplan todas estas condiciones:
 6.1, 6.2.1 y 6.2.2-A están cerradas. 6.2.2-B tiene cerrada su implementación
 read-only mediante los PR #17 y #19, pero conserva pendiente su ejecución operativa
 sobre la nueva baseline. No existe un conjunto productivo que migrar. El
-siguiente hito es construir una baseline preproductiva coherente sin mezclar
-todavía 6.2.3, 6.2.4 ni el responsive:
+siguiente hito es verificar y ejecutar de forma controlada la baseline
+preproductiva sin mezclar todavía 6.2.3, 6.2.4 ni el responsive:
 
-1. normalizar seeds y fixtures de Atmósfera y DAM para que generen BSON
-   `ObjectId` reales y usen claves estables;
-2. crear toda autoridad tenant inicial mediante Membership activa y mantener
-   `superadmin` exclusivamente como privilegio global;
-3. preparar un bootstrap explícito, idempotente y separado del arranque normal;
-   no debe duplicar negocios, usuarios o Memberships, debe detectar estados
-   parciales, fallar de forma segura ante estados inesperados y no ejecutarse al
-   desplegar, iniciar Railway o arrancar el servidor;
-4. crear y verificar de forma controlada el índice único físico, sin depender
+1. revisar y fusionar la implementación técnica del bootstrap, que normaliza
+   BSON `ObjectId`, claves estables y Memberships activas sin incluir
+   `superadmin` tenant;
+2. preparar fuera del repositorio las credenciales iniciales y aprobar el
+   fingerprint del destino de desarrollo;
+3. ejecutar primero `plan` y conservar su evidencia operativa sin secretos;
+4. ejecutar `apply` de forma manual y controlada únicamente si el preflight
+   declara la base elegible; no lanzar escritores concurrentes y, ante un
+   resultado desconocido, volver obligatoriamente a `plan` antes de reintentar;
+5. crear y verificar de forma controlada el índice único físico, sin depender
    de `autoIndex`,
    `{ user: 1, business: 1 }`;
-5. crear la nueva base de desarrollo sólo después de fusionar y verificar la
-   baseline;
-6. verificar después del bootstrap las colecciones, los documentos esperados y
+6. crear la nueva base de desarrollo sólo después de fusionar y verificar la
+   implementación;
+7. verificar después del bootstrap las colecciones, los documentos esperados y
    el índice físico;
-7. ejecutar operativamente el auditor read-only como gate posterior sobre la
+8. ejecutar operativamente el auditor read-only como gate posterior sobre la
    nueva base y exigir un informe seguro;
-8. desplegar el corte de autoridad HTTP y sesión en un PR separado;
-9. cerrar lecturas heredadas y WebSocket en otro PR;
-10. conservar el contrato de migración completo como contingencia: si aparece
+9. desplegar el corte de autoridad HTTP y sesión en un PR separado;
+10. cerrar lecturas heredadas y WebSocket en otro PR;
+11. conservar el contrato de migración completo como contingencia: si aparece
    información real antes del corte, detener la rebaseline e implementar
    respaldo, `apply`, `verify` y `rollback` antes de escribir;
-11. retirar `User.role` y `User.business` únicamente después de comprobar que
+12. retirar `User.role` y `User.business` únicamente después de comprobar que
     no quedan lecturas productivas y de cerrar la ventana de compatibilidad.
 
 El diseño documental no autoriza por sí mismo ninguna escritura productiva.
