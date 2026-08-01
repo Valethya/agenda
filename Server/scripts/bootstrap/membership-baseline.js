@@ -1,9 +1,13 @@
 import "dotenv/config";
 
+import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import mongoose, { mongo } from "mongoose";
-import { createHash as hashPassword } from "../../src/utils/password.js";
+import {
+  createHash as hashPassword,
+  isValidPassword,
+} from "../../src/utils/password.js";
 import { isExactMembershipUniqueIndex } from "../migrations/membership-authority-audit.js";
 import {
   fingerprintMongoTarget,
@@ -11,8 +15,12 @@ import {
   validateTargetFingerprint,
 } from "../migrations/membership-authority-provenance.js";
 
-export const MEMBERSHIP_BASELINE_BOOTSTRAP_VERSION = "1.0.0";
+export const MEMBERSHIP_BASELINE_BOOTSTRAP_VERSION = "1.1.0";
 export const MEMBERSHIP_BASELINE_CONFIRMATION = "CREATE_MEMBERSHIP_BASELINE";
+export const MEMBERSHIP_BASELINE_LOCK_COLLECTION =
+  "membership_baseline_locks";
+export const MEMBERSHIP_BASELINE_LOCK_KEY = "membership-baseline-v1";
+export const MEMBERSHIP_BASELINE_LOCK_TTL_MS = 30 * 60 * 1000;
 
 export const MEMBERSHIP_BASELINE_COLLECTIONS = Object.freeze([
   "businesses",
@@ -23,6 +31,7 @@ export const MEMBERSHIP_BASELINE_COLLECTIONS = Object.freeze([
 const ALLOWED_ENVIRONMENTS = new Set(["development", "test"]);
 const RESERVED_DATABASES = new Set(["admin", "config", "local"]);
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/u;
+const PASSWORD_HASH_PATTERN = /^\$2[abxy]\$\d{2}\$[./A-Za-z0-9]{53}$/u;
 
 const BASELINE_DEFINITION = Object.freeze([
   {
@@ -236,7 +245,11 @@ const emailKey = (value) =>
     ? value[0].toLowerCase()
     : null;
 
-export const buildMembershipBaselinePlan = (source, manifest) => {
+export const buildMembershipBaselinePlan = (
+  source,
+  manifest,
+  { credentialFindings = [] } = {},
+) => {
   const businesses = source.businesses ?? [];
   const users = source.users ?? [];
   const memberships = source.memberships ?? [];
@@ -244,12 +257,18 @@ export const buildMembershipBaselinePlan = (source, manifest) => {
   const findings = [];
   const observedCollections = [...(source.observedCollections ?? [])].sort();
   const requiredCollections = new Set(MEMBERSHIP_BASELINE_COLLECTIONS);
+  const allowedCollections = new Set([
+    ...MEMBERSHIP_BASELINE_COLLECTIONS,
+    MEMBERSHIP_BASELINE_LOCK_COLLECTION,
+  ]);
   const observedRequiredCollections = observedCollections.filter((collection) =>
     requiredCollections.has(collection),
   );
   const unexpectedCollections = observedCollections.filter(
-    (collection) => !requiredCollections.has(collection),
+    (collection) => !allowedCollections.has(collection),
   );
+
+  findings.push(...credentialFindings);
 
   if (
     observedRequiredCollections.length !== 0 &&
@@ -263,10 +282,6 @@ export const buildMembershipBaselinePlan = (source, manifest) => {
 
   const empty =
     businesses.length === 0 && users.length === 0 && memberships.length === 0;
-  const expectedBusinessByKey = new Map(
-    manifest.businesses.map((business) => [business.key, business]),
-  );
-  const expectedUserByKey = new Map(manifest.users.map((user) => [user.key, user]));
   const observedBusinessByKey = new Map();
   const observedUserByKey = new Map();
 
@@ -312,9 +327,7 @@ export const buildMembershipBaselinePlan = (source, manifest) => {
         observed.firstName !== expected.firstName ||
         observed.lastName !== expected.lastName ||
         observed.role !== expected.role ||
-        observed.isActive !== true ||
-        typeof observed.password !== "string" ||
-        observed.password.length === 0
+        observed.isActive !== true
       ) {
         findings.push(`userMismatch:${expected.key}`);
         continue;
@@ -397,6 +410,116 @@ export const buildMembershipBaselinePlan = (source, manifest) => {
   };
 };
 
+export const verifyMembershipBaselinePasswords = async (
+  source,
+  manifest,
+  passwordVerifier = isValidPassword,
+) => {
+  const users = source.users ?? [];
+  const findings = [];
+
+  for (const expected of manifest.users) {
+    const matches = users.filter((user) => emailKey(user.email) === expected.email);
+    if (matches.length !== 1) continue;
+
+    const storedHash = matches[0]?.password;
+    if (
+      typeof storedHash !== "string" ||
+      !PASSWORD_HASH_PATTERN.test(storedHash)
+    ) {
+      findings.push(`invalidPasswordHash:${expected.key}`);
+      continue;
+    }
+
+    try {
+      const matchesDeclaredPassword = await passwordVerifier(
+        expected.password,
+        storedHash,
+      );
+      if (matchesDeclaredPassword !== true) {
+        findings.push(`passwordMismatch:${expected.key}`);
+      }
+    } catch {
+      findings.push(`passwordVerificationError:${expected.key}`);
+    }
+  }
+
+  return [...new Set(findings)].sort();
+};
+
+export const buildVerifiedMembershipBaselinePlan = async (
+  source,
+  manifest,
+  passwordVerifier = isValidPassword,
+) => {
+  const credentialFindings = await verifyMembershipBaselinePasswords(
+    source,
+    manifest,
+    passwordVerifier,
+  );
+  return buildMembershipBaselinePlan(source, manifest, { credentialFindings });
+};
+
+export class MembershipBaselineLockActiveError extends Error {
+  constructor() {
+    super("Bootstrap bloqueado: existe otra ejecución apply activa");
+    this.name = "MembershipBaselineLockActiveError";
+  }
+}
+
+export class MembershipBaselineUnknownResultError extends Error {
+  constructor() {
+    super(
+      "No fue posible confirmar el resultado del bootstrap; ejecute --mode=plan antes de reintentar",
+    );
+    this.name = "MembershipBaselineUnknownResultError";
+  }
+}
+
+export const acquireMembershipBaselineLock = async (
+  db,
+  {
+    ownerId,
+    now = new Date(),
+    ttlMs = MEMBERSHIP_BASELINE_LOCK_TTL_MS,
+  },
+) => {
+  const acquiredAt = new Date(now);
+  const expiresAt = new Date(acquiredAt.getTime() + ttlMs);
+
+  try {
+    const lock = await db.collection(MEMBERSHIP_BASELINE_LOCK_COLLECTION)
+      .findOneAndUpdate(
+        {
+          _id: MEMBERSHIP_BASELINE_LOCK_KEY,
+          $or: [
+            { expiresAt: { $lte: acquiredAt } },
+            { ownerId },
+          ],
+        },
+        {
+          $set: { ownerId, acquiredAt, expiresAt },
+        },
+        { upsert: true, returnDocument: "after" },
+      );
+
+    if (lock?.ownerId !== ownerId) {
+      throw new MembershipBaselineLockActiveError();
+    }
+    return { acquiredAt, expiresAt };
+  } catch (error) {
+    if (error instanceof MembershipBaselineLockActiveError) throw error;
+    if (error?.code === 11000) throw new MembershipBaselineLockActiveError();
+    throw new Error("No fue posible adquirir el lock del bootstrap");
+  }
+};
+
+export const releaseMembershipBaselineLock = async (db, { ownerId }) => {
+  const result = await db.collection(MEMBERSHIP_BASELINE_LOCK_COLLECTION)
+    .deleteOne({ _id: MEMBERSHIP_BASELINE_LOCK_KEY, ownerId });
+  return result.deletedCount === 1;
+};
+
 export const readMembershipBaselineSource = async (db) => {
   const observedCollections = (await db.listCollections({}, { nameOnly: true }).toArray())
     .map((collection) => collection.name)
@@ -436,7 +559,7 @@ const ensureCollectionsAndMembershipIndex = async (db, source) => {
   }
 };
 
-const createBaselineDocuments = async (db, manifest, passwordHasher) => {
+export const createBaselineDocuments = async (db, manifest, passwordHasher) => {
   const now = new Date();
   const businessIds = new Map(
     manifest.businesses.map((business) => [business.key, new mongo.ObjectId()]),
@@ -484,18 +607,9 @@ const createBaselineDocuments = async (db, manifest, passwordHasher) => {
     updatedAt: now,
   }));
 
-  try {
-    await db.collection("businesses").insertMany(businesses, { ordered: true });
-    await db.collection("users").insertMany(users, { ordered: true });
-    await db.collection("memberships").insertMany(memberships, { ordered: true });
-  } catch (error) {
-    await db.collection("memberships").deleteMany({ _id: { $in: membershipIds } });
-    await db.collection("users").deleteMany({ _id: { $in: [...userIds.values()] } });
-    await db
-      .collection("businesses")
-      .deleteMany({ _id: { $in: [...businessIds.values()] } });
-    throw error;
-  }
+  await db.collection("businesses").insertMany(businesses, { ordered: true });
+  await db.collection("users").insertMany(users, { ordered: true });
+  await db.collection("memberships").insertMany(memberships, { ordered: true });
 };
 
 export const runMembershipBaselineBootstrap = async ({
@@ -506,6 +620,13 @@ export const runMembershipBaselineBootstrap = async ({
   disconnect = mongoose.disconnect.bind(mongoose),
   connection = mongoose.connection,
   passwordHasher = hashPassword,
+  passwordVerifier = isValidPassword,
+  acquireLock = acquireMembershipBaselineLock,
+  releaseLock = releaseMembershipBaselineLock,
+  ownerIdFactory = randomUUID,
+  readSource = readMembershipBaselineSource,
+  ensureBaselineStorage = ensureCollectionsAndMembershipIndex,
+  createDocuments = createBaselineDocuments,
 }) => {
   const validatedOptions = validateMembershipBaselineOptions({ ...options });
   const manifest = buildMembershipBaselineManifest(environment);
@@ -534,38 +655,84 @@ export const runMembershipBaselineBootstrap = async ({
       throw new Error("La base conectada no coincide con la base confirmada");
     }
 
-    let source = await readMembershipBaselineSource(connection.db);
-    let plan = buildMembershipBaselinePlan(source, manifest);
     if (validatedOptions.mode === "plan") {
+      const source = await readSource(connection.db);
+      const plan = await buildVerifiedMembershipBaselinePlan(
+        source,
+        manifest,
+        passwordVerifier,
+      );
       return { plan, applied: false, exitCode: plan.canApply ? 0 : 2 };
     }
-    if (!plan.canApply) {
-      throw new Error(
-        "Bootstrap bloqueado: la base está parcialmente inicializada o contiene contradicciones",
+
+    const ownerId = ownerIdFactory();
+    let lockAcquired = false;
+    try {
+      await acquireLock(connection.db, { ownerId });
+      lockAcquired = true;
+
+      const source = await readSource(connection.db);
+      const plan = await buildVerifiedMembershipBaselinePlan(
+        source,
+        manifest,
+        passwordVerifier,
       );
-    }
-    if (plan.idempotentNoop) {
-      return { plan, applied: false, exitCode: 0 };
-    }
+      if (!plan.canApply) {
+        throw new Error(
+          "Bootstrap bloqueado: la base está parcialmente inicializada o contiene contradicciones",
+        );
+      }
+      if (plan.idempotentNoop) {
+        return { plan, applied: false, exitCode: 0 };
+      }
 
-    source = await readMembershipBaselineSource(connection.db);
-    plan = buildMembershipBaselinePlan(source, manifest);
-    if (!plan.canApply) {
-      throw new Error("Bootstrap bloqueado: el estado cambió después del preflight");
-    }
+      let mutationStarted = false;
+      try {
+        mutationStarted = true;
+        await ensureBaselineStorage(connection.db, source);
+        if (plan.state === "empty") {
+          await createDocuments(connection.db, manifest, passwordHasher);
+        }
 
-    await ensureCollectionsAndMembershipIndex(connection.db, source);
-    if (plan.state === "empty") {
-      await createBaselineDocuments(connection.db, manifest, passwordHasher);
-    }
+        let verification;
+        try {
+          const verificationSource = await readSource(connection.db);
+          verification = await buildVerifiedMembershipBaselinePlan(
+            verificationSource,
+            manifest,
+            passwordVerifier,
+          );
+        } catch {
+          throw new MembershipBaselineUnknownResultError();
+        }
 
-    const verificationSource = await readMembershipBaselineSource(connection.db);
-    const verification = buildMembershipBaselinePlan(verificationSource, manifest);
-    if (verification.state !== "ready" || !verification.idempotentNoop) {
-      throw new Error("La verificación posterior del bootstrap no resultó segura");
-    }
+        if (verification.state !== "ready" || !verification.idempotentNoop) {
+          throw new Error(
+            "La baseline quedó en estado parcial confirmado; ejecute --mode=plan antes de reintentar",
+          );
+        }
 
-    return { plan: verification, applied: true, exitCode: 0 };
+        return { plan: verification, applied: true, exitCode: 0 };
+      } catch (error) {
+        if (
+          error instanceof MembershipBaselineUnknownResultError ||
+          error.message?.includes("estado parcial confirmado")
+        ) {
+          throw error;
+        }
+        if (mutationStarted) throw new MembershipBaselineUnknownResultError();
+        throw error;
+      }
+    } finally {
+      if (lockAcquired) {
+        try {
+          const released = await releaseLock(connection.db, { ownerId });
+          if (released !== true) throw new Error("lock ownership changed");
+        } catch {
+          throw new MembershipBaselineUnknownResultError();
+        }
+      }
+    }
   } finally {
     if (connected) await disconnect();
   }

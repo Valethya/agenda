@@ -6,6 +6,7 @@ import { mongo } from "mongoose";
 import { TEST_DB_URI } from "./setup.js";
 import {
   MEMBERSHIP_BASELINE_CONFIRMATION,
+  MEMBERSHIP_BASELINE_LOCK_COLLECTION,
   runMembershipBaselineBootstrap,
 } from "../scripts/bootstrap/membership-baseline.js";
 import { fingerprintMongoTarget } from "../scripts/migrations/membership-authority-provenance.js";
@@ -46,7 +47,12 @@ const withClient = async (callback) => {
 
 const cleanAuthorityCollections = () =>
   withClient(async (db) => {
-    for (const collection of ["memberships", "users", "businesses"]) {
+    for (const collection of [
+      MEMBERSHIP_BASELINE_LOCK_COLLECTION,
+      "memberships",
+      "users",
+      "businesses",
+    ]) {
       if ((await db.listCollections({ name: collection }).toArray()).length > 0) {
         await db.collection(collection).deleteMany({});
       }
@@ -61,7 +67,12 @@ const snapshot = () =>
       .map(({ name }) => name)
       .sort();
     const result = { collections, documents: {}, indexes: {} };
-    for (const collection of ["businesses", "memberships", "users"]) {
+    for (const collection of [
+      "businesses",
+      "memberships",
+      MEMBERSHIP_BASELINE_LOCK_COLLECTION,
+      "users",
+    ]) {
       if (!collections.includes(collection)) continue;
       result.documents[collection] = await db
         .collection(collection)
@@ -83,7 +94,6 @@ test("bootstrap de autoridad crea BSON reales, verifica el índice y es idempote
     mongoUri: BASELINE_TEST_URI,
     options: options("plan"),
     environment,
-    passwordHasher: async (password) => `hash:${password}`,
   });
   assert.equal(plan.applied, false);
   assert.equal(plan.plan.state, "empty");
@@ -92,7 +102,6 @@ test("bootstrap de autoridad crea BSON reales, verifica el índice y es idempote
     mongoUri: BASELINE_TEST_URI,
     options: options("apply"),
     environment,
-    passwordHasher: async (password) => `hash:${password}`,
   });
   assert.equal(applied.applied, true);
   assert.equal(applied.plan.state, "ready");
@@ -154,11 +163,142 @@ test("bootstrap bloquea una base parcialmente inicializada sin modificarla", asy
       mongoUri: BASELINE_TEST_URI,
       options: options("apply"),
       environment,
-      passwordHasher: async (password) => `hash:${password}`,
     }),
     /parcialmente inicializada/,
   );
   assert.deepEqual(await snapshot(), before);
+
+  await cleanAuthorityCollections();
+});
+
+test("dos apply concurrentes serializan la baseline y una tercera ejecución es no-op", async () => {
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    await cleanAuthorityCollections();
+
+    const concurrent = await Promise.allSettled([
+      runMembershipBaselineBootstrap({
+        mongoUri: BASELINE_TEST_URI,
+        options: options("apply"),
+        environment,
+      }),
+      runMembershipBaselineBootstrap({
+        mongoUri: BASELINE_TEST_URI,
+        options: options("apply"),
+        environment,
+      }),
+    ]);
+    const fulfilled = concurrent.filter(({ status }) => status === "fulfilled");
+    const rejected = concurrent.filter(({ status }) => status === "rejected");
+    assert.ok(fulfilled.length >= 1);
+    assert.ok(fulfilled.some(({ value }) => value.applied === true));
+    assert.ok(
+      rejected.length === 0 ||
+      rejected.every(({ reason }) => /otra ejecución apply activa/u.test(reason.message)),
+    );
+
+    await withClient(async (db) => {
+      assert.equal(await db.collection("businesses").countDocuments({}), 2);
+      assert.equal(await db.collection("users").countDocuments({}), 4);
+      assert.equal(await db.collection("memberships").countDocuments({}), 4);
+      assert.equal(
+        await db.collection(MEMBERSHIP_BASELINE_LOCK_COLLECTION).countDocuments({}),
+        0,
+      );
+
+      const duplicatePairs = await db.collection("memberships").aggregate([
+        { $group: { _id: { user: "$user", business: "$business" }, count: { $sum: 1 } } },
+        { $match: { count: { $gt: 1 } } },
+      ]).toArray();
+      assert.deepEqual(duplicatePairs, []);
+
+      const users = await db.collection("users").find({}).toArray();
+      const businesses = await db.collection("businesses").find({}).toArray();
+      const memberships = await db.collection("memberships").find({}).toArray();
+      assert.ok(users.every(({ _id, business }) =>
+        _id instanceof mongo.ObjectId && business instanceof mongo.ObjectId));
+      assert.ok(businesses.every(({ _id, owner }) =>
+        _id instanceof mongo.ObjectId && owner instanceof mongo.ObjectId));
+      assert.ok(memberships.every(({ _id, user, business }) =>
+        _id instanceof mongo.ObjectId &&
+        user instanceof mongo.ObjectId &&
+        business instanceof mongo.ObjectId));
+
+      const indexes = await db.collection("memberships").listIndexes().toArray();
+      assert.ok(indexes.some(
+        (index) => index.unique === true &&
+          JSON.stringify(index.key) === JSON.stringify({ user: 1, business: 1 }),
+      ));
+    });
+
+    const third = await runMembershipBaselineBootstrap({
+      mongoUri: BASELINE_TEST_URI,
+      options: options("apply"),
+      environment,
+      passwordHasher: async () => {
+        throw new Error("No debe rotar hashes durante un no-op");
+      },
+    });
+    assert.equal(third.applied, false);
+    assert.equal(third.plan.idempotentNoop, true);
+  }
+
+  await cleanAuthorityCollections();
+});
+
+test("credenciales diferentes bloquean plan y apply sin rotar hashes ni escribir", async () => {
+  await cleanAuthorityCollections();
+  await runMembershipBaselineBootstrap({
+    mongoUri: BASELINE_TEST_URI,
+    options: options("apply"),
+    environment,
+  });
+
+  const original = await snapshot();
+  const changedEnvironment = {
+    ...environment,
+    BASELINE_ATMOSFERA_ADMIN_PASSWORD: "different-atmosfera-admin-password",
+  };
+  const matching = await runMembershipBaselineBootstrap({
+    mongoUri: BASELINE_TEST_URI,
+    options: options("plan"),
+    environment,
+  });
+  assert.equal(matching.plan.state, "ready");
+  assert.equal(matching.plan.canApply, true);
+
+  const mismatch = await runMembershipBaselineBootstrap({
+    mongoUri: BASELINE_TEST_URI,
+    options: options("plan"),
+    environment: changedEnvironment,
+  });
+  assert.equal(mismatch.plan.state, "partial");
+  assert.equal(mismatch.plan.canApply, false);
+  assert.ok(mismatch.plan.findings.includes("passwordMismatch:atmosfera-admin"));
+  assert.equal(
+    JSON.stringify(mismatch.plan).includes(
+      changedEnvironment.BASELINE_ATMOSFERA_ADMIN_PASSWORD,
+    ),
+    false,
+  );
+
+  await assert.rejects(
+    runMembershipBaselineBootstrap({
+      mongoUri: BASELINE_TEST_URI,
+      options: options("apply"),
+      environment: changedEnvironment,
+    }),
+    /parcialmente inicializada/u,
+  );
+  assert.deepEqual(await snapshot(), original);
+
+  const stillMatching = await runMembershipBaselineBootstrap({
+    mongoUri: BASELINE_TEST_URI,
+    options: options("apply"),
+    environment,
+  });
+  assert.equal(stillMatching.applied, false);
+  assert.equal(stillMatching.plan.idempotentNoop, true);
+  assert.deepEqual(await snapshot(), original);
 
   await cleanAuthorityCollections();
 });
