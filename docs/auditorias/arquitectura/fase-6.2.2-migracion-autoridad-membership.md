@@ -811,18 +811,38 @@ Ambos modos exigen nombre de base y fingerprint SHA-256 aprobado del destino.
 La conexión utiliza `autoIndex: false`, nunca imprime la URI y valida que el
 nombre real de la base coincida con el confirmado.
 
-La baseline utiliza claves lógicas estables: los slugs `atmosfera` y `dam`,
-cuatro identidades proporcionadas mediante variables de entorno y las parejas
-usuario-negocio. Los correos y contraseñas no se almacenan en el repositorio ni
-se incluyen en el plan. Se exige un correo único y una contraseña de al menos
-doce caracteres para cada identidad:
+La baseline utiliza claves lógicas estables: los slugs `atmosfera` y `dam`, una
+identidad propietaria administrativa por negocio y las parejas usuario-negocio.
+No crea trabajadores artificiales: en ambos negocios la persona propietaria
+también presta servicios, pero esa capacidad operativa deberá representarse en
+un bloque posterior sin duplicar su identidad ni crear una segunda Membership
+para el mismo par. La baseline de autoridad sólo le asigna una Membership
+`admin` activa.
+
+Los correos y contraseñas no se almacenan en el repositorio ni se incluyen en
+el plan. La CLI conserva como alternativa dos parejas de variables locales y
+exige un correo único y una contraseña de al menos doce caracteres para cada
+identidad:
 
 - `BASELINE_ATMOSFERA_ADMIN_EMAIL` y
   `BASELINE_ATMOSFERA_ADMIN_PASSWORD`;
-- `BASELINE_ATMOSFERA_WORKER_EMAIL` y
-  `BASELINE_ATMOSFERA_WORKER_PASSWORD`;
-- `BASELINE_DAM_ADMIN_EMAIL` y `BASELINE_DAM_ADMIN_PASSWORD`;
-- `BASELINE_DAM_WORKER_EMAIL` y `BASELINE_DAM_WORKER_PASSWORD`.
+- `BASELINE_DAM_ADMIN_EMAIL` y `BASELINE_DAM_ADMIN_PASSWORD`.
+
+El asistente local `bootstrap:membership-baseline:ui` permite introducir
+nombres, correos y contraseñas en un formulario servido exclusivamente en
+`127.0.0.1`. Las credenciales se mantienen en memoria durante cada solicitud y
+no requieren variables de entorno, no se escriben en archivos y no se incluyen
+en respuestas. La URI MongoDB permanece como secreto local de conexión. El
+asistente sólo acepta `development` o `test`, exige un fingerprint aprobado,
+ejecuta `plan` antes de habilitar `apply` y vincula la aprobación temporal al
+contenido exacto comprobado. No forma parte de `start`, `dev`, Railway ni del
+despliegue.
+
+`MEMBERSHIP_BASELINE_BOOTSTRAP_VERSION` avanza a `2.0.0` porque la definición
+exacta cambia de cuatro identidades a dos propietarios administradores y admite
+un manifiesto de credenciales construido en memoria. Este cambio no altera el
+payload canónico del auditor read-only: `CANONICAL_SCHEMA_VERSION = 4` y
+`MEMBERSHIP_AUTHORITY_AUDITOR_VERSION = "1.3.0"` permanecen sin cambios.
 
 Para considerar una identidad ya existente como coherente no basta con que
 `User.password` sea un string no vacío. El formato del hash debe ser válido y
@@ -833,12 +853,15 @@ hallazgo determinista por clave lógica, clasifica la base como `partial` y
 bloquea. El bootstrap no rota contraseñas. Ni la credencial ni el hash se
 serializan en el plan o en los errores.
 
-La primera aplicación crea dos negocios, cuatro usuarios y cuatro Memberships
-activas con roles `admin` o `worker`. Los `_id` y todas las referencias se
+La primera aplicación crea dos negocios, dos usuarios propietarios y dos
+Memberships activas con rol `admin`. Los `_id` y todas las referencias se
 generan como BSON `ObjectId` físicos. `superadmin` no forma parte de la baseline
 tenant. El alcance no incluye servicios, turnos, reservas ni configuración
-funcional; esos datos pertenecen a bloques posteriores y no deben ocultar el
-gate de autoridad.
+funcional. En particular, este bootstrap no afirma que un administrador ya sea
+seleccionable como profesional: el runtime actual trata `worker` como rol
+exclusivo en reservas y disponibilidad, y esa separación deberá corregirse sin
+debilitar la Membership como autoridad tenant. Esos datos y capacidades
+pertenecen a bloques posteriores y no deben ocultar el gate de autoridad.
 
 El preflight y la sección crítica se comportan de forma fail-closed:
 

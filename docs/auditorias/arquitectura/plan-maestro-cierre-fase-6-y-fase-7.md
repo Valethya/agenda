@@ -227,10 +227,14 @@ repositorio y confirmación literal para escribir. Sólo admite `development` y
 `test`, conecta con `autoIndex: false` y no se ejecuta desde `start`, `dev`,
 Railway o el despliegue.
 
-El bootstrap crea exclusivamente dos negocios, cuatro usuarios y cuatro
-Memberships activas con BSON `ObjectId` físicos. Detecta una base vacía, una
-baseline completa o un estado parcial; el estado parcial, las referencias de
-tipo incorrecto y las contradicciones bloquean antes de escribir. Una
+El bootstrap crea exclusivamente dos negocios, dos usuarios propietarios y dos
+Memberships administrativas activas con BSON `ObjectId` físicos. No crea una
+identidad `worker` separada para cada negocio porque las personas propietarias
+también prestan servicios. La capacidad de ser profesional agendable continúa
+pendiente de una representación explícita que no duplique usuarios ni vulnere
+el índice único de Membership. Detecta una base vacía, una baseline completa o
+un estado parcial; el estado parcial, las referencias de tipo incorrecto y las
+contradicciones bloquean antes de escribir. Una
 repetición sobre la baseline exacta es un no-op sólo cuando las credenciales
 declaradas verifican contra los hashes almacenados. Una contraseña distinta,
 un hash inválido o un fallo de verificación produce un estado `partial`; no se
@@ -244,6 +248,14 @@ de decidir si crea, aborta o termina como no-op. Si la comprobación posterior a
 las escrituras no es concluyente, no declara éxito ni compensa a ciegas: informa
 un resultado desconocido y exige ejecutar `plan` antes de reintentar. Los seeds
 destructivos anteriores de Atmósfera y DAM quedan desactivados.
+
+Para la ejecución manual existe además un asistente local separado, enlazado
+exclusivamente a `127.0.0.1`, que recibe en memoria los datos de las dos personas
+propietarias. Exige un `plan` seguro antes de habilitar `apply`, no persiste ni
+devuelve credenciales y no se conecta al arranque normal, a Railway ni al
+despliegue. `MONGO_URI` continúa siendo un secreto local de conexión; los datos
+de los propietarios no necesitan almacenarse en `.env` cuando se utiliza el
+asistente.
 
 Esta implementación todavía no ha creado la nueva base, no ha aplicado el
 bootstrap en un entorno externo, no ha verificado operativamente el índice y
