@@ -15,7 +15,7 @@ import {
   validateTargetFingerprint,
 } from "../migrations/membership-authority-provenance.js";
 
-export const MEMBERSHIP_BASELINE_BOOTSTRAP_VERSION = "1.1.0";
+export const MEMBERSHIP_BASELINE_BOOTSTRAP_VERSION = "2.0.0";
 export const MEMBERSHIP_BASELINE_CONFIRMATION = "CREATE_MEMBERSHIP_BASELINE";
 export const MEMBERSHIP_BASELINE_LOCK_COLLECTION =
   "membership_baseline_locks";
@@ -38,47 +38,27 @@ const BASELINE_DEFINITION = Object.freeze([
     key: "atmosfera",
     name: "Atmósfera",
     slug: "atmosfera",
-    identities: [
-      {
-        key: "atmosfera-admin",
-        firstName: "Administración",
-        lastName: "Atmósfera",
-        role: "admin",
-        emailVariable: "BASELINE_ATMOSFERA_ADMIN_EMAIL",
-        passwordVariable: "BASELINE_ATMOSFERA_ADMIN_PASSWORD",
-      },
-      {
-        key: "atmosfera-worker",
-        firstName: "Profesional",
-        lastName: "Atmósfera",
-        role: "worker",
-        emailVariable: "BASELINE_ATMOSFERA_WORKER_EMAIL",
-        passwordVariable: "BASELINE_ATMOSFERA_WORKER_PASSWORD",
-      },
-    ],
+    identity: {
+      key: "atmosfera-admin",
+      firstName: "Administración",
+      lastName: "Atmósfera",
+      role: "admin",
+      emailVariable: "BASELINE_ATMOSFERA_ADMIN_EMAIL",
+      passwordVariable: "BASELINE_ATMOSFERA_ADMIN_PASSWORD",
+    },
   },
   {
     key: "dam",
     name: "DAM",
     slug: "dam",
-    identities: [
-      {
-        key: "dam-admin",
-        firstName: "Administración",
-        lastName: "DAM",
-        role: "admin",
-        emailVariable: "BASELINE_DAM_ADMIN_EMAIL",
-        passwordVariable: "BASELINE_DAM_ADMIN_PASSWORD",
-      },
-      {
-        key: "dam-worker",
-        firstName: "Profesional",
-        lastName: "DAM",
-        role: "worker",
-        emailVariable: "BASELINE_DAM_WORKER_EMAIL",
-        passwordVariable: "BASELINE_DAM_WORKER_PASSWORD",
-      },
-    ],
+    identity: {
+      key: "dam-admin",
+      firstName: "Administración",
+      lastName: "DAM",
+      role: "admin",
+      emailVariable: "BASELINE_DAM_ADMIN_EMAIL",
+      passwordVariable: "BASELINE_DAM_ADMIN_PASSWORD",
+    },
   },
 ]);
 
@@ -90,7 +70,35 @@ const requireEnvironmentValue = (environment, variable) => {
   return value.trim();
 };
 
-export const buildMembershipBaselineManifest = (environment = process.env) => {
+const validateOwnerInput = (owner, definition) => {
+  if (!owner || typeof owner !== "object" || Array.isArray(owner)) {
+    throw new Error(`Los datos del propietario ${definition.key} son obligatorios`);
+  }
+
+  const firstName = typeof owner.firstName === "string" ? owner.firstName.trim() : "";
+  const lastName = typeof owner.lastName === "string" ? owner.lastName.trim() : "";
+  const email = typeof owner.email === "string" ? owner.email.trim().toLowerCase() : "";
+  const password = typeof owner.password === "string" ? owner.password : "";
+
+  if (!firstName || firstName.length > 80) {
+    throw new Error(`El nombre del propietario ${definition.key} no es válido`);
+  }
+  if (!lastName || lastName.length > 80) {
+    throw new Error(`El apellido del propietario ${definition.key} no es válido`);
+  }
+  if (!EMAIL_PATTERN.test(email) || email.length > 254) {
+    throw new Error(`El correo del propietario ${definition.key} no es válido`);
+  }
+  if (password.length < 12 || password.length > 256) {
+    throw new Error(
+      `La contraseña del propietario ${definition.key} debe tener entre 12 y 256 caracteres`,
+    );
+  }
+
+  return { firstName, lastName, email, password };
+};
+
+export const buildMembershipBaselineManifestFromOwners = (owners) => {
   const businesses = BASELINE_DEFINITION.map((definition) => ({
     key: definition.key,
     name: definition.name,
@@ -98,38 +106,17 @@ export const buildMembershipBaselineManifest = (environment = process.env) => {
     isActive: true,
   }));
 
-  const users = BASELINE_DEFINITION.flatMap((definition) =>
-    definition.identities.map((identity) => {
-      const email = requireEnvironmentValue(
-        environment,
-        identity.emailVariable,
-      ).toLowerCase();
-      const password = requireEnvironmentValue(
-        environment,
-        identity.passwordVariable,
-      );
-
-      if (!EMAIL_PATTERN.test(email)) {
-        throw new Error(`La variable ${identity.emailVariable} no es un correo válido`);
-      }
-      if (password.length < 12) {
-        throw new Error(
-          `La variable ${identity.passwordVariable} debe tener al menos 12 caracteres`,
-        );
-      }
-
-      return {
-        key: identity.key,
-        businessKey: definition.key,
-        firstName: identity.firstName,
-        lastName: identity.lastName,
-        email,
-        password,
-        role: identity.role,
-        isActive: true,
-      };
-    }),
-  );
+  const users = BASELINE_DEFINITION.map((definition) => {
+    const identity = definition.identity;
+    const owner = validateOwnerInput(owners?.[definition.key], definition);
+    return {
+      key: identity.key,
+      businessKey: definition.key,
+      ...owner,
+      role: identity.role,
+      isActive: true,
+    };
+  });
 
   const uniqueEmails = new Set(users.map((user) => user.email));
   if (uniqueEmails.size !== users.length) {
@@ -150,6 +137,24 @@ export const buildMembershipBaselineManifest = (environment = process.env) => {
     users,
     memberships,
   };
+};
+
+export const buildMembershipBaselineManifest = (environment = process.env) => {
+  const owners = Object.fromEntries(
+    BASELINE_DEFINITION.map((definition) => {
+      const identity = definition.identity;
+      return [
+        definition.key,
+        {
+          firstName: identity.firstName,
+          lastName: identity.lastName,
+          email: requireEnvironmentValue(environment, identity.emailVariable),
+          password: requireEnvironmentValue(environment, identity.passwordVariable),
+        },
+      ];
+    }),
+  );
+  return buildMembershipBaselineManifestFromOwners(owners);
 };
 
 export const parseMembershipBaselineArgs = (argv) => {
@@ -622,6 +627,7 @@ export const runMembershipBaselineBootstrap = async ({
   mongoUri,
   options,
   environment = process.env,
+  manifest: suppliedManifest,
   connect,
   disconnect,
   connection,
@@ -636,7 +642,7 @@ export const runMembershipBaselineBootstrap = async ({
   createDocuments = createBaselineDocuments,
 }) => {
   const validatedOptions = validateMembershipBaselineOptions({ ...options });
-  const manifest = buildMembershipBaselineManifest(environment);
+  const manifest = suppliedManifest ?? buildMembershipBaselineManifest(environment);
   if (!mongoUri) throw new Error("MONGO_URI es obligatoria");
 
   const observedFingerprint = fingerprintMongoTarget(
@@ -794,12 +800,10 @@ if (isDirectExecution) {
       process.exitCode = exitCode;
     })
     .catch((error) => {
-      const sensitiveValues = BASELINE_DEFINITION.flatMap((business) =>
-        business.identities.flatMap((identity) => [
-          process.env[identity.emailVariable],
-          process.env[identity.passwordVariable],
-        ]),
-      ).filter(Boolean);
+      const sensitiveValues = BASELINE_DEFINITION.flatMap(({ identity }) => [
+        process.env[identity.emailVariable],
+        process.env[identity.passwordVariable],
+      ]).filter(Boolean);
       let message = sanitizeAuditErrorMessage(error, process.env.MONGO_URI);
       for (const value of sensitiveValues) {
         message = message.split(value).join("[REDACTED]");

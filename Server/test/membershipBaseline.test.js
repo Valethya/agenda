@@ -9,6 +9,10 @@ import {
   MEMBERSHIP_BASELINE_LOCK_COLLECTION,
   runMembershipBaselineBootstrap,
 } from "../scripts/bootstrap/membership-baseline.js";
+import {
+  createMembershipBaselineUiServer,
+  MEMBERSHIP_BASELINE_UI_HOST,
+} from "../scripts/bootstrap/membership-baseline-ui.js";
 import { fingerprintMongoTarget } from "../scripts/migrations/membership-authority-provenance.js";
 
 const testUrl = new URL(TEST_DB_URI);
@@ -19,12 +23,22 @@ const fingerprint = fingerprintMongoTarget(BASELINE_TEST_URI, database);
 const environment = {
   BASELINE_ATMOSFERA_ADMIN_EMAIL: "admin-atmosfera@baseline.example.test",
   BASELINE_ATMOSFERA_ADMIN_PASSWORD: "atmosfera-admin-safe",
-  BASELINE_ATMOSFERA_WORKER_EMAIL: "worker-atmosfera@baseline.example.test",
-  BASELINE_ATMOSFERA_WORKER_PASSWORD: "atmosfera-worker-safe",
   BASELINE_DAM_ADMIN_EMAIL: "admin-dam@baseline.example.test",
   BASELINE_DAM_ADMIN_PASSWORD: "dam-admin-password",
-  BASELINE_DAM_WORKER_EMAIL: "worker-dam@baseline.example.test",
-  BASELINE_DAM_WORKER_PASSWORD: "dam-worker-password",
+};
+const uiOwners = {
+  atmosfera: {
+    firstName: "Owner",
+    lastName: "Atmósfera",
+    email: environment.BASELINE_ATMOSFERA_ADMIN_EMAIL,
+    password: environment.BASELINE_ATMOSFERA_ADMIN_PASSWORD,
+  },
+  dam: {
+    firstName: "Owner",
+    lastName: "DAM",
+    email: environment.BASELINE_DAM_ADMIN_EMAIL,
+    password: environment.BASELINE_DAM_ADMIN_PASSWORD,
+  },
 };
 
 const options = (mode) => ({
@@ -109,8 +123,8 @@ test("bootstrap de autoridad crea BSON reales, verifica el índice y es idempote
 
   const first = await snapshot();
   assert.equal(first.documents.businesses.length, 2);
-  assert.equal(first.documents.users.length, 4);
-  assert.equal(first.documents.memberships.length, 4);
+  assert.equal(first.documents.users.length, 2);
+  assert.equal(first.documents.memberships.length, 2);
   assert.ok(first.documents.businesses.every(({ _id, owner }) =>
     _id instanceof mongo.ObjectId && owner instanceof mongo.ObjectId));
   assert.ok(first.documents.users.every(({ _id, business, isActive }) =>
@@ -121,7 +135,7 @@ test("bootstrap de autoridad crea BSON reales, verifica el índice y es idempote
     _id instanceof mongo.ObjectId &&
     user instanceof mongo.ObjectId &&
     business instanceof mongo.ObjectId &&
-    ["admin", "worker"].includes(role) &&
+    role === "admin" &&
     isActive === true));
   assert.ok(
     first.indexes.memberships.some(
@@ -198,8 +212,8 @@ test("dos apply concurrentes serializan la baseline y una tercera ejecución es 
 
     await withClient(async (db) => {
       assert.equal(await db.collection("businesses").countDocuments({}), 2);
-      assert.equal(await db.collection("users").countDocuments({}), 4);
-      assert.equal(await db.collection("memberships").countDocuments({}), 4);
+      assert.equal(await db.collection("users").countDocuments({}), 2);
+      assert.equal(await db.collection("memberships").countDocuments({}), 2);
       assert.equal(
         await db.collection(MEMBERSHIP_BASELINE_LOCK_COLLECTION).countDocuments({}),
         0,
@@ -301,4 +315,69 @@ test("credenciales diferentes bloquean plan y apply sin rotar hashes ni escribir
   assert.deepEqual(await snapshot(), original);
 
   await cleanAuthorityCollections();
+});
+
+test("la interfaz local ejecuta plan y apply reales sin persistir credenciales", async () => {
+  await cleanAuthorityCollections();
+  const app = createMembershipBaselineUiServer({
+    mongoUri: BASELINE_TEST_URI,
+    options: { environment: "test", database, port: 0 },
+  });
+  await new Promise((resolve, reject) => {
+    app.server.once("error", reject);
+    app.server.listen(0, MEMBERSHIP_BASELINE_UI_HOST, resolve);
+  });
+  const address = app.server.address();
+  const baseUrl = `http://${MEMBERSHIP_BASELINE_UI_HOST}:${address.port}`;
+  const request = async (path, body) => {
+    const response = await fetch(`${baseUrl}${path}`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-bootstrap-csrf": app.csrfToken,
+      },
+      body: JSON.stringify(body),
+    });
+    return { response, body: await response.json() };
+  };
+
+  try {
+    const payload = { owners: uiOwners, expectedTargetFingerprint: fingerprint };
+    const planned = await request("/api/plan", payload);
+    assert.equal(planned.response.status, 200);
+    assert.equal(planned.body.plan.state, "empty");
+    assert.ok(planned.body.planToken);
+
+    const applied = await request("/api/apply", {
+      ...payload,
+      planToken: planned.body.planToken,
+      confirmation: MEMBERSHIP_BASELINE_CONFIRMATION,
+    });
+    assert.equal(applied.response.status, 200);
+    assert.equal(applied.body.applied, true);
+    assert.equal(applied.body.plan.state, "ready");
+
+    const verified = await request("/api/plan", payload);
+    assert.equal(verified.body.plan.state, "ready");
+    assert.equal(verified.body.plan.idempotentNoop, true);
+
+    const serialized = JSON.stringify({ planned: planned.body, applied: applied.body });
+    for (const owner of Object.values(uiOwners)) {
+      assert.equal(serialized.includes(owner.email), false);
+      assert.equal(serialized.includes(owner.password), false);
+    }
+
+    await withClient(async (db) => {
+      assert.equal(await db.collection("businesses").countDocuments({}), 2);
+      assert.equal(await db.collection("users").countDocuments({}), 2);
+      assert.equal(await db.collection("memberships").countDocuments({}), 2);
+      assert.equal(
+        await db.collection(MEMBERSHIP_BASELINE_LOCK_COLLECTION).countDocuments({}),
+        0,
+      );
+    });
+  } finally {
+    await new Promise((resolve) => app.server.close(resolve));
+    await cleanAuthorityCollections();
+  }
 });

@@ -4,6 +4,7 @@ import { mongo } from "mongoose";
 import {
   acquireMembershipBaselineLock,
   buildMembershipBaselineManifest,
+  buildMembershipBaselineManifestFromOwners,
   buildMembershipBaselinePlan,
   buildVerifiedMembershipBaselinePlan,
   MEMBERSHIP_BASELINE_CONFIRMATION,
@@ -20,12 +21,8 @@ import { fingerprintMongoTarget } from "../../scripts/migrations/membership-auth
 const manifestEnvironment = () => ({
   BASELINE_ATMOSFERA_ADMIN_EMAIL: "admin-atmosfera@example.test",
   BASELINE_ATMOSFERA_ADMIN_PASSWORD: "atmosfera-admin-safe",
-  BASELINE_ATMOSFERA_WORKER_EMAIL: "worker-atmosfera@example.test",
-  BASELINE_ATMOSFERA_WORKER_PASSWORD: "atmosfera-worker-safe",
   BASELINE_DAM_ADMIN_EMAIL: "admin-dam@example.test",
   BASELINE_DAM_ADMIN_PASSWORD: "dam-admin-password",
-  BASELINE_DAM_WORKER_EMAIL: "worker-dam@example.test",
-  BASELINE_DAM_WORKER_PASSWORD: "dam-worker-password",
 });
 
 const exactMembershipIndex = () => ({
@@ -96,9 +93,7 @@ describe("membership baseline manifest", () => {
       })),
       [
         { key: "atmosfera:admin", role: "admin", isActive: true },
-        { key: "atmosfera:worker", role: "worker", isActive: true },
         { key: "dam:admin", role: "admin", isActive: true },
-        { key: "dam:worker", role: "worker", isActive: true },
       ],
     );
 
@@ -110,18 +105,44 @@ describe("membership baseline manifest", () => {
     assert.equal(JSON.stringify(plan).includes("password"), false);
   });
 
+  it("acepta en memoria dos propietarios administradores sin trabajadores artificiales", () => {
+    const manifest = buildMembershipBaselineManifestFromOwners({
+      atmosfera: {
+        firstName: "Owner",
+        lastName: "Atmósfera",
+        email: "owner-atmosfera@example.test",
+        password: "atmosfera-owner-safe",
+      },
+      dam: {
+        firstName: "Owner",
+        lastName: "DAM",
+        email: "owner-dam@example.test",
+        password: "dam-owner-password",
+      },
+    });
+
+    assert.equal(manifest.users.length, 2);
+    assert.equal(manifest.memberships.length, 2);
+    assert.ok(manifest.users.every(({ role }) => role === "admin"));
+    assert.ok(manifest.memberships.every(({ role }) => role === "admin"));
+    assert.equal(JSON.stringify(manifest).includes("worker"), false);
+  });
+
   it("rechaza credenciales ausentes, correos inválidos, contraseñas cortas y duplicados", () => {
     assert.throws(() => buildMembershipBaselineManifest({}), /obligatoria/);
 
     const invalidEmail = manifestEnvironment();
     invalidEmail.BASELINE_DAM_ADMIN_EMAIL = "invalid";
-    assert.throws(() => buildMembershipBaselineManifest(invalidEmail), /correo válido/);
+    assert.throws(
+      () => buildMembershipBaselineManifest(invalidEmail),
+      /correo.*no es válido/u,
+    );
 
     const shortPassword = manifestEnvironment();
     shortPassword.BASELINE_DAM_ADMIN_PASSWORD = "short";
     assert.throws(
       () => buildMembershipBaselineManifest(shortPassword),
-      /al menos 12/,
+      /entre 12 y 256/u,
     );
 
     const duplicate = manifestEnvironment();
@@ -403,7 +424,7 @@ describe("membership baseline password verification", () => {
         manifest,
         async () => true,
       ),
-      ["invalidPasswordHash:atmosfera-worker"],
+      ["invalidPasswordHash:dam-admin"],
     );
     const failures = await verifyMembershipBaselinePasswords(
       verifierError,
