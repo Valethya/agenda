@@ -4,11 +4,12 @@
 **Estado del documento:** Plan vigente reconciliado con `master`; 6.2.2-B tiene
 su implementación read-only cerrada mediante los PR #17 y #19 y su ejecución
 operativa permanece pendiente sobre la nueva baseline; incluye la rebaseline
-preproductiva del PR #18
+del PR #18, el bootstrap fusionado mediante el PR #20 y el asistente local
+endurecido en el PR #21 todavía Draft
 **Fecha original:** 21 de julio de 2026
-**Última revisión:** 31 de julio de 2026
-**Base de contraste:** `master` después del PR #18
-(`02c11750180d90da211594f69a131b5b54d025f4`)
+**Última revisión:** 8 de agosto de 2026
+**Base de contraste:** `master` después del PR #20
+(`14dc6967c16f1579e24f4e5d83b40309945f7a6f`)
 **Alcance:** Backend, multitenencia, seguridad, pagos, impersonación, frontend, pruebas y operación
 
 ## 1. Objetivo
@@ -44,7 +45,7 @@ No se considerará terminada una tarea solamente porque el código compile. Cada
 | Cerrado | Tipado frontend | El PR #15 cerró 7.10 con TypeScript estricto, 0 usos productivos de `any`, checks y build en CI. |
 | Aplazado | Responsive 7.8 | Se retomará después de estabilizar arquitectura, multitenencia y datos. |
 
-### Estado consolidado después del PR #19
+### Estado consolidado después del PR #20
 
 - 6.1 está cerrada y protegida por CI.
 - 6.2.1 está cerrada mediante los PR #5, #6 y #7.
@@ -60,7 +61,9 @@ No se considerará terminada una tarea solamente porque el código compile. Cada
   no almacenará capturas, URI, credenciales ni evidencia sensible; cualquier
   registro operativo adicional permanecerá fuera del código y sin secretos.
 - 6.2.2-C se redefine para establecer una baseline preproductiva limpia de
-  Atmósfera y DAM; el corte de autoridad sigue pendiente.
+  Atmósfera y DAM. El PR #20 fusionó el bootstrap fail-closed original; el PR
+  #21 permanece Draft y adapta la definición a dos propietarios y añade el
+  asistente local endurecido. El corte de autoridad sigue pendiente.
 - 7.7 está cerrada mediante el PR #13.
 - 7.9 está cerrada mediante el PR #14.
 - 7.10 está cerrada mediante el PR #15.
@@ -220,12 +223,15 @@ auditor sobre la nueva baseline y la normalización de sus seeds y fixtures para
 producir BSON `ObjectId` reales continúan pendientes. Ningún PR ha creado la
 nueva base, ejecutado el bootstrap o realizado el corte de autoridad.
 
-La implementación técnica de 6.2.2-C incorpora un comando separado para la
+El PR #20 fusionó el comando separado de 6.2.2-C para la
 baseline de autoridad de Atmósfera y DAM con modos `plan` y `apply`. Exige
 fingerprint del destino, nombre de base, credenciales suministradas fuera del
-repositorio y confirmación literal para escribir. Sólo admite `development` y
-`test`, conecta con `autoIndex: false` y no se ejecuta desde `start`, `dev`,
-Railway o el despliegue.
+repositorio y confirmación literal para escribir. El PR #21, todavía Draft,
+exige además que `NODE_ENV` sea literalmente `development` o `test`, coincida
+con el entorno solicitado, no existan indicadores de Railway, Vercel u otra
+plataforma de despliegue y la base termine en `_dev` o `_test` según
+corresponda. Conecta con `autoIndex: false` y no se ejecuta desde `start`,
+`dev`, Railway, Vercel o el despliegue.
 
 El bootstrap crea exclusivamente dos negocios, dos usuarios propietarios y dos
 Memberships administrativas activas con BSON `ObjectId` físicos. No crea una
@@ -241,18 +247,25 @@ un hash inválido o un fallo de verificación produce un estado `partial`; no se
 rotan contraseñas automáticamente.
 
 Las ejecuciones `apply` se serializan mediante un lock atómico de clave estable
-en una colección técnica controlada. El lock tiene propietario y expiración de
-treinta minutos, no se roba mientras está activo y sólo lo libera su
-propietario. Una vez adquirido, el bootstrap vuelve a leer todo el estado antes
-de decidir si crea, aborta o termina como no-op. Si la comprobación posterior a
-las escrituras no es concluyente, no declara éxito ni compensa a ciegas: informa
-un resultado desconocido y exige ejecutar `plan` antes de reintentar. Los seeds
-destructivos anteriores de Atmósfera y DAM quedan desactivados.
+en una colección técnica controlada. El lock tiene propietario y una marca de
+expiración operativa, pero nunca se recupera automáticamente: incluso vencido
+bloquea hasta confirmar manualmente que su propietario terminó. La propiedad se
+comprueba antes de cada mutación y sólo el propietario vigente puede liberarlo.
+Una vez adquirido, el bootstrap vuelve a leer todo el estado antes de decidir
+si crea, aborta o termina como no-op. Si la comprobación posterior a las
+escrituras no es concluyente, no declara éxito ni compensa a ciegas: informa un
+resultado `unknown` y exige ejecutar `plan` antes de reintentar. Una baseline
+completa se denomina `ready`; no existe un estado redundante `existing`. Los
+seeds destructivos anteriores de Atmósfera y DAM quedan desactivados.
 
-Para la ejecución manual existe además un asistente local separado, enlazado
-exclusivamente a `127.0.0.1`, que recibe en memoria los datos de las dos personas
-propietarias. Exige un `plan` seguro antes de habilitar `apply`, no persiste ni
-devuelve credenciales y no se conecta al arranque normal, a Railway ni al
+El PR #21 añade un asistente local separado cuya API controla el bind
+exclusivamente a `127.0.0.1` y verifica socket, `Host` y `Origin` sin confiar en
+cabeceras de proxy. Recibe en memoria los datos de las dos personas
+propietarias, aplica JSON estricto, CSRF, límite de 32 KiB, timeouts y errores
+públicos estables. Exige un `plan` seguro antes de habilitar `apply`; el token
+es aleatorio, de un solo uso, sólo existe en memoria, se consume antes de
+aplicar y vence con `expiresAt <= now`. No persiste, registra ni devuelve
+credenciales y no se conecta al arranque normal, a Railway, Vercel ni al
 despliegue. `MONGO_URI` continúa siendo un secreto local de conexión; los datos
 de los propietarios no necesitan almacenarse en `.env` cuando se utiliza el
 asistente.
@@ -828,15 +841,16 @@ sobre la nueva baseline. No existe un conjunto productivo que migrar. El
 siguiente hito es verificar y ejecutar de forma controlada la baseline
 preproductiva sin mezclar todavía 6.2.3, 6.2.4 ni el responsive:
 
-1. revisar y fusionar la implementación técnica del bootstrap, que normaliza
-   BSON `ObjectId`, claves estables y Memberships activas sin incluir
-   `superadmin` tenant;
+1. terminar la revisión del PR #21, mantenerlo Draft hasta confirmar sus nuevas
+   pruebas adversariales y fusionarlo sólo con autorización explícita;
 2. preparar fuera del repositorio las credenciales iniciales y aprobar el
    fingerprint del destino de desarrollo;
 3. ejecutar primero `plan` y conservar su evidencia operativa sin secretos;
 4. ejecutar `apply` de forma manual y controlada únicamente si el preflight
    declara la base elegible; no lanzar escritores concurrentes y, ante un
-   resultado desconocido, volver obligatoriamente a `plan` antes de reintentar;
+   resultado `unknown`, volver obligatoriamente a `plan` antes de reintentar;
+   un lock abandonado sólo puede retirarse después de comprobar que el proceso
+   propietario terminó y nunca por la mera expiración;
 5. crear y verificar de forma controlada el índice único físico, sin depender
    de `autoIndex`,
    `{ user: 1, business: 1 }`;
@@ -846,7 +860,8 @@ preproductiva sin mezclar todavía 6.2.3, 6.2.4 ni el responsive:
    el índice físico;
 8. ejecutar operativamente el auditor read-only como gate posterior sobre la
    nueva base y exigir un informe seguro;
-9. desplegar el corte de autoridad HTTP y sesión en un PR separado;
+9. mantener 6.2.2-D bloqueada hasta crear, verificar y auditar la baseline;
+   después, desplegar el corte de autoridad HTTP y sesión en un PR separado;
 10. cerrar lecturas heredadas y WebSocket en otro PR;
 11. conservar el contrato de migración completo como contingencia: si aparece
    información real antes del corte, detener la rebaseline e implementar
@@ -855,3 +870,6 @@ preproductiva sin mezclar todavía 6.2.3, 6.2.4 ni el responsive:
     no quedan lecturas productivas y de cerrar la ventana de compatibilidad.
 
 El diseño documental no autoriza por sí mismo ninguna escritura productiva.
+La creación real de la baseline, la ejecución operativa del auditor y el diseño
+que separará autoridad administrativa de capacidad profesional continúan
+pendientes. Los propietarios todavía no son profesionales agendables.

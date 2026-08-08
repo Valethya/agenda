@@ -5,14 +5,15 @@
 **Estado:** Contrato aprobado mediante el PR #16; 6.2.2-B tiene su
 implementación read-only cerrada mediante los PR #17 y #19, pero su ejecución
 operativa permanece pendiente sobre la nueva baseline; rebaseline
-preproductiva incorporada mediante el PR #18, sin datos productivos que migrar
+preproductiva incorporada mediante el PR #18; bootstrap fail-closed fusionado
+mediante el PR #20 y asistente local endurecido en el PR #21 todavía Draft
 
 **Fecha original:** 27 de julio de 2026
 
-**Última revisión:** 31 de julio de 2026
+**Última revisión:** 8 de agosto de 2026
 
-**Base de contraste:** `master` después del PR #18
-(`02c11750180d90da211594f69a131b5b54d025f4`)
+**Base de contraste:** `master` después del PR #20
+(`14dc6967c16f1579e24f4e5d83b40309945f7a6f`)
 
 **Alcance:** Autoridad tenant de administradores y trabajadores, sesiones,
 WebSocket y campos heredados de `User`
@@ -42,7 +43,7 @@ backfill. La ejecución vigente será un bootstrap limpio y verificable; no una
 migración destructiva de datos heredados. Este documento no autoriza por sí
 mismo ninguna ejecución contra un entorno con datos reales.
 
-## 2. Estado real después del PR #19
+## 2. Estado real después del PR #20
 
 ### Rebaseline preproductiva
 
@@ -792,7 +793,8 @@ este PR documental.
 
 #### Bootstrap implementado, ejecución pendiente
 
-La implementación técnica de 6.2.2-C incorpora el comando separado
+El PR #20 fusionó la implementación técnica inicial de 6.2.2-C mediante el
+comando separado
 `bootstrap:membership-baseline`. No está importado por `src/index.js`, no forma
 parte de `start` o `dev` y sólo acepta los entornos `development` y `test`.
 `staging` y `production` quedan rechazados por esta versión preproductiva.
@@ -808,8 +810,13 @@ El comando ofrece dos modos distintos del auditor de 6.2.2-B:
   protegida.
 
 Ambos modos exigen nombre de base y fingerprint SHA-256 aprobado del destino.
-La conexión utiliza `autoIndex: false`, nunca imprime la URI y valida que el
-nombre real de la base coincida con el confirmado.
+El entorno efectivo debe existir en `NODE_ENV`, ser literalmente `development`
+o `test` y coincidir con `--environment`. Cualquier indicador de Railway,
+Vercel u otra plataforma de despliegue conocida bloquea antes de calcular el
+destino o conectar. Las bases de desarrollo deben terminar en `_dev` y las de
+prueba en `_test`; esta política, el fingerprint y la comprobación del nombre
+real son guardas acumulativas. La conexión utiliza `autoIndex: false` y nunca
+imprime la URI.
 
 La baseline utiliza claves lógicas estables: los slugs `atmosfera` y `dam`, una
 identidad propietaria administrativa por negocio y las parejas usuario-negocio.
@@ -828,15 +835,23 @@ identidad:
   `BASELINE_ATMOSFERA_ADMIN_PASSWORD`;
 - `BASELINE_DAM_ADMIN_EMAIL` y `BASELINE_DAM_ADMIN_PASSWORD`.
 
-El asistente local `bootstrap:membership-baseline:ui` permite introducir
+El PR #21, todavía Draft y sin ejecución operativa, añade el asistente local
+`bootstrap:membership-baseline:ui` para introducir
 nombres, correos y contraseñas en un formulario servido exclusivamente en
-`127.0.0.1`. Las credenciales se mantienen en memoria durante cada solicitud y
-no requieren variables de entorno, no se escriben en archivos y no se incluyen
-en respuestas. La URI MongoDB permanece como secreto local de conexión. El
-asistente sólo acepta `development` o `test`, exige un fingerprint aprobado,
-ejecuta `plan` antes de habilitar `apply` y vincula la aprobación temporal al
-contenido exacto comprobado. No forma parte de `start`, `dev`, Railway ni del
-despliegue.
+`127.0.0.1`. La abstracción no expone el servidor HTTP crudo: controla el
+`listen`, rechaza cualquier host distinto y verifica dirección local y remota
+del socket, `Host` y `Origin`; no confía en cabeceras reenviadas. Las
+credenciales se mantienen en memoria durante cada solicitud y no requieren
+variables de entorno, no se escriben en archivos, no se registran y no se
+incluyen en respuestas. La URI MongoDB permanece como secreto local de
+conexión. El asistente aplica contrato JSON estricto, CSRF, límite de 32 KiB,
+timeouts, cabeceras defensivas y errores públicos estables sin mensajes del
+driver o dependencias. Sólo acepta `development` o `test`, exige un fingerprint
+aprobado, ejecuta `plan` antes de habilitar `apply` y vincula la aprobación
+temporal al contenido normalizado exacto que consumirá el bootstrap. El token
+es aleatorio, en memoria, de un solo uso, se consume antes de `apply` y vence
+cuando `expiresAt <= now`; un reinicio lo invalida. No forma parte de `start`,
+`dev`, Railway, Vercel ni del despliegue.
 
 `MEMBERSHIP_BASELINE_BOOTSTRAP_VERSION` avanza a `2.0.0` porque la definición
 exacta cambia de cuatro identidades a dos propietarios administradores y admite
@@ -872,16 +887,21 @@ El preflight y la sección crítica se comportan de forma fail-closed:
 3. un subconjunto de las colecciones requeridas, cualquier colección ajena a
    la baseline, una inicialización parcial, documentos inesperados, referencias
    no BSON o contradicciones bloquean antes de escribir;
-4. un índice compuesto `{ user: 1, business: 1 }` existente pero incorrecto
-   bloquea y no se elimina ni modifica automáticamente;
+4. un índice compuesto `{ user: 1, business: 1 }` existente pero incorrecto, o
+   cualquier definición incompatible que ocupe el nombre físico
+   `user_1_business_1`, bloquea y no se elimina ni modifica automáticamente;
 5. si falta el índice en una base elegible, `apply` lo crea de forma explícita
    con `unique: true` y comprueba físicamente su definición;
 6. cada `apply` usa la clave estable `membership-baseline-v1` en la colección
-   técnica controlada `membership_baseline_locks`. La adquisición atómica
-   registra un `ownerId`, `acquiredAt` y `expiresAt`, y sólo admite un escritor;
-7. el lock expira a los treinta minutos. No se renueva ni se roba mientras
-   está activo; un proceso detenido puede dejarlo hasta su expiración. Sólo su
-   propietario puede liberarlo y la liberación se intenta siempre en `finally`;
+   técnica controlada `membership_baseline_locks`. La adquisición es una
+   inserción atómica que registra `ownerId`, `acquiredAt` y `expiresAt`, y sólo
+   admite un propietario. `expiresAt` se persiste como marca ISO informativa,
+   no como fecha apta para un índice TTL que pudiera borrar el lock;
+7. `expiresAt` es una señal operativa y nunca habilita recuperación automática.
+   Un segundo proceso rechaza incluso un lock vencido, porque el propietario
+   anterior podría estar suspendido y reanudarse. La propiedad se comprueba
+   antes de cada creación de colección, índice e inserción. Sólo el propietario
+   vigente puede liberar el lock y la liberación se intenta en `finally`;
 8. después de adquirir el lock, `apply` vuelve a leer y clasificar la base. Si
    otro proceso ya dejó la baseline `ready`, finaliza como no-op; si observa un
    estado `partial`, aborta sin escribir;
@@ -895,6 +915,22 @@ El preflight y la sección crítica se comportan de forma fail-closed:
     bloquea; nunca se eliminan documentos que podrían pertenecer a otra
     ejecución.
 
+Una baseline completa se representa como `ready`; no existe un estado separado
+`existing` porque no aportaría una transición distinta. `ready` con el índice
+exacto es no-op idempotente. `empty` es elegible para creación, `partial`
+bloquea y un fallo posterior al inicio de mutaciones produce resultado
+`unknown`. Ante `partial` o `unknown` no existe recuperación automática: se
+debe detener toda escritura, ejecutar un nuevo `plan`, inspeccionar manualmente
+colecciones, documentos e índices y decidir una remediación explícita sin
+borrados compensatorios.
+
+Un lock abandonado sólo puede retirarse manualmente después de confirmar fuera
+del proceso que el propietario terminó y no puede reanudarse. Después de
+retirarlo es obligatorio ejecutar un nuevo `plan`; la mera expiración nunca
+autoriza otro `apply`. Los IDs deterministas BSON de los seis documentos
+esperados actúan además como defensa frente a duplicación accidental, sin
+convertirse en un mecanismo de recuperación.
+
 Los seeds destructivos heredados `seed-atmosfera.js` y `seed-dam.js` quedan
 desactivados e indican utilizar el nuevo comando. Esta implementación no ha sido
 ejecutada contra Atlas, Railway ni ninguna base externa. Después de una futura
@@ -904,7 +940,7 @@ documentos e índice y ejecutar el auditor read-only como gate independiente.
 Ejemplo de preflight, sin credenciales reales:
 
 ```bash
-npm run bootstrap:membership-baseline -- \
+NODE_ENV=development npm run bootstrap:membership-baseline -- \
   --mode=plan \
   --environment=development \
   --database=agenda_dev \
@@ -958,7 +994,8 @@ nunca ocurrieron. Ninguno de estos PR ejecutó el auditor sobre la nueva
 baseline, creó esa base, ejecutó el bootstrap o desplegó el corte de autoridad.
 
 La validación estricta de BSON `ObjectId` físicos ya está integrada mediante el
-PR #19 y constituye una precondición técnica satisfecha. Una futura ejecución
+PR #19 y el bootstrap inicial fue fusionado mediante el PR #20. Ninguno fue
+ejecutado operativamente. Una futura ejecución
 sobre datos reales continúa bloqueada hasta acreditar:
 
 - seeds y fixtures que generen BSON `ObjectId` reales;
