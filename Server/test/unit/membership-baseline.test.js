@@ -3,9 +3,13 @@ import assert from "node:assert/strict";
 import { mongo } from "mongoose";
 import {
   acquireMembershipBaselineLock,
+  assertMembershipBaselineLockOwnership,
   buildMembershipBaselineManifest,
+  buildMembershipBaselineManifestFromOwners,
   buildMembershipBaselinePlan,
   buildVerifiedMembershipBaselinePlan,
+  createBaselineDocuments,
+  ensureCollectionsAndMembershipIndex,
   MEMBERSHIP_BASELINE_CONFIRMATION,
   MEMBERSHIP_BASELINE_LOCK_COLLECTION,
   MEMBERSHIP_BASELINE_LOCK_KEY,
@@ -13,6 +17,7 @@ import {
   releaseMembershipBaselineLock,
   runMembershipBaselineBootstrap,
   validateMembershipBaselineOptions,
+  validateMembershipBaselineRuntime,
   verifyMembershipBaselinePasswords,
 } from "../../scripts/bootstrap/membership-baseline.js";
 import { fingerprintMongoTarget } from "../../scripts/migrations/membership-authority-provenance.js";
@@ -20,13 +25,11 @@ import { fingerprintMongoTarget } from "../../scripts/migrations/membership-auth
 const manifestEnvironment = () => ({
   BASELINE_ATMOSFERA_ADMIN_EMAIL: "admin-atmosfera@example.test",
   BASELINE_ATMOSFERA_ADMIN_PASSWORD: "atmosfera-admin-safe",
-  BASELINE_ATMOSFERA_WORKER_EMAIL: "worker-atmosfera@example.test",
-  BASELINE_ATMOSFERA_WORKER_PASSWORD: "atmosfera-worker-safe",
   BASELINE_DAM_ADMIN_EMAIL: "admin-dam@example.test",
   BASELINE_DAM_ADMIN_PASSWORD: "dam-admin-password",
-  BASELINE_DAM_WORKER_EMAIL: "worker-dam@example.test",
-  BASELINE_DAM_WORKER_PASSWORD: "dam-worker-password",
 });
+
+const processEnvironment = (NODE_ENV, extra = {}) => ({ NODE_ENV, ...extra });
 
 const exactMembershipIndex = () => ({
   name: "user_1_business_1",
@@ -96,9 +99,7 @@ describe("membership baseline manifest", () => {
       })),
       [
         { key: "atmosfera:admin", role: "admin", isActive: true },
-        { key: "atmosfera:worker", role: "worker", isActive: true },
         { key: "dam:admin", role: "admin", isActive: true },
-        { key: "dam:worker", role: "worker", isActive: true },
       ],
     );
 
@@ -110,18 +111,44 @@ describe("membership baseline manifest", () => {
     assert.equal(JSON.stringify(plan).includes("password"), false);
   });
 
+  it("acepta en memoria dos propietarios administradores sin trabajadores artificiales", () => {
+    const manifest = buildMembershipBaselineManifestFromOwners({
+      atmosfera: {
+        firstName: "Owner",
+        lastName: "Atmósfera",
+        email: "owner-atmosfera@example.test",
+        password: "atmosfera-owner-safe",
+      },
+      dam: {
+        firstName: "Owner",
+        lastName: "DAM",
+        email: "owner-dam@example.test",
+        password: "dam-owner-password",
+      },
+    });
+
+    assert.equal(manifest.users.length, 2);
+    assert.equal(manifest.memberships.length, 2);
+    assert.ok(manifest.users.every(({ role }) => role === "admin"));
+    assert.ok(manifest.memberships.every(({ role }) => role === "admin"));
+    assert.equal(JSON.stringify(manifest).includes("worker"), false);
+  });
+
   it("rechaza credenciales ausentes, correos inválidos, contraseñas cortas y duplicados", () => {
     assert.throws(() => buildMembershipBaselineManifest({}), /obligatoria/);
 
     const invalidEmail = manifestEnvironment();
     invalidEmail.BASELINE_DAM_ADMIN_EMAIL = "invalid";
-    assert.throws(() => buildMembershipBaselineManifest(invalidEmail), /correo válido/);
+    assert.throws(
+      () => buildMembershipBaselineManifest(invalidEmail),
+      /correo.*no es válido/u,
+    );
 
     const shortPassword = manifestEnvironment();
     shortPassword.BASELINE_DAM_ADMIN_PASSWORD = "short";
     assert.throws(
       () => buildMembershipBaselineManifest(shortPassword),
-      /al menos 12/,
+      /entre 12 y 256/u,
     );
 
     const duplicate = manifestEnvironment();
@@ -142,9 +169,17 @@ describe("membership baseline CLI", () => {
     ]);
     assert.equal(parsed.mode, "apply");
     assert.equal(parsed.expectedTargetFingerprint, "a".repeat(64));
+    assert.throws(
+      () => parseMembershipBaselineArgs(["--mode=plan", "--mode=apply"]),
+      /duplicada/u,
+    );
 
     assert.throws(
-      () => validateMembershipBaselineOptions({ mode: "audit" }),
+      () => validateMembershipBaselineOptions({
+        mode: "audit",
+        environment: "development",
+        database: "agenda_dev",
+      }, processEnvironment("development")),
       /mode es obligatorio/,
     );
     assert.throws(
@@ -154,8 +189,8 @@ describe("membership baseline CLI", () => {
           environment: "production",
           database: "agenda",
           expectedTargetFingerprint: "a".repeat(64),
-        }),
-      /development o test/,
+        }, processEnvironment("production")),
+      /NODE_ENV/u,
     );
     assert.throws(
       () =>
@@ -164,7 +199,7 @@ describe("membership baseline CLI", () => {
           environment: "development",
           database: "agenda_dev",
           expectedTargetFingerprint: "a".repeat(64),
-        }),
+        }, processEnvironment("development")),
       /confirm/,
     );
     assert.throws(
@@ -174,8 +209,61 @@ describe("membership baseline CLI", () => {
           environment: "test",
           database: "agenda",
           expectedTargetFingerprint: "a".repeat(64),
-        }),
+        }, processEnvironment("test")),
       /terminar en "_test"/,
+    );
+  });
+
+  it("rechaza entornos efectivos ambiguos, despliegues y bases sin sufijo seguro", () => {
+    const base = {
+      mode: "plan",
+      environment: "development",
+      database: "agenda_dev",
+      expectedTargetFingerprint: "a".repeat(64),
+    };
+
+    assert.throws(
+      () => validateMembershipBaselineOptions(base, processEnvironment("production")),
+      /NODE_ENV/u,
+    );
+    assert.throws(
+      () => validateMembershipBaselineOptions(
+        { ...base, environment: "staging" },
+        processEnvironment("staging"),
+      ),
+      /NODE_ENV/u,
+    );
+    assert.throws(
+      () => validateMembershipBaselineOptions(base, {}),
+      /NODE_ENV/u,
+    );
+    assert.throws(
+      () => validateMembershipBaselineOptions(base, processEnvironment("test")),
+      /coincidir/u,
+    );
+    for (const indicator of ["RAILWAY_ENVIRONMENT", "VERCEL"]) {
+      assert.throws(
+        () => validateMembershipBaselineOptions(
+          base,
+          processEnvironment("development", { [indicator]: "active" }),
+        ),
+        /plataforma de despliegue/u,
+      );
+    }
+    assert.throws(
+      () => validateMembershipBaselineOptions(
+        { ...base, database: "agenda" },
+        processEnvironment("development"),
+      ),
+      /_dev/u,
+    );
+    assert.deepEqual(
+      validateMembershipBaselineRuntime({
+        requestedEnvironment: "development",
+        database: "agenda_dev",
+        processEnvironment: processEnvironment("development"),
+      }),
+      { effectiveEnvironment: "development" },
     );
   });
 
@@ -191,6 +279,7 @@ describe("membership baseline CLI", () => {
           expectedTargetFingerprint: "a".repeat(64),
         },
         environment: manifestEnvironment(),
+        processEnvironment: processEnvironment("development"),
         connect: async () => {
           connected = true;
         },
@@ -198,6 +287,40 @@ describe("membership baseline CLI", () => {
       /fingerprint/,
     );
     assert.equal(connected, false);
+  });
+
+  it("rechaza configuraciones de entorno inseguras antes de conectar", async () => {
+    const uri = "mongodb://localhost:27017/agenda_dev";
+    const baseOptions = {
+      mode: "plan",
+      environment: "development",
+      database: "agenda_dev",
+      expectedTargetFingerprint: fingerprintMongoTarget(uri, "agenda_dev"),
+    };
+    const cases = [
+      { processEnvironment: processEnvironment("production") },
+      { processEnvironment: processEnvironment("staging") },
+      { processEnvironment: {} },
+      { processEnvironment: processEnvironment("test") },
+      { processEnvironment: processEnvironment("development", { RAILWAY_PROJECT_ID: "project" }) },
+      { processEnvironment: processEnvironment("development", { VERCEL: "1" }) },
+      {
+        processEnvironment: processEnvironment("development"),
+        options: { ...baseOptions, database: "agenda" },
+      },
+    ];
+
+    for (const testCase of cases) {
+      let connected = false;
+      await assert.rejects(runMembershipBaselineBootstrap({
+        mongoUri: uri,
+        options: testCase.options ?? baseOptions,
+        environment: manifestEnvironment(),
+        processEnvironment: testCase.processEnvironment,
+        connect: async () => { connected = true; },
+      }));
+      assert.equal(connected, false);
+    }
   });
 });
 
@@ -309,6 +432,24 @@ describe("membership baseline preflight", () => {
     assert.ok(plan.findings.includes("businessCountMismatch"));
   });
 
+  it("bloquea un índice diferente que ocupa el nombre físico requerido", () => {
+    const manifest = buildMembershipBaselineManifest(manifestEnvironment());
+    const source = {
+      observedCollections: [],
+      businesses: [],
+      users: [],
+      memberships: [],
+      indexes: [
+        { name: "user_1_business_1", key: { business: 1, user: 1 }, unique: true },
+      ],
+    };
+    const plan = buildMembershipBaselinePlan(source, manifest);
+    assert.equal(plan.state, "partial");
+    assert.equal(plan.canApply, false);
+    assert.equal(plan.membershipIndex.conflictingNameExists, true);
+    assert.ok(plan.findings.includes("conflictingMembershipIndexName"));
+  });
+
   it("bloquea restauraciones incompletas y colecciones ajenas a una baseline limpia", () => {
     const manifest = buildMembershipBaselineManifest(manifestEnvironment());
     const incomplete = buildMembershipBaselinePlan(
@@ -403,7 +544,7 @@ describe("membership baseline password verification", () => {
         manifest,
         async () => true,
       ),
-      ["invalidPasswordHash:atmosfera-worker"],
+      ["invalidPasswordHash:dam-admin"],
     );
     const failures = await verifyMembershipBaselinePasswords(
       verifierError,
@@ -419,6 +560,108 @@ describe("membership baseline password verification", () => {
   });
 });
 
+describe("membership baseline controlled mutation failures", () => {
+  it("comprueba propiedad antes de crear colecciones e índice", async () => {
+    const calls = [];
+    const db = {
+      createCollection: async (name) => { calls.push(`collection:${name}`); },
+      collection: (name) => ({
+        listIndexes: () => ({ toArray: async () => [] }),
+        createIndex: async () => { calls.push(`index:${name}`); },
+      }),
+    };
+    let guards = 0;
+    await ensureCollectionsAndMembershipIndex(db, {
+      observedCollections: [],
+    }, {
+      assertOwnership: async () => { guards += 1; },
+    });
+    assert.equal(guards, 4);
+    assert.deepEqual(calls, [
+      "collection:businesses",
+      "collection:memberships",
+      "collection:users",
+      "index:memberships",
+    ]);
+  });
+
+  it("propaga fallos controlados al crear colecciones o el índice", async () => {
+    for (const failingCollection of ["businesses", "memberships", "users"]) {
+      const db = {
+        createCollection: async (name) => {
+          if (name === failingCollection) throw new Error(`collection:${name}`);
+        },
+        collection: () => ({
+          listIndexes: () => ({ toArray: async () => [] }),
+          createIndex: async () => {},
+        }),
+      };
+      await assert.rejects(
+        ensureCollectionsAndMembershipIndex(db, { observedCollections: [] }),
+        new RegExp(`collection:${failingCollection}`, "u"),
+      );
+    }
+
+    const indexDb = {
+      collection: () => ({
+        listIndexes: () => ({ toArray: async () => [] }),
+        createIndex: async () => { throw new Error("index:create"); },
+      }),
+    };
+    await assert.rejects(
+      ensureCollectionsAndMembershipIndex(indexDb, {
+        observedCollections: ["businesses", "memberships", "users"],
+      }),
+      /index:create/u,
+    );
+  });
+
+  it("interrumpe inserciones en cualquier colección sin compensación destructiva", async () => {
+    const manifest = buildMembershipBaselineManifest(manifestEnvironment());
+    for (const failingCollection of ["businesses", "users", "memberships"]) {
+      const inserted = [];
+      const db = {
+        collection: (name) => ({
+          insertMany: async (documents) => {
+            if (name === failingCollection) throw new Error(`driver:${name}`);
+            inserted.push({ name, count: documents.length });
+          },
+        }),
+      };
+      await assert.rejects(
+        createBaselineDocuments(db, manifest, async () => VALID_PASSWORD_HASH, {
+          assertOwnership: async () => true,
+        }),
+        new RegExp(`driver:${failingCollection}`, "u"),
+      );
+      assert.equal(inserted.some(({ name }) => name === failingCollection), false);
+      assert.ok(inserted.every(({ count }) => count === 2));
+    }
+  });
+
+  it("detiene la siguiente mutación si se pierde la propiedad durante las inserciones", async () => {
+    const manifest = buildMembershipBaselineManifest(manifestEnvironment());
+    const inserted = [];
+    let guards = 0;
+    const db = {
+      collection: (name) => ({
+        insertMany: async () => { inserted.push(name); },
+      }),
+    };
+
+    await assert.rejects(
+      createBaselineDocuments(db, manifest, async () => VALID_PASSWORD_HASH, {
+        assertOwnership: async () => {
+          guards += 1;
+          if (guards === 2) throw new Error("lock ownership lost");
+        },
+      }),
+      /ownership lost/u,
+    );
+    assert.deepEqual(inserted, ["businesses"]);
+  });
+});
+
 describe("membership baseline apply lock", () => {
   it("adquiere un lock inexistente con clave estable y expiración", async () => {
     let call;
@@ -427,9 +670,9 @@ describe("membership baseline apply lock", () => {
       collection(name) {
         assert.equal(name, MEMBERSHIP_BASELINE_LOCK_COLLECTION);
         return {
-          async findOneAndUpdate(filter, update, options) {
-            call = { filter, update, options };
-            return { _id: MEMBERSHIP_BASELINE_LOCK_KEY, ownerId };
+          async insertOne(document) {
+            call = document;
+            return { acknowledged: true };
           },
         };
       },
@@ -441,17 +684,17 @@ describe("membership baseline apply lock", () => {
       ttlMs: 60_000,
     });
 
-    assert.equal(call.filter._id, MEMBERSHIP_BASELINE_LOCK_KEY);
-    assert.equal(call.options.upsert, true);
-    assert.equal(call.options.returnDocument, "after");
-    assert.equal(call.update.$set.ownerId, ownerId);
+    assert.equal(call._id, MEMBERSHIP_BASELINE_LOCK_KEY);
+    assert.equal(call.ownerId, ownerId);
+    assert.equal(call.expiresAt, "2026-08-01T00:01:00.000Z");
+    assert.equal(call.recoveryPolicy, "manual-after-owner-termination");
     assert.equal(lock.expiresAt.toISOString(), "2026-08-01T00:01:00.000Z");
   });
 
-  it("rechaza un lock activo ajeno y permite recuperar uno expirado", async () => {
+  it("rechaza locks ajenos incluso vencidos; nunca los recupera automáticamente", async () => {
     const activeDb = {
       collection: () => ({
-        findOneAndUpdate: async () => {
+        insertOne: async () => {
           const error = new Error("duplicate details");
           error.code = 11000;
           throw error;
@@ -463,21 +706,35 @@ describe("membership baseline apply lock", () => {
       /otra ejecución apply activa/,
     );
 
-    let expiryFilter;
-    const expiredDb = {
-      collection: () => ({
-        findOneAndUpdate: async (filter) => {
-          expiryFilter = filter.$or[0].expiresAt.$lte;
-          return { ownerId: "new-owner" };
-        },
+    await assert.rejects(
+      acquireMembershipBaselineLock(activeDb, {
+        ownerId: "new-owner",
+        now: new Date("2030-08-01T01:00:00.000Z"),
       }),
-    };
-    const now = new Date("2026-08-01T01:00:00.000Z");
-    await acquireMembershipBaselineLock(expiredDb, {
-      ownerId: "new-owner",
-      now,
+      /otra ejecución apply activa/,
+    );
+  });
+
+  it("comprueba la propiedad del lock antes de permitir una mutación", async () => {
+    const dbFor = (ownerId) => ({
+      collection: () => ({
+        findOne: async () => ({ ownerId }),
+      }),
     });
-    assert.deepEqual(expiryFilter, now);
+    assert.equal(
+      await assertMembershipBaselineLockOwnership(
+        dbFor("owner-one"),
+        { ownerId: "owner-one" },
+      ),
+      true,
+    );
+    await assert.rejects(
+      assertMembershipBaselineLockOwnership(
+        dbFor("owner-two"),
+        { ownerId: "owner-one" },
+      ),
+      /perdió la propiedad/u,
+    );
   });
 
   it("libera únicamente el lock del owner correcto", async () => {
@@ -521,12 +778,14 @@ describe("membership baseline apply lock", () => {
     const common = {
       mongoUri: uri,
       environment: manifestEnvironment(),
+      processEnvironment: processEnvironment("development"),
       connect: async () => {},
       disconnect: async () => {},
       connection: { db },
       acquireLock: async () => {
         acquired += 1;
       },
+      assertLockOwner: async () => true,
       releaseLock: async () => {
         released += 1;
         return true;
@@ -581,10 +840,12 @@ describe("membership baseline apply lock", () => {
           confirm: MEMBERSHIP_BASELINE_CONFIRMATION,
         },
         environment: manifestEnvironment(),
+        processEnvironment: processEnvironment("development"),
         connect: async () => {},
         disconnect: async () => {},
         connection: { db: { databaseName: "agenda_dev" } },
         acquireLock: async () => {},
+        assertLockOwner: async () => true,
         releaseLock: async () => {
           releaseCalls += 1;
           return true;
@@ -622,10 +883,12 @@ describe("membership baseline apply lock", () => {
           confirm: MEMBERSHIP_BASELINE_CONFIRMATION,
         },
         environment: manifestEnvironment(),
+        processEnvironment: processEnvironment("development"),
         connect: async () => {},
         disconnect: async () => {},
         connection: { db: { databaseName: "agenda_dev" } },
         acquireLock: async () => {},
+        assertLockOwner: async () => true,
         releaseLock: async () => {
           releases += 1;
           return true;
@@ -652,5 +915,77 @@ describe("membership baseline apply lock", () => {
     );
     assert.equal(writes, 1);
     assert.equal(releases, 1);
+  });
+
+  it("fallos de almacenamiento, liberación y cierre nunca informan éxito", async () => {
+    const uri = "mongodb://localhost:27017/agenda_dev";
+    const manifest = buildMembershipBaselineManifest(manifestEnvironment());
+    const emptySource = {
+      observedCollections: [],
+      businesses: [],
+      users: [],
+      memberships: [],
+      indexes: [],
+    };
+    const base = {
+      mongoUri: uri,
+      options: {
+        mode: "apply",
+        environment: "development",
+        database: "agenda_dev",
+        expectedTargetFingerprint: fingerprintMongoTarget(uri, "agenda_dev"),
+        confirm: MEMBERSHIP_BASELINE_CONFIRMATION,
+      },
+      environment: manifestEnvironment(),
+      processEnvironment: processEnvironment("development"),
+      connect: async () => {},
+      connection: { db: { databaseName: "agenda_dev" } },
+      acquireLock: async () => {},
+      assertLockOwner: async () => true,
+      readSource: async () => emptySource,
+    };
+    const successfulReads = () => {
+      let reads = 0;
+      return async () => ++reads === 1 ? emptySource : readySource(manifest);
+    };
+
+    for (const stage of ["createCollections", "createIndex"]) {
+      await assert.rejects(
+        runMembershipBaselineBootstrap({
+          ...base,
+          disconnect: async () => {},
+          releaseLock: async () => true,
+          ensureBaselineStorage: async () => { throw new Error(stage); },
+          createDocuments: async () => assert.fail("no debe insertar"),
+        }),
+        /ejecute --mode=plan antes de reintentar/u,
+      );
+    }
+
+    await assert.rejects(
+      runMembershipBaselineBootstrap({
+        ...base,
+        disconnect: async () => {},
+        releaseLock: async () => false,
+        ensureBaselineStorage: async () => {},
+        createDocuments: async () => {},
+        readSource: successfulReads(),
+        passwordVerifier: async () => true,
+      }),
+      /ejecute --mode=plan antes de reintentar/u,
+    );
+
+    await assert.rejects(
+      runMembershipBaselineBootstrap({
+        ...base,
+        disconnect: async () => { throw new Error("close failed"); },
+        releaseLock: async () => true,
+        ensureBaselineStorage: async () => {},
+        createDocuments: async () => {},
+        readSource: successfulReads(),
+        passwordVerifier: async () => true,
+      }),
+      /ejecute --mode=plan antes de reintentar/u,
+    );
   });
 });
