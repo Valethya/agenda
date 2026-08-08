@@ -12,12 +12,13 @@ import { pathToFileURL } from "node:url";
 import {
   buildMembershipBaselineManifestFromOwners,
   MEMBERSHIP_BASELINE_CONFIRMATION,
+  MembershipBaselineUnknownResultError,
   runMembershipBaselineBootstrap,
   validateMembershipBaselineOptions,
 } from "./membership-baseline.js";
 import {
   fingerprintMongoTarget,
-  sanitizeAuditErrorMessage,
+  validateTargetFingerprint,
 } from "../migrations/membership-authority-provenance.js";
 
 export const MEMBERSHIP_BASELINE_UI_HOST = "127.0.0.1";
@@ -25,6 +26,16 @@ export const MEMBERSHIP_BASELINE_UI_DEFAULT_PORT = 4177;
 export const MEMBERSHIP_BASELINE_UI_APPROVAL_TTL_MS = 5 * 60 * 1000;
 
 const MAX_REQUEST_BYTES = 32 * 1024;
+const REQUEST_TIMEOUT_MS = 15_000;
+const HEADERS_TIMEOUT_MS = 10_000;
+const KEEP_ALIVE_TIMEOUT_MS = 1_000;
+const MAX_REQUESTS_PER_SOCKET = 20;
+const ALLOWED_FORWARDING_HEADERS = Object.freeze([
+  "forwarded",
+  "x-forwarded-for",
+  "x-forwarded-host",
+  "x-forwarded-proto",
+]);
 const HTML_HEADERS = {
   "cache-control": "no-store",
   "content-security-policy":
@@ -39,7 +50,27 @@ const JSON_HEADERS = {
   "content-type": "application/json; charset=utf-8",
   "referrer-policy": "no-referrer",
   "x-content-type-options": "nosniff",
+  "x-frame-options": "DENY",
 };
+
+class PublicRequestError extends Error {
+  constructor(status, code, message) {
+    super(message);
+    this.name = "PublicRequestError";
+    this.status = status;
+    this.code = code;
+  }
+}
+
+const publicError = (status, code, message) =>
+  new PublicRequestError(status, code, message);
+
+const escapeHtml = (value) => String(value)
+  .replaceAll("&", "&amp;")
+  .replaceAll("<", "&lt;")
+  .replaceAll(">", "&gt;")
+  .replaceAll('"', "&quot;")
+  .replaceAll("'", "&#39;");
 
 const parseArguments = (argv) => {
   const values = {};
@@ -56,19 +87,23 @@ const parseArguments = (argv) => {
     const inlineValue = separator === -1 ? undefined : argument.slice(separator + 1);
     const value = inlineValue ?? argv[index + 1];
     if (!value || value.startsWith("--")) throw new Error(`Falta valor para --${key}`);
+    if (Object.hasOwn(values, key)) throw new Error(`Opción duplicada: --${key}`);
     values[key] = value;
     if (inlineValue === undefined) index += 1;
   }
   return values;
 };
 
-export const validateMembershipBaselineUiOptions = (options) => {
+export const validateMembershipBaselineUiOptions = (
+  options,
+  processEnvironment = process.env,
+) => {
   validateMembershipBaselineOptions({
     mode: "plan",
     environment: options.environment,
     database: options.database,
     expectedTargetFingerprint: "0".repeat(64),
-  });
+  }, processEnvironment);
   const port = options.port === undefined
     ? MEMBERSHIP_BASELINE_UI_DEFAULT_PORT
     : Number(options.port);
@@ -78,8 +113,115 @@ export const validateMembershipBaselineUiOptions = (options) => {
   return { environment: options.environment, database: options.database, port };
 };
 
+const exactKeys = (value, expected, label) => {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw publicError(422, "INVALID_REQUEST", `${label} no es válido`);
+  }
+  const keys = Object.keys(value).sort();
+  const expectedKeys = [...expected].sort();
+  if (
+    keys.length !== expectedKeys.length ||
+    keys.some((key, index) => key !== expectedKeys[index])
+  ) {
+    throw publicError(
+      422,
+      "INVALID_REQUEST",
+      `${label} contiene campos ausentes o desconocidos`,
+    );
+  }
+};
+
+const normalizeOperation = (payload, { apply }) => {
+  exactKeys(
+    payload,
+    apply
+      ? ["confirmation", "expectedTargetFingerprint", "owners", "planToken"]
+      : ["expectedTargetFingerprint", "owners"],
+    "La solicitud",
+  );
+  exactKeys(payload.owners, ["atmosfera", "dam"], "owners");
+  for (const key of ["atmosfera", "dam"]) {
+    exactKeys(
+      payload.owners[key],
+      ["email", "firstName", "lastName", "password"],
+      `owners.${key}`,
+    );
+  }
+
+  let manifest;
+  let expectedTargetFingerprint;
+  try {
+    manifest = buildMembershipBaselineManifestFromOwners(payload.owners);
+    expectedTargetFingerprint = validateTargetFingerprint(
+      payload.expectedTargetFingerprint,
+    );
+  } catch {
+    throw publicError(
+      422,
+      "INVALID_REQUEST",
+      "Los datos enviados no cumplen el contrato de la baseline",
+    );
+  }
+
+  const owners = Object.fromEntries(manifest.users.map((user) => [
+    user.businessKey,
+    {
+      firstName: user.firstName,
+      lastName: user.lastName,
+      email: user.email,
+      password: user.password,
+    },
+  ]));
+
+  if (apply) {
+    if (
+      typeof payload.planToken !== "string" ||
+      !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(
+        payload.planToken,
+      )
+    ) {
+      throw publicError(
+        409,
+        "PLAN_REQUIRED",
+        "Debe ejecutar nuevamente un plan seguro antes de aplicar",
+      );
+    }
+    if (payload.confirmation !== MEMBERSHIP_BASELINE_CONFIRMATION) {
+      throw publicError(
+        409,
+        "PLAN_REQUIRED",
+        "Debe ejecutar nuevamente un plan seguro antes de aplicar",
+      );
+    }
+  }
+
+  return {
+    confirmation: apply ? payload.confirmation : undefined,
+    expectedTargetFingerprint,
+    manifest,
+    owners,
+    planToken: apply ? payload.planToken : undefined,
+  };
+};
+
 const canonicalRequest = ({ owners, expectedTargetFingerprint }) =>
-  JSON.stringify({ expectedTargetFingerprint, owners });
+  JSON.stringify({
+    expectedTargetFingerprint,
+    owners: {
+      atmosfera: {
+        firstName: owners.atmosfera.firstName,
+        lastName: owners.atmosfera.lastName,
+        email: owners.atmosfera.email,
+        password: owners.atmosfera.password,
+      },
+      dam: {
+        firstName: owners.dam.firstName,
+        lastName: owners.dam.lastName,
+        email: owners.dam.email,
+        password: owners.dam.password,
+      },
+    },
+  });
 
 const requestDigest = (secret, request) =>
   createHmac("sha256", secret).update(canonicalRequest(request), "utf8").digest();
@@ -90,21 +232,103 @@ const equalDigest = (left, right) =>
   left.length === right.length &&
   timingSafeEqual(left, right);
 
-const redactError = (error, mongoUri, payload) => {
-  let message = sanitizeAuditErrorMessage(error, mongoUri);
-  const sensitiveValues = [
-    payload?.expectedTargetFingerprint,
-    ...Object.values(payload?.owners ?? {}).flatMap((owner) => [
-      owner?.firstName,
-      owner?.lastName,
-      owner?.email,
-      owner?.password,
-    ]),
-  ].filter((value) => typeof value === "string" && value !== "");
-  for (const value of sensitiveValues) {
-    message = message.split(value).join("[REDACTED]");
-  }
-  return message;
+const parseStrictJson = (source) => {
+  let index = 0;
+  const whitespace = () => {
+    while (/\s/u.test(source[index] ?? "")) index += 1;
+  };
+  const parseString = () => {
+    const start = index;
+    index += 1;
+    let escaped = false;
+    while (index < source.length) {
+      const character = source[index];
+      if (!escaped && character === '"') {
+        index += 1;
+        return JSON.parse(source.slice(start, index));
+      }
+      if (!escaped && character === "\\") {
+        escaped = true;
+      } else {
+        escaped = false;
+      }
+      index += 1;
+    }
+    throw new Error("unterminated string");
+  };
+  const parseValue = () => {
+    whitespace();
+    const character = source[index];
+    if (character === '"') return parseString();
+    if (character === "{") return parseObject();
+    if (character === "[") return parseArray();
+    for (const [literal, value] of [["true", true], ["false", false], ["null", null]]) {
+      if (source.startsWith(literal, index)) {
+        index += literal.length;
+        return value;
+      }
+    }
+    const number = source.slice(index).match(/^-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?/u)?.[0];
+    if (number) {
+      index += number.length;
+      return Number(number);
+    }
+    throw new Error("invalid value");
+  };
+  const parseObject = () => {
+    index += 1;
+    whitespace();
+    const result = {};
+    const keys = new Set();
+    if (source[index] === "}") {
+      index += 1;
+      return result;
+    }
+    while (index < source.length) {
+      whitespace();
+      if (source[index] !== '"') throw new Error("invalid object key");
+      const key = parseString();
+      if (keys.has(key)) throw new Error("duplicate object key");
+      keys.add(key);
+      whitespace();
+      if (source[index] !== ":") throw new Error("missing colon");
+      index += 1;
+      result[key] = parseValue();
+      whitespace();
+      if (source[index] === "}") {
+        index += 1;
+        return result;
+      }
+      if (source[index] !== ",") throw new Error("missing comma");
+      index += 1;
+    }
+    throw new Error("unterminated object");
+  };
+  const parseArray = () => {
+    index += 1;
+    whitespace();
+    const result = [];
+    if (source[index] === "]") {
+      index += 1;
+      return result;
+    }
+    while (index < source.length) {
+      result.push(parseValue());
+      whitespace();
+      if (source[index] === "]") {
+        index += 1;
+        return result;
+      }
+      if (source[index] !== ",") throw new Error("missing comma");
+      index += 1;
+    }
+    throw new Error("unterminated array");
+  };
+
+  const value = parseValue();
+  whitespace();
+  if (index !== source.length) throw new Error("trailing data");
+  return value;
 };
 
 const readJson = async (request) => {
@@ -112,14 +336,33 @@ const readJson = async (request) => {
   let bytes = 0;
   for await (const chunk of request) {
     bytes += chunk.length;
-    if (bytes > MAX_REQUEST_BYTES) throw new Error("La solicitud supera el tamaño permitido");
+    if (bytes > MAX_REQUEST_BYTES) {
+      throw publicError(
+        413,
+        "PAYLOAD_TOO_LARGE",
+        "La solicitud supera el tamaño permitido",
+      );
+    }
     chunks.push(chunk);
   }
   try {
-    return JSON.parse(Buffer.concat(chunks).toString("utf8"));
+    return parseStrictJson(Buffer.concat(chunks).toString("utf8"));
   } catch {
-    throw new Error("La solicitud JSON no es válida");
+    throw publicError(400, "INVALID_JSON", "La solicitud JSON no es válida");
   }
+};
+
+const isAllowedJsonContentType = (rawValue) => {
+  if (typeof rawValue !== "string") return false;
+  const parts = rawValue.split(";").map((part) => part.trim());
+  if (parts.shift()?.toLowerCase() !== "application/json") return false;
+  if (parts.length === 0) return true;
+  if (parts.length !== 1) return false;
+  const separator = parts[0].indexOf("=");
+  if (separator === -1) return false;
+  const name = parts[0].slice(0, separator).trim().toLowerCase();
+  const value = parts[0].slice(separator + 1).trim().replace(/^"|"$/gu, "").toLowerCase();
+  return name === "charset" && value === "utf-8";
 };
 
 const writeJson = (response, status, body) => {
@@ -127,12 +370,47 @@ const writeJson = (response, status, body) => {
   response.end(JSON.stringify(body));
 };
 
+const writePublicError = (response, error) => {
+  if (error instanceof PublicRequestError) {
+    writeJson(response, error.status, {
+      error: { code: error.code, message: error.message },
+    });
+    return;
+  }
+  if (error instanceof MembershipBaselineUnknownResultError) {
+    writeJson(response, 500, {
+      error: {
+        code: "BOOTSTRAP_UNKNOWN",
+        message: "El resultado no pudo confirmarse; ejecute un nuevo plan antes de reintentar",
+      },
+    });
+    return;
+  }
+  writeJson(response, 500, {
+    error: {
+      code: "INTERNAL_ERROR",
+      message: "La operación local falló sin exponer detalles internos",
+    },
+  });
+};
+
+const clearSensitiveOperation = (operation) => {
+  for (const owner of Object.values(operation?.owners ?? {})) {
+    if (owner && typeof owner === "object") owner.password = "";
+  }
+  for (const user of operation?.manifest?.users ?? []) user.password = "";
+};
+
+export const isAllowedMembershipBaselineUiSocket = (socket) =>
+  socket?.localAddress === MEMBERSHIP_BASELINE_UI_HOST &&
+  socket?.remoteAddress === MEMBERSHIP_BASELINE_UI_HOST;
+
 const renderPage = ({ csrfToken, environment, database }) => `<!doctype html>
 <html lang="es">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="bootstrap-csrf" content="${csrfToken}">
+  <meta name="bootstrap-csrf" content="${escapeHtml(csrfToken)}">
   <title>Baseline de propietarios</title>
   <style>
     :root { color-scheme: light; font-family: Inter, system-ui, sans-serif; }
@@ -166,7 +444,7 @@ const renderPage = ({ csrfToken, environment, database }) => `<!doctype html>
   <header>
     <h1>Crear propietarios iniciales</h1>
     <p>Este asistente local crea únicamente las autoridades administrativas de Atmósfera y DAM. No crea trabajadores, servicios, turnos ni reservas.</p>
-    <div class="context"><span><strong>Entorno</strong>${environment}</span><span><strong>Base</strong>${database}</span></div>
+    <div class="context"><span><strong>Entorno</strong>${escapeHtml(environment)}</span><span><strong>Base</strong>${escapeHtml(database)}</span></div>
     <p class="notice">Las contraseñas permanecen en esta página y en memoria durante cada solicitud. No se guardan en archivos ni se muestran en el resultado.</p>
   </header>
   <form id="baseline" autocomplete="off">
@@ -223,7 +501,7 @@ const renderPage = ({ csrfToken, environment, database }) => `<!doctype html>
         'Hallazgos: ' + (body.plan.findings.length ? body.plan.findings.join(', ') : 'ninguno'),
       ].join('\n');
     } else {
-      result.textContent = body.error || 'La operación fue rechazada';
+      result.textContent = body.error?.message || 'La operación fue rechazada';
     }
   };
 
@@ -259,7 +537,13 @@ const renderPage = ({ csrfToken, environment, database }) => `<!doctype html>
       await request('/api/apply', { ...payload(), planToken, confirmation: '${MEMBERSHIP_BASELINE_CONFIRMATION}' });
       planToken = null;
     } catch { planToken = null; }
-    finally { planButton.disabled = false; }
+    finally {
+      form.querySelectorAll('input[type="password"]').forEach((input) => { input.value = ''; });
+      planButton.disabled = false;
+    }
+  });
+  window.addEventListener('beforeunload', () => {
+    form.querySelectorAll('input[type="password"]').forEach((input) => { input.value = ''; });
   });
 </script>
 </body>
@@ -271,20 +555,49 @@ export const createMembershipBaselineUiServer = ({
   runBootstrap = runMembershipBaselineBootstrap,
   now = () => Date.now(),
   approvalTtlMs = MEMBERSHIP_BASELINE_UI_APPROVAL_TTL_MS,
+  processEnvironment = process.env,
 }) => {
-  const validated = validateMembershipBaselineUiOptions(options);
+  const validated = validateMembershipBaselineUiOptions(
+    options,
+    processEnvironment,
+  );
   if (!mongoUri) throw new Error("MONGO_URI es obligatoria");
   fingerprintMongoTarget(mongoUri, validated.database);
 
   const csrfToken = randomBytes(32).toString("hex");
   const approvalSecret = randomBytes(32);
   const approvals = new Map();
+  let planSequence = 0;
 
   const server = createServer(async (request, response) => {
-    if (!/^127\.0\.0\.1:\d{1,5}$/u.test(String(request.headers.host ?? ""))) {
-      writeJson(response, 421, { error: "Host local no permitido" });
+    const localPort = request.socket.localPort;
+    const expectedHost = `${MEMBERSHIP_BASELINE_UI_HOST}:${localPort}`;
+    const expectedOrigin = `http://${expectedHost}`;
+    const hasForwardingHeader = ALLOWED_FORWARDING_HEADERS.some(
+      (header) => request.headers[header] !== undefined,
+    );
+    if (
+      !isAllowedMembershipBaselineUiSocket(request.socket) ||
+      request.headers.host !== expectedHost ||
+      hasForwardingHeader
+    ) {
+      writePublicError(
+        response,
+        publicError(421, "LOCAL_BOUNDARY_REJECTED", "Conexión local no permitida"),
+      );
       return;
     }
+    if (
+      request.headers.origin !== undefined &&
+      request.headers.origin !== expectedOrigin
+    ) {
+      writePublicError(
+        response,
+        publicError(403, "ORIGIN_REJECTED", "Origen local no autorizado"),
+      );
+      return;
+    }
+
     const requestUrl = new URL(request.url ?? "/", `http://${MEMBERSHIP_BASELINE_UI_HOST}`);
     if (request.method === "GET" && requestUrl.pathname === "/") {
       response.writeHead(200, HTML_HEADERS);
@@ -292,43 +605,65 @@ export const createMembershipBaselineUiServer = ({
       return;
     }
 
-    if (
-      request.method !== "POST" ||
-      !["/api/plan", "/api/apply"].includes(requestUrl.pathname)
-    ) {
-      writeJson(response, 404, { error: "Ruta no disponible" });
+    const allowedMethod = requestUrl.pathname === "/" ? "GET" :
+      ["/api/plan", "/api/apply"].includes(requestUrl.pathname) ? "POST" : null;
+    if (allowedMethod && request.method !== allowedMethod) {
+      response.setHeader("allow", allowedMethod);
+      writePublicError(
+        response,
+        publicError(405, "METHOD_NOT_ALLOWED", "Método no permitido"),
+      );
+      return;
+    }
+    if (!allowedMethod) {
+      writePublicError(
+        response,
+        publicError(404, "NOT_FOUND", "Ruta no disponible"),
+      );
       return;
     }
     if (request.headers["x-bootstrap-csrf"] !== csrfToken) {
-      writeJson(response, 403, { error: "Solicitud local no autorizada" });
+      writePublicError(
+        response,
+        publicError(403, "CSRF_REJECTED", "Solicitud local no autorizada"),
+      );
       return;
     }
-    if (!String(request.headers["content-type"] ?? "").startsWith("application/json")) {
-      writeJson(response, 415, { error: "Se requiere application/json" });
+    if (!isAllowedJsonContentType(request.headers["content-type"])) {
+      writePublicError(
+        response,
+        publicError(415, "UNSUPPORTED_MEDIA_TYPE", "Se requiere application/json válido"),
+      );
       return;
     }
 
-    let payload;
+    let operation;
     try {
-      payload = await readJson(request);
-      const manifest = buildMembershipBaselineManifestFromOwners(payload.owners);
+      const payload = await readJson(request);
+      const apply = requestUrl.pathname === "/api/apply";
+      operation = normalizeOperation(payload, { apply });
       const commonOptions = {
         environment: validated.environment,
         database: validated.database,
-        expectedTargetFingerprint: payload.expectedTargetFingerprint,
+        expectedTargetFingerprint: operation.expectedTargetFingerprint,
       };
 
-      if (requestUrl.pathname === "/api/plan") {
-        const operation = { owners: payload.owners, expectedTargetFingerprint: payload.expectedTargetFingerprint };
+      if (!apply) {
+        const requestPlanSequence = ++planSequence;
+        approvals.clear();
         const result = await runBootstrap({
           mongoUri,
           options: { ...commonOptions, mode: "plan" },
-          manifest,
+          manifest: operation.manifest,
+          processEnvironment,
         });
         let planToken = null;
-        if (result.exitCode === 0 && result.plan.canApply) {
+        if (
+          requestPlanSequence === planSequence &&
+          result.exitCode === 0 &&
+          result.plan.canApply
+        ) {
           planToken = randomUUID();
-          approvals.clear();
           approvals.set(planToken, {
             digest: requestDigest(approvalSecret, operation),
             expiresAt: now() + approvalTtlMs,
@@ -338,17 +673,19 @@ export const createMembershipBaselineUiServer = ({
         return;
       }
 
-      const approval = approvals.get(payload.planToken);
-      approvals.delete(payload.planToken);
-      const operation = { owners: payload.owners, expectedTargetFingerprint: payload.expectedTargetFingerprint };
+      const approval = approvals.get(operation.planToken);
+      approvals.delete(operation.planToken);
       if (
         !approval ||
-        approval.expiresAt < now() ||
+        approval.expiresAt <= now() ||
         !equalDigest(approval.digest, requestDigest(approvalSecret, operation)) ||
-        payload.confirmation !== MEMBERSHIP_BASELINE_CONFIRMATION
+        operation.confirmation !== MEMBERSHIP_BASELINE_CONFIRMATION
       ) {
-        writeJson(response, 409, { error: "Debe ejecutar nuevamente un plan seguro antes de aplicar" });
-        return;
+        throw publicError(
+          409,
+          "PLAN_REQUIRED",
+          "Debe ejecutar nuevamente un plan seguro antes de aplicar",
+        );
       }
 
       const result = await runBootstrap({
@@ -358,25 +695,88 @@ export const createMembershipBaselineUiServer = ({
           mode: "apply",
           confirm: MEMBERSHIP_BASELINE_CONFIRMATION,
         },
-        manifest,
+        manifest: operation.manifest,
+        processEnvironment,
       });
       writeJson(response, 200, result);
     } catch (error) {
-      writeJson(response, 400, { error: redactError(error, mongoUri, payload) });
+      writePublicError(response, error);
+    } finally {
+      clearSensitiveOperation(operation);
     }
   });
 
-  return { server, csrfToken, options: validated };
+  server.requestTimeout = REQUEST_TIMEOUT_MS;
+  server.headersTimeout = HEADERS_TIMEOUT_MS;
+  server.keepAliveTimeout = KEEP_ALIVE_TIMEOUT_MS;
+  server.maxRequestsPerSocket = MAX_REQUESTS_PER_SOCKET;
+  server.on("clientError", (_error, socket) => socket.destroy());
+
+  let listening = false;
+  const listen = async ({
+    port = validated.port,
+    host = MEMBERSHIP_BASELINE_UI_HOST,
+  } = {}) => {
+    if (host !== MEMBERSHIP_BASELINE_UI_HOST) {
+      throw new Error("El servidor sólo puede enlazarse a 127.0.0.1");
+    }
+    if (listening) throw new Error("El servidor local ya está iniciado");
+    await new Promise((resolve, reject) => {
+      const onError = (error) => {
+        server.off("listening", onListening);
+        reject(error);
+      };
+      const onListening = () => {
+        server.off("error", onError);
+        resolve();
+      };
+      server.once("error", onError);
+      server.once("listening", onListening);
+      server.listen(port, MEMBERSHIP_BASELINE_UI_HOST);
+    });
+    const address = server.address();
+    if (
+      !address ||
+      typeof address === "string" ||
+      address.address !== MEMBERSHIP_BASELINE_UI_HOST
+    ) {
+      server.closeAllConnections?.();
+      await new Promise((resolve) => server.close(resolve));
+      throw new Error("El bind local efectivo no pudo verificarse");
+    }
+    listening = true;
+    return { address: address.address, port: address.port };
+  };
+
+  const close = async () => {
+    approvals.clear();
+    approvalSecret.fill(0);
+    if (!listening) return;
+    server.closeIdleConnections?.();
+    await new Promise((resolve, reject) => {
+      server.close((error) => error ? reject(error) : resolve());
+    });
+    listening = false;
+  };
+
+  return {
+    address: () => server.address(),
+    close,
+    csrfToken,
+    listen,
+    options: validated,
+  };
 };
 
 const usage = () => {
   console.log(`Uso:
-  npm run bootstrap:membership-baseline:ui -- \\
+  NODE_ENV=development npm run bootstrap:membership-baseline:ui -- \\
     --environment=development \\
     --database=agenda_dev \\
     [--port=${MEMBERSHIP_BASELINE_UI_DEFAULT_PORT}]
 
-La interfaz escucha exclusivamente en ${MEMBERSHIP_BASELINE_UI_HOST} y nunca forma parte de start o dev.`);
+NODE_ENV debe coincidir con --environment. La interfaz escucha exclusivamente
+en ${MEMBERSHIP_BASELINE_UI_HOST} y nunca forma parte de start o dev.`);
 };
 
 export const main = async (argv = process.argv.slice(2)) => {
@@ -385,18 +785,14 @@ export const main = async (argv = process.argv.slice(2)) => {
     usage();
     return null;
   }
-  const { server, options } = createMembershipBaselineUiServer({
+  const app = createMembershipBaselineUiServer({
     mongoUri: process.env.MONGO_URI,
     options: parsed,
   });
-  await new Promise((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(options.port, MEMBERSHIP_BASELINE_UI_HOST, resolve);
-  });
-  const address = server.address();
-  console.log(`Interfaz local disponible en http://${MEMBERSHIP_BASELINE_UI_HOST}:${address.port}`);
+  const address = await app.listen();
+  console.log(`Interfaz local disponible en http://${address.address}:${address.port}`);
   console.log("No cierre esta terminal hasta terminar. Ninguna operación se ejecuta automáticamente.");
-  return server;
+  return app;
 };
 
 const isDirectExecution =
@@ -404,8 +800,8 @@ const isDirectExecution =
   import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href;
 
 if (isDirectExecution) {
-  main().catch((error) => {
-    console.error(`Interfaz de baseline rechazada: ${sanitizeAuditErrorMessage(error, process.env.MONGO_URI)}`);
+  main().catch(() => {
+    console.error("Interfaz de baseline rechazada por una configuración insegura");
     process.exitCode = 1;
   });
 }

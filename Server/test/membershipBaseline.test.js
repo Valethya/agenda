@@ -5,13 +5,14 @@ import assert from "node:assert/strict";
 import { mongo } from "mongoose";
 import { TEST_DB_URI } from "./setup.js";
 import {
+  acquireMembershipBaselineLock,
   MEMBERSHIP_BASELINE_CONFIRMATION,
   MEMBERSHIP_BASELINE_LOCK_COLLECTION,
+  readMembershipBaselineSource,
   runMembershipBaselineBootstrap,
 } from "../scripts/bootstrap/membership-baseline.js";
 import {
   createMembershipBaselineUiServer,
-  MEMBERSHIP_BASELINE_UI_HOST,
 } from "../scripts/bootstrap/membership-baseline-ui.js";
 import { fingerprintMongoTarget } from "../scripts/migrations/membership-authority-provenance.js";
 
@@ -259,6 +260,61 @@ test("dos apply concurrentes serializan la baseline y una tercera ejecución es 
   await cleanAuthorityCollections();
 });
 
+test("un lock vencido no admite un segundo escritor mientras el propietario está suspendido", async () => {
+  await cleanAuthorityCollections();
+  let releaseFirstRead;
+  let firstReadCompleted;
+  const firstReadGate = new Promise((resolve) => { firstReadCompleted = resolve; });
+  const resumeFirst = new Promise((resolve) => { releaseFirstRead = resolve; });
+  let firstReads = 0;
+  const shortLock = (db, lockOptions) => acquireMembershipBaselineLock(db, {
+    ...lockOptions,
+    ttlMs: 20,
+  });
+
+  const firstApply = runMembershipBaselineBootstrap({
+    mongoUri: BASELINE_TEST_URI,
+    options: options("apply"),
+    environment,
+    acquireLock: shortLock,
+    readSource: async (db) => {
+      const source = await readMembershipBaselineSource(db);
+      firstReads += 1;
+      if (firstReads === 1) {
+        firstReadCompleted();
+        await resumeFirst;
+      }
+      return source;
+    },
+  });
+
+  await firstReadGate;
+  await new Promise((resolve) => setTimeout(resolve, 40));
+  await assert.rejects(
+    runMembershipBaselineBootstrap({
+      mongoUri: BASELINE_TEST_URI,
+      options: options("apply"),
+      environment,
+      acquireLock: shortLock,
+    }),
+    /otra ejecución apply activa/u,
+  );
+  releaseFirstRead();
+  const result = await firstApply;
+  assert.equal(result.applied, true);
+
+  await withClient(async (db) => {
+    assert.equal(await db.collection("businesses").countDocuments({}), 2);
+    assert.equal(await db.collection("users").countDocuments({}), 2);
+    assert.equal(await db.collection("memberships").countDocuments({}), 2);
+    assert.equal(
+      await db.collection(MEMBERSHIP_BASELINE_LOCK_COLLECTION).countDocuments({}),
+      0,
+    );
+  });
+  await cleanAuthorityCollections();
+});
+
 test("credenciales diferentes bloquean plan y apply sin rotar hashes ni escribir", async () => {
   await cleanAuthorityCollections();
   await runMembershipBaselineBootstrap({
@@ -323,12 +379,8 @@ test("la interfaz local ejecuta plan y apply reales sin persistir credenciales",
     mongoUri: BASELINE_TEST_URI,
     options: { environment: "test", database, port: 0 },
   });
-  await new Promise((resolve, reject) => {
-    app.server.once("error", reject);
-    app.server.listen(0, MEMBERSHIP_BASELINE_UI_HOST, resolve);
-  });
-  const address = app.server.address();
-  const baseUrl = `http://${MEMBERSHIP_BASELINE_UI_HOST}:${address.port}`;
+  const address = await app.listen();
+  const baseUrl = `http://${address.address}:${address.port}`;
   const request = async (path, body) => {
     const response = await fetch(`${baseUrl}${path}`, {
       method: "POST",
@@ -377,7 +429,7 @@ test("la interfaz local ejecuta plan y apply reales sin persistir credenciales",
       );
     });
   } finally {
-    await new Promise((resolve) => app.server.close(resolve));
+    await app.close();
     await cleanAuthorityCollections();
   }
 });
