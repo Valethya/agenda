@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { Types } from "mongoose";
 import {
   ACTIVE_APPOINTMENT_STATUSES,
+  AVAILABILITY_DECLARED_LEGACY_APPOINTMENT_INDEX,
   AVAILABILITY_EXTERNAL_TARGET_CONFIRMATION,
   AVAILABILITY_INDEX_SPECS,
   AVAILABILITY_MAINTENANCE_CONFIRMATION,
@@ -17,10 +18,12 @@ const id = () => new Types.ObjectId();
 const fingerprint = "a".repeat(64);
 const codeSha = "b".repeat(40);
 const membership = (user, business) => ({ _id: id(), user, business, role: "worker", isActive: true });
+const business = (_id, isActive = true) => ({ _id, isActive });
 const baseSnapshot = () => ({
   shifts: [],
   blocks: [],
   memberships: [],
+  businesses: [],
   appointments: [],
   shiftIndexes: [],
   blockIndexes: [],
@@ -45,34 +48,88 @@ const desiredIndexes = () => ({
   }],
 });
 
-test("6.2.3 migration classifies deterministic, ambiguous, unresolved and migrated documents", () => {
+test("6.2.3 migration only infers active physical businesses", () => {
   const worker = id();
   const businessA = id();
   const businessB = id();
   const legacy = { _id: id(), worker, dayOfWeek: 1 };
 
-  const deterministic = classifyAvailabilityDocuments([legacy], [membership(worker, businessA)]);
+  const deterministic = classifyAvailabilityDocuments(
+    [legacy],
+    [membership(worker, businessA)],
+    [business(businessA)],
+  );
   assert.equal(deterministic.deterministic.length, 1);
   assert.equal(deterministic.deterministic[0].inferredBusiness.toString(), businessA.toString());
 
   const ambiguous = classifyAvailabilityDocuments(
     [legacy],
     [membership(worker, businessA), membership(worker, businessB)],
+    [business(businessA), business(businessB)],
   );
   assert.equal(ambiguous.ambiguous.length, 1);
   assert.equal(ambiguous.deterministic.length, 0);
-  assert.equal(classifyAvailabilityDocuments([legacy], []).unresolved.length, 1);
+
+  const inactive = classifyAvailabilityDocuments(
+    [legacy],
+    [membership(worker, businessA)],
+    [business(businessA, false)],
+  );
+  assert.equal(inactive.unresolved.length, 1);
+  assert.equal(inactive.deterministic.length, 0);
+
+  const missing = classifyAvailabilityDocuments(
+    [legacy],
+    [membership(worker, businessA)],
+    [],
+  );
+  assert.equal(missing.unresolved.length, 1);
+  assert.equal(missing.deterministic.length, 0);
+
   assert.equal(
-    classifyAvailabilityDocuments([{ ...legacy, business: businessA }], [membership(worker, businessA)]).alreadyMigrated.length,
+    classifyAvailabilityDocuments(
+      [{ ...legacy, business: businessA }],
+      [membership(worker, businessA)],
+      [business(businessA)],
+    ).alreadyMigrated.length,
     1,
   );
   assert.equal(
-    classifyAvailabilityDocuments([{ ...legacy, business: businessB }], [membership(worker, businessA)]).invalidExisting.length,
+    classifyAvailabilityDocuments(
+      [{ ...legacy, business: businessA }],
+      [membership(worker, businessA)],
+      [business(businessA, false)],
+    ).invalidExisting.length,
+    1,
+  );
+  assert.equal(
+    classifyAvailabilityDocuments(
+      [{ ...legacy, business: businessB }],
+      [membership(worker, businessA)],
+      [business(businessA), business(businessB)],
+    ).invalidExisting.length,
     1,
   );
 });
 
-test("6.2.3 plan fails closed when a worker belongs to multiple businesses", () => {
+test("6.2.3 plan fails closed for inactive or missing Business", () => {
+  const worker = id();
+  const businessId = id();
+
+  for (const businesses of [[business(businessId, false)], []]) {
+    const snapshot = baseSnapshot();
+    snapshot.shifts.push({ _id: id(), worker, dayOfWeek: 1 });
+    snapshot.blocks.push({ _id: id(), worker, date: new Date("2099-01-01T00:00:00.000Z") });
+    snapshot.memberships.push(membership(worker, businessId));
+    snapshot.businesses.push(...businesses);
+    const plan = buildAvailabilityTenantizationPlan(snapshot);
+    assert.equal(plan.safeToApply, false);
+    assert.equal(plan.counts.shifts.unresolved, 1);
+    assert.equal(plan.counts.blocks.unresolved, 1);
+  }
+});
+
+test("6.2.3 plan fails closed when a worker belongs to multiple active businesses", () => {
   const worker = id();
   const businessA = id();
   const businessB = id();
@@ -80,6 +137,7 @@ test("6.2.3 plan fails closed when a worker belongs to multiple businesses", () 
   snapshot.shifts.push({ _id: id(), worker, dayOfWeek: 1 });
   snapshot.blocks.push({ _id: id(), worker, date: new Date("2099-01-01T00:00:00.000Z") });
   snapshot.memberships.push(membership(worker, businessA), membership(worker, businessB));
+  snapshot.businesses.push(business(businessA), business(businessB));
   const plan = buildAvailabilityTenantizationPlan(snapshot);
   assert.equal(plan.safeToApply, false);
   assert.ok(plan.findings.includes("shift:ambiguous:1"));
@@ -88,9 +146,10 @@ test("6.2.3 plan fails closed when a worker belongs to multiple businesses", () 
 
 test("6.2.3 plan detects duplicate Shift keys after deterministic backfill", () => {
   const worker = id();
-  const business = id();
+  const businessId = id();
   const snapshot = baseSnapshot();
-  snapshot.memberships.push(membership(worker, business));
+  snapshot.memberships.push(membership(worker, businessId));
+  snapshot.businesses.push(business(businessId));
   snapshot.shifts.push(
     { _id: id(), worker, dayOfWeek: 1 },
     { _id: id(), worker, dayOfWeek: 1 },
@@ -105,8 +164,8 @@ test("6.2.3 Appointment collision analysis is tenant-scoped", () => {
   const businessA = id();
   const businessB = id();
   const when = new Date("2099-01-01T00:00:00.000Z");
-  const appointment = (business) => ({
-    _id: id(), business, worker, date: when, startTime: "10:00", status: "pending",
+  const appointment = (businessId) => ({
+    _id: id(), business: businessId, worker, date: when, startTime: "10:00", status: "pending",
   });
   const crossTenant = baseSnapshot();
   crossTenant.appointments.push(appointment(businessA), appointment(businessB));
@@ -119,6 +178,45 @@ test("6.2.3 Appointment collision analysis is tenant-scoped", () => {
   assert.ok(plan.findings.includes("appointment:targetDuplicateKeys:1"));
 });
 
+test("6.2.3 Appointment status audit is exhaustive and cancelled is legitimate", () => {
+  const worker = id();
+  const businessId = id();
+  const when = new Date("2099-01-01T00:00:00.000Z");
+  const valid = (status) => ({
+    _id: id(), business: businessId, worker, date: when, startTime: "10:00", status,
+  });
+
+  const unknown = baseSnapshot();
+  unknown.appointments.push(valid("legacy_unknown"));
+  const unknownPlan = buildAvailabilityTenantizationPlan(unknown);
+  assert.equal(unknownPlan.safeToApply, false);
+  assert.equal(unknownPlan.counts.appointments.invalidStatus, 1);
+  assert.ok(unknownPlan.findings.includes("appointment:invalidStatus:1"));
+
+  const missing = baseSnapshot();
+  missing.appointments.push({ _id: id(), business: businessId, worker, date: when, startTime: "10:00" });
+  const missingPlan = buildAvailabilityTenantizationPlan(missing);
+  assert.equal(missingPlan.safeToApply, false);
+  assert.equal(missingPlan.counts.appointments.invalidStatus, 1);
+
+  const cancelled = baseSnapshot();
+  cancelled.appointments.push(valid("cancelled"));
+  assert.equal(buildAvailabilityTenantizationPlan(cancelled).safeToApply, true);
+
+  for (const status of ACTIVE_APPOINTMENT_STATUSES) {
+    const snapshot = baseSnapshot();
+    snapshot.appointments.push(valid(status));
+    assert.equal(buildAvailabilityTenantizationPlan(snapshot).safeToApply, true);
+  }
+});
+
+test("6.2.3 records the declared legacy Appointment index as $ne cancelled", () => {
+  assert.deepEqual(
+    AVAILABILITY_DECLARED_LEGACY_APPOINTMENT_INDEX.options.partialFilterExpression,
+    { status: { $ne: "cancelled" } },
+  );
+});
+
 test("6.2.3 plan recognizes desired physical indexes and obsolete global indexes", () => {
   const snapshot = baseSnapshot();
   Object.assign(snapshot, desiredIndexes());
@@ -126,9 +224,9 @@ test("6.2.3 plan recognizes desired physical indexes and obsolete global indexes
   snapshot.blockIndexes.unshift({ name: "worker_1_date_1", key: { worker: 1, date: 1 } });
   snapshot.appointmentIndexes.unshift({
     name: "worker_1_date_1_startTime_1",
-    key: { worker: 1, date: 1, startTime: 1 },
+    key: AVAILABILITY_DECLARED_LEGACY_APPOINTMENT_INDEX.key,
     unique: true,
-    partialFilterExpression: { status: { $ne: "cancelled" } },
+    partialFilterExpression: AVAILABILITY_DECLARED_LEGACY_APPOINTMENT_INDEX.options.partialFilterExpression,
   });
   const plan = buildAvailabilityTenantizationPlan(snapshot);
   assert.equal(plan.safeToApply, true);
@@ -149,8 +247,9 @@ test("6.2.3 checkpoint pre-drop requires a fully safe migrated state and all des
   const legacy = baseSnapshot();
   Object.assign(legacy, desiredIndexes());
   const worker = id();
-  const business = id();
-  legacy.memberships.push(membership(worker, business));
+  const businessId = id();
+  legacy.memberships.push(membership(worker, businessId));
+  legacy.businesses.push(business(businessId));
   legacy.shifts.push({ _id: id(), worker, dayOfWeek: 1 });
   assert.throws(
     () => assertAvailabilityPreDropCheckpoint(buildAvailabilityTenantizationPlan(legacy)),
