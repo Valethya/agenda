@@ -1,7 +1,8 @@
 import Block from "../db/models/block.model.js";
 
-export const findByWorkerAndDateRange = async (workerId, startDate, endDate) => {
+export const findByBusinessWorkerAndDateRange = async (businessId, workerId, startDate, endDate) => {
   return await Block.find({
+    business: businessId,
     worker: workerId,
     date: {
       $gte: new Date(startDate),
@@ -10,18 +11,18 @@ export const findByWorkerAndDateRange = async (workerId, startDate, endDate) => 
   });
 };
 
-export const create = async (data) => {
-  return await Block.create(data);
+export const findByIdAndBusiness = async (id, businessId) => {
+  return await Block.findOne({ _id: id, business: businessId });
 };
 
-export const deleteById = async (id) => {
-  return await Block.findByIdAndDelete(id);
+export const createForBusinessWorker = async (businessId, workerId, data) => {
+  return await Block.create({ ...data, business: businessId, worker: workerId });
 };
 
-export const deleteByIdAndWorker = async (id, workerId) => {
-  return await Block.findOneAndDelete({ _id: id, worker: workerId });
-};
-
-export const findAll = async (query = {}) => {
-  return await Block.find(query).populate("worker", "firstName lastName email");
+export const deleteByIdBusinessAndWorker = async (id, businessId, workerId) => {
+  return await Block.findOneAndDelete({
+    _id: id,
+    business: businessId,
+    worker: workerId,
+  });
 };
