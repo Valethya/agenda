@@ -12,7 +12,7 @@ import {
   validateTargetFingerprint,
 } from "./membership-authority-provenance.js";
 
-export const AVAILABILITY_TENANTIZATION_VERSION = "1.1.1";
+export const AVAILABILITY_TENANTIZATION_VERSION = "1.1.2";
 export const AVAILABILITY_TENANTIZATION_CONFIRMATION = "TENANTIZE_AVAILABILITY_6_2_3";
 export const AVAILABILITY_EXTERNAL_TARGET_CONFIRMATION = "AUTHORIZE_EXTERNAL_AVAILABILITY_TARGET";
 export const AVAILABILITY_MAINTENANCE_CONFIRMATION = "MAINTENANCE_WINDOW_CONFIRMED";
@@ -688,6 +688,35 @@ export const releaseAvailabilityTenantizationLock = async (db, lock) => {
   return result.deletedCount === 1;
 };
 
+export const fenceAvailabilityTenantizationLockInTransaction = async (
+  db,
+  lock,
+  session,
+  { now = new Date() } = {},
+) => {
+  const currentTime = new Date(now);
+  const result = await db.collection(AVAILABILITY_TENANTIZATION_LOCK_COLLECTION).updateOne(
+    {
+      _id: AVAILABILITY_TENANTIZATION_LOCK_ID,
+      ownerId: lock.ownerId,
+      fencingToken: lock.fencingToken,
+      protocolVersion: AVAILABILITY_TENANTIZATION_LOCK_PROTOCOL_VERSION,
+      leaseUntil: { $gt: currentTime },
+    },
+    {
+      $set: {
+        transactionFenceOwner: lock.ownerId,
+        transactionFenceToken: lock.fencingToken,
+        transactionFenceAt: currentTime,
+      },
+    },
+    { session },
+  );
+
+  if (result.matchedCount !== 1) throw new AvailabilityTenantizationLockLostError();
+  return true;
+};
+
 const uniqueActiveWorkerBusinesses = (memberships) => {
   const unique = new Map();
   for (const membership of memberships) {
@@ -705,7 +734,7 @@ const uniqueActiveWorkerBusinesses = (memberships) => {
 const revalidateAssignmentMembership = async (db, assignment, session) => {
   const memberships = await db.collection("memberships").find(
     { user: assignment.document.worker, role: "worker", isActive: true },
-    { session, projection: { business: 1 } },
+    { session, projection: { business: 1, role: 1, isActive: 1 } },
   ).toArray();
 
   const businesses = uniqueActiveWorkerBusinesses(memberships);
@@ -844,6 +873,7 @@ export const runAvailabilityTenantization = async ({
   renewLock = renewAvailabilityTenantizationLock,
   assertLockOwner = assertAvailabilityTenantizationLockOwnership,
   releaseLock = releaseAvailabilityTenantizationLock,
+  fenceLockInTransaction = fenceAvailabilityTenantizationLockInTransaction,
   assertTransactionSupport = assertAvailabilityTenantizationTransactionSupport,
   ensureIndex = ensureDesiredIndex,
   dropIndexes = dropObsoleteIndexes,
@@ -910,9 +940,14 @@ export const runAvailabilityTenantization = async ({
     await stageCheckpoint("before-backfill-transaction", { db: connection.db, lock });
     await checkpointLock();
     await runBackfillTransaction(connection, async (session) => {
-      // No se ejecuta DDL metadata (`listCollections`/`listIndexes`) dentro de la
-      // transacción. Las asignaciones provienen del plan obtenido bajo el lock y
-      // cada Membership se vuelve a consultar dentro del snapshot transaccional.
+      // El primer write de la transacción cerca el documento de lock con owner +
+      // fencingToken. Un takeover que intente actualizar el mismo lock después de
+      // expirar el TTL no puede coexistir limpiamente con esta transacción.
+      await fenceLockInTransaction(connection.db, lock, session);
+
+      // No se ejecuta metadata DDL (`listCollections`/`listIndexes`) dentro de la
+      // transacción. Cada asignación del plan obtenido bajo lock vuelve a consultar
+      // Membership dentro del snapshot transaccional antes de escribir.
       await applyBackfill(connection.db, lockedPlan, session, mutationCheckpoint);
     });
     await checkpointLock();
