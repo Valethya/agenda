@@ -96,6 +96,7 @@ export async function seedTestData() {
   const shifts = [];
   for (let day = 1; day <= 5; day++) {
     shifts.push(await Shift.create({
+      business: business._id,
       worker: worker._id,
       dayOfWeek: day,
       isOpen: true,
