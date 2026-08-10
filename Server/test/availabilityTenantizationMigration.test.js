@@ -6,7 +6,7 @@ import {
   AVAILABILITY_INDEX_SPECS,
   AVAILABILITY_TENANTIZATION_CONFIRMATION,
   AVAILABILITY_TENANTIZATION_LOCK_COLLECTION,
-  AVAILABILITY_TENANTIZATION_LOCK_KEY,
+  AVAILABILITY_TENANTIZATION_LOCK_ID,
   runAvailabilityTenantization,
 } from "../scripts/migrations/availability-tenantization.js";
 import { fingerprintMongoTarget } from "../scripts/migrations/membership-authority-provenance.js";
@@ -34,11 +34,12 @@ const withDb = async (uri, callback) => {
 };
 
 const cleanup = async (uri) => withDb(uri, (db) => db.dropDatabase());
-
 const keyEquals = (index, expected) => JSON.stringify(index.key) === JSON.stringify(expected);
 
 const snapshotState = async (uri) => withDb(uri, async (db) => {
-  const names = (await db.listCollections({}, { nameOnly: true }).toArray()).map((item) => item.name).sort();
+  const names = (await db.listCollections({}, { nameOnly: true }).toArray())
+    .map((item) => item.name)
+    .sort();
   const data = {};
   for (const name of ["memberships", "shifts", "blocks", "appointments"]) {
     data[name] = names.includes(name)
@@ -71,10 +72,21 @@ const seedLegacy = async (uri, { ambiguous = false } = {}) => withDb(uri, async 
     });
   }
   await db.collection("shifts").insertOne({
-    _id: shiftId, worker, dayOfWeek: 1, isOpen: true, startTime: "09:00", endTime: "18:00", breaks: [],
+    _id: shiftId,
+    worker,
+    dayOfWeek: 1,
+    isOpen: true,
+    startTime: "09:00",
+    endTime: "18:00",
+    breaks: [],
   });
   await db.collection("blocks").insertOne({
-    _id: blockId, worker, date, startTime: "11:00", endTime: "12:00", reason: "legacy",
+    _id: blockId,
+    worker,
+    date,
+    startTime: "11:00",
+    endTime: "12:00",
+    reason: "legacy",
   });
   await db.collection("appointments").insertOne({
     _id: appointmentId,
@@ -104,6 +116,7 @@ const seedLegacy = async (uri, { ambiguous = false } = {}) => withDb(uri, async 
       partialFilterExpression: { status: { $in: [...ACTIVE_APPOINTMENT_STATUSES] } },
     },
   );
+
   return { worker, businessA, businessB, shiftId, blockId, appointmentId };
 });
 
@@ -118,13 +131,23 @@ const optionsFor = (database, mode = "apply") => ({
 const assertLegacyIndexesPresent = (state) => {
   assert.ok(state.indexes.shifts.some((index) => keyEquals(index, { worker: 1, dayOfWeek: 1 })));
   assert.ok(state.indexes.blocks.some((index) => keyEquals(index, { worker: 1, date: 1 })));
-  assert.ok(state.indexes.appointments.some((index) => keyEquals(index, { worker: 1, date: 1, startTime: 1 })));
+  assert.ok(
+    state.indexes.appointments.some((index) =>
+      keyEquals(index, { worker: 1, date: 1, startTime: 1 })
+    ),
+  );
 };
 
 const assertTenantIndexesPresent = (state) => {
-  const shift = state.indexes.shifts.find((index) => keyEquals(index, AVAILABILITY_INDEX_SPECS.shiftDesired.key));
-  const block = state.indexes.blocks.find((index) => keyEquals(index, AVAILABILITY_INDEX_SPECS.blockDesired.key));
-  const appointment = state.indexes.appointments.find((index) => keyEquals(index, AVAILABILITY_INDEX_SPECS.appointmentDesired.key));
+  const shift = state.indexes.shifts.find((index) =>
+    keyEquals(index, AVAILABILITY_INDEX_SPECS.shiftDesired.key)
+  );
+  const block = state.indexes.blocks.find((index) =>
+    keyEquals(index, AVAILABILITY_INDEX_SPECS.blockDesired.key)
+  );
+  const appointment = state.indexes.appointments.find((index) =>
+    keyEquals(index, AVAILABILITY_INDEX_SPECS.appointmentDesired.key)
+  );
   assert.equal(shift?.unique, true);
   assert.ok(block);
   assert.equal(appointment?.unique, true);
@@ -132,9 +155,20 @@ const assertTenantIndexesPresent = (state) => {
     appointment?.partialFilterExpression,
     { status: { $in: [...ACTIVE_APPOINTMENT_STATUSES] } },
   );
-  assert.equal(state.indexes.shifts.some((index) => keyEquals(index, { worker: 1, dayOfWeek: 1 })), false);
-  assert.equal(state.indexes.blocks.some((index) => keyEquals(index, { worker: 1, date: 1 })), false);
-  assert.equal(state.indexes.appointments.some((index) => keyEquals(index, { worker: 1, date: 1, startTime: 1 })), false);
+  assert.equal(
+    state.indexes.shifts.some((index) => keyEquals(index, { worker: 1, dayOfWeek: 1 })),
+    false,
+  );
+  assert.equal(
+    state.indexes.blocks.some((index) => keyEquals(index, { worker: 1, date: 1 })),
+    false,
+  );
+  assert.equal(
+    state.indexes.appointments.some((index) =>
+      keyEquals(index, { worker: 1, date: 1, startTime: 1 })
+    ),
+    false,
+  );
 };
 
 test("6.2.3 availability migration E2E real", async (t) => {
@@ -190,20 +224,48 @@ test("6.2.3 availability migration E2E real", async (t) => {
 
       await withDb(uri, async (db) => {
         await db.collection("memberships").insertOne({
-          _id: id(), user: seeded.worker, business: seeded.businessB, role: "worker", isActive: true,
+          _id: id(),
+          user: seeded.worker,
+          business: seeded.businessB,
+          role: "worker",
+          isActive: true,
         });
         await db.collection("shifts").insertOne({
-          _id: id(), business: seeded.businessB, worker: seeded.worker, dayOfWeek: 1,
-          isOpen: true, startTime: "14:00", endTime: "20:00", breaks: [],
+          _id: id(),
+          business: seeded.businessB,
+          worker: seeded.worker,
+          dayOfWeek: 1,
+          isOpen: true,
+          startTime: "14:00",
+          endTime: "20:00",
+          breaks: [],
         });
         await db.collection("appointments").insertOne({
-          _id: id(), business: seeded.businessB, worker: seeded.worker, client: id(), service: id(),
-          date, startTime: "14:00", endTime: "15:00", status: "pending",
+          _id: id(),
+          business: seeded.businessB,
+          worker: seeded.worker,
+          client: id(),
+          service: id(),
+          date,
+          startTime: "14:00",
+          endTime: "15:00",
+          status: "pending",
         });
       });
+
       migrated = await snapshotState(uri);
-      assert.equal(migrated.data.shifts.filter((item) => item.worker.toString() === seeded.worker.toString() && item.dayOfWeek === 1).length, 2);
-      assert.equal(migrated.data.appointments.filter((item) => item.worker.toString() === seeded.worker.toString() && item.startTime === "14:00").length, 2);
+      assert.equal(
+        migrated.data.shifts.filter((item) =>
+          item.worker.toString() === seeded.worker.toString() && item.dayOfWeek === 1
+        ).length,
+        2,
+      );
+      assert.equal(
+        migrated.data.appointments.filter((item) =>
+          item.worker.toString() === seeded.worker.toString() && item.startTime === "14:00"
+        ).length,
+        2,
+      );
     } finally {
       await cleanup(uri).catch(() => {});
     }
@@ -253,7 +315,11 @@ test("6.2.3 availability migration E2E real", async (t) => {
               { $set: { isActive: false } },
             );
             await db.collection("memberships").insertOne({
-              _id: id(), user: seeded.worker, business: seeded.businessB, role: "worker", isActive: true,
+              _id: id(),
+              user: seeded.worker,
+              business: seeded.businessB,
+              role: "worker",
+              isActive: true,
             });
           },
         }),
@@ -286,11 +352,20 @@ test("6.2.3 availability migration E2E real", async (t) => {
             if (stage !== "before-drop-indexes" || injected) return;
             injected = true;
             await db.collection("memberships").insertOne({
-              _id: id(), user: lateWorker, business: lateBusiness, role: "worker", isActive: true,
+              _id: id(),
+              user: lateWorker,
+              business: lateBusiness,
+              role: "worker",
+              isActive: true,
             });
             await db.collection("shifts").insertOne({
-              _id: id(), worker: lateWorker, dayOfWeek: 2, isOpen: true,
-              startTime: "09:00", endTime: "18:00", breaks: [],
+              _id: id(),
+              worker: lateWorker,
+              dayOfWeek: 2,
+              isOpen: true,
+              startTime: "09:00",
+              endTime: "18:00",
+              breaks: [],
             });
           },
         }),
@@ -298,7 +373,11 @@ test("6.2.3 availability migration E2E real", async (t) => {
       );
       const after = await snapshotState(uri);
       assertLegacyIndexesPresent(after);
-      assert.ok(after.indexes.shifts.some((index) => keyEquals(index, AVAILABILITY_INDEX_SPECS.shiftDesired.key)));
+      assert.ok(
+        after.indexes.shifts.some((index) =>
+          keyEquals(index, AVAILABILITY_INDEX_SPECS.shiftDesired.key)
+        ),
+      );
     } finally {
       await cleanup(uri).catch(() => {});
     }
@@ -320,9 +399,12 @@ test("6.2.3 availability migration E2E real", async (t) => {
             if (stage !== "before-drop-indexes" || stolen) return;
             stolen = true;
             await db.collection(AVAILABILITY_TENANTIZATION_LOCK_COLLECTION).updateOne(
-              { _id: AVAILABILITY_TENANTIZATION_LOCK_KEY },
+              { _id: AVAILABILITY_TENANTIZATION_LOCK_ID },
               {
-                $set: { ownerId: "replacement-owner", leaseUntil: new Date(Date.now() + 120_000) },
+                $set: {
+                  ownerId: "replacement-owner",
+                  leaseUntil: new Date(Date.now() + 120_000),
+                },
                 $inc: { fencingToken: 1 },
               },
             );
@@ -333,7 +415,9 @@ test("6.2.3 availability migration E2E real", async (t) => {
       const after = await snapshotState(uri);
       assertLegacyIndexesPresent(after);
       await withDb(uri, async (db) => {
-        const lock = await db.collection(AVAILABILITY_TENANTIZATION_LOCK_COLLECTION).findOne({ _id: AVAILABILITY_TENANTIZATION_LOCK_KEY });
+        const lock = await db.collection(AVAILABILITY_TENANTIZATION_LOCK_COLLECTION).findOne({
+          _id: AVAILABILITY_TENANTIZATION_LOCK_ID,
+        });
         assert.equal(lock?.ownerId, "replacement-owner");
       });
     } finally {
