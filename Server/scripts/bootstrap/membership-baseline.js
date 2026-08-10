@@ -19,7 +19,8 @@ export const MEMBERSHIP_BASELINE_CONFIRMATION = "CREATE_MEMBERSHIP_BASELINE";
 export const MEMBERSHIP_BASELINE_LOCK_COLLECTION =
   "membership_baseline_locks";
 export const MEMBERSHIP_BASELINE_LOCK_KEY = "membership-baseline-v1";
-export const MEMBERSHIP_BASELINE_LOCK_TTL_MS = 30 * 60 * 1000;
+export const MEMBERSHIP_BASELINE_LOCK_PROTOCOL_VERSION = 2;
+export const MEMBERSHIP_BASELINE_MAX_COMMIT_TIME_MS = 15_000;
 
 export const MEMBERSHIP_BASELINE_COLLECTIONS = Object.freeze([
   "businesses",
@@ -442,8 +443,13 @@ export const buildMembershipBaselinePlan = (
       index?.name === "user_1_business_1" &&
       !isExactMembershipUniqueIndex(index),
   );
+  const transactionalIndexCreationBlocked =
+    observedCollections.includes("memberships") && !exactUniqueIndex;
   if (conflictingCompoundIndex) findings.push("conflictingMembershipIndex");
   if (conflictingNamedIndex) findings.push("conflictingMembershipIndexName");
+  if (transactionalIndexCreationBlocked) {
+    findings.push("transactionalMembershipIndexMissing");
+  }
 
   const uniqueFindings = [...new Set(findings)].sort();
   const dataMatches = !empty && uniqueFindings.every(
@@ -460,7 +466,10 @@ export const buildMembershipBaselinePlan = (
         ? "ready"
         : "partial";
   const blocking =
-    state === "partial" || conflictingCompoundIndex || conflictingNamedIndex;
+    state === "partial" ||
+    conflictingCompoundIndex ||
+    conflictingNamedIndex ||
+    transactionalIndexCreationBlocked;
 
   return {
     version: manifest.version,
@@ -556,69 +565,133 @@ export class MembershipBaselineLockLostError extends Error {
   }
 }
 
+export class MembershipBaselineTransactionRequiredError extends Error {
+  constructor() {
+    super(
+      "Bootstrap bloqueado: el destino debe admitir transacciones MongoDB",
+    );
+    this.name = "MembershipBaselineTransactionRequiredError";
+  }
+}
+
+export const assertMembershipBaselineTransactionSupport = async (db) => {
+  let hello;
+  try {
+    hello = await db.admin().command({ hello: 1 });
+  } catch {
+    throw new MembershipBaselineTransactionRequiredError();
+  }
+  if (!hello?.setName) {
+    throw new MembershipBaselineTransactionRequiredError();
+  }
+  return true;
+};
+
+export const ensureMembershipBaselineLockCollection = async (db) => {
+  const exists = await db
+    .listCollections({ name: MEMBERSHIP_BASELINE_LOCK_COLLECTION }, { nameOnly: true })
+    .hasNext();
+  if (exists) return false;
+  try {
+    await db.createCollection(MEMBERSHIP_BASELINE_LOCK_COLLECTION);
+    return true;
+  } catch (error) {
+    if (error?.code === 48 || error?.codeName === "NamespaceExists") return false;
+    throw new Error("No fue posible preparar el lock transaccional");
+  }
+};
+
 export const acquireMembershipBaselineLock = async (
   db,
   {
     ownerId,
     now = new Date(),
-    ttlMs = MEMBERSHIP_BASELINE_LOCK_TTL_MS,
+    session,
   },
 ) => {
   const acquiredAt = new Date(now);
-  const expiresAt = new Date(acquiredAt.getTime() + ttlMs);
 
   try {
     await db.collection(MEMBERSHIP_BASELINE_LOCK_COLLECTION).insertOne({
       _id: MEMBERSHIP_BASELINE_LOCK_KEY,
       ownerId,
       acquiredAt,
-      expiresAt: expiresAt.toISOString(),
-      recoveryPolicy: "manual-after-owner-termination",
-    });
-    return { acquiredAt, expiresAt };
+      protocolVersion: MEMBERSHIP_BASELINE_LOCK_PROTOCOL_VERSION,
+      fencingMechanism: "mongodb-transaction",
+    }, { session });
+    return { acquiredAt, ownerId };
   } catch (error) {
     if (error instanceof MembershipBaselineLockActiveError) throw error;
-    if (error?.code === 11000) throw new MembershipBaselineLockActiveError();
+    if (
+      error?.code === 11000 ||
+      error?.code === 112 ||
+      error?.codeName === "WriteConflict" ||
+      error?.hasErrorLabel?.("TransientTransactionError")
+    ) {
+      throw new MembershipBaselineLockActiveError();
+    }
     throw new Error("No fue posible adquirir el lock del bootstrap");
   }
 };
 
 export const assertMembershipBaselineLockOwnership = async (
   db,
-  { ownerId },
+  { ownerId, session },
 ) => {
   const lock = await db.collection(MEMBERSHIP_BASELINE_LOCK_COLLECTION)
-    .findOne({ _id: MEMBERSHIP_BASELINE_LOCK_KEY });
-  if (lock?.ownerId !== ownerId) {
+    .findOne({ _id: MEMBERSHIP_BASELINE_LOCK_KEY }, { session });
+  if (
+    lock?.ownerId !== ownerId ||
+    lock?.protocolVersion !== MEMBERSHIP_BASELINE_LOCK_PROTOCOL_VERSION ||
+    lock?.fencingMechanism !== "mongodb-transaction"
+  ) {
     throw new MembershipBaselineLockLostError();
   }
   return true;
 };
 
-export const releaseMembershipBaselineLock = async (db, { ownerId }) => {
+export const releaseMembershipBaselineLock = async (
+  db,
+  { ownerId, session },
+) => {
   const result = await db.collection(MEMBERSHIP_BASELINE_LOCK_COLLECTION)
-    .deleteOne({ _id: MEMBERSHIP_BASELINE_LOCK_KEY, ownerId });
+    .deleteOne({
+      _id: MEMBERSHIP_BASELINE_LOCK_KEY,
+      ownerId,
+      protocolVersion: MEMBERSHIP_BASELINE_LOCK_PROTOCOL_VERSION,
+    }, { session });
   return result.deletedCount === 1;
 };
 
-export const readMembershipBaselineSource = async (db) => {
+export const readMembershipBaselineMetadata = async (db) => {
   const observedCollections = (await db.listCollections({}, { nameOnly: true }).toArray())
     .map((collection) => collection.name)
     .sort();
   const has = (name) => observedCollections.includes(name);
 
-  const [businesses, users, memberships, indexes] = await Promise.all([
+  const indexes = has("memberships")
+    ? await db.collection("memberships").listIndexes().toArray()
+    : [];
+  return { observedCollections, indexes };
+};
+
+export const readMembershipBaselineSource = async (
+  db,
+  { session, metadata } = {},
+) => {
+  const observedMetadata = metadata ?? await readMembershipBaselineMetadata(db);
+  const { observedCollections, indexes } = observedMetadata;
+  const has = (name) => observedCollections.includes(name);
+
+  const [businesses, users, memberships] = await Promise.all([
     has("businesses")
-      ? db.collection("businesses").find({}).toArray()
+      ? db.collection("businesses").find({}, { session }).toArray()
       : [],
     has("users")
-      ? db.collection("users").find({}).toArray()
+      ? db.collection("users").find({}, { session }).toArray()
       : [],
     has("memberships")
-      ? db.collection("memberships").find({}).toArray()
-      : [],
-    has("memberships")
-      ? db.collection("memberships").listIndexes().toArray()
+      ? db.collection("memberships").find({}, { session }).toArray()
       : [],
   ]);
 
@@ -628,23 +701,33 @@ export const readMembershipBaselineSource = async (db) => {
 export const ensureCollectionsAndMembershipIndex = async (
   db,
   source,
-  { assertOwnership = async () => {} } = {},
+  {
+    assertOwnership = async () => {},
+    mutationCheckpoint = async () => {},
+    session,
+  } = {},
 ) => {
   const observed = new Set(source.observedCollections);
   for (const collection of MEMBERSHIP_BASELINE_COLLECTIONS) {
     if (!observed.has(collection)) {
       await assertOwnership();
-      await db.createCollection(collection);
+      await db.createCollection(collection, { session });
+      await mutationCheckpoint(`collection:${collection}`);
     }
   }
 
-  const indexes = await db.collection("memberships").listIndexes().toArray();
-  if (!indexes.some(isExactMembershipUniqueIndex)) {
+  if (!source.indexes.some(isExactMembershipUniqueIndex)) {
+    if (observed.has("memberships")) {
+      throw new Error(
+        "Bootstrap bloqueado: el índice faltante no puede crearse transaccionalmente sobre una colección existente",
+      );
+    }
     await assertOwnership();
     await db.collection("memberships").createIndex(
       { user: 1, business: 1 },
-      { unique: true, name: "user_1_business_1" },
+      { unique: true, name: "user_1_business_1", session },
     );
+    await mutationCheckpoint("index:memberships");
   }
 };
 
@@ -660,7 +743,11 @@ export const createBaselineDocuments = async (
   db,
   manifest,
   passwordHasher,
-  { assertOwnership = async () => {} } = {},
+  {
+    assertOwnership = async () => {},
+    mutationCheckpoint = async () => {},
+    session,
+  } = {},
 ) => {
   const now = new Date();
   const businessIds = new Map(
@@ -717,17 +804,62 @@ export const createBaselineDocuments = async (
   }));
 
   await assertOwnership();
-  await db.collection("businesses").insertMany(businesses, { ordered: true });
+  await db.collection("businesses").insertMany(
+    businesses,
+    { ordered: true, session },
+  );
+  await mutationCheckpoint("documents:businesses");
   await assertOwnership();
-  await db.collection("users").insertMany(users, { ordered: true });
+  await db.collection("users").insertMany(users, { ordered: true, session });
+  await mutationCheckpoint("documents:users");
   await assertOwnership();
-  await db.collection("memberships").insertMany(memberships, { ordered: true });
+  await db.collection("memberships").insertMany(
+    memberships,
+    { ordered: true, session },
+  );
+  await mutationCheckpoint("documents:memberships");
 };
 
 const openIsolatedMongooseConnection = async (mongoUri, options) => {
   const isolatedConnection = mongoose.createConnection(mongoUri, options);
   await isolatedConnection.asPromise();
   return isolatedConnection;
+};
+
+export const runMembershipBaselineTransaction = async (
+  connection,
+  callback,
+) => {
+  const session = await connection.startSession();
+  let commitStarted = false;
+  try {
+    session.startTransaction({
+      readConcern: { level: "local" },
+      writeConcern: { w: "majority" },
+      readPreference: "primary",
+      maxCommitTimeMS: MEMBERSHIP_BASELINE_MAX_COMMIT_TIME_MS,
+    });
+    const result = await callback(session);
+    commitStarted = true;
+    await session.commitTransaction();
+    return result;
+  } catch (error) {
+    if (commitStarted) throw new MembershipBaselineUnknownResultError();
+    if (session.inTransaction()) {
+      try {
+        await session.abortTransaction();
+      } catch {
+        throw new MembershipBaselineUnknownResultError();
+      }
+    }
+    throw error;
+  } finally {
+    try {
+      await session.endSession();
+    } catch {
+      throw new MembershipBaselineUnknownResultError();
+    }
+  }
 };
 
 export const runMembershipBaselineBootstrap = async ({
@@ -745,10 +877,15 @@ export const runMembershipBaselineBootstrap = async ({
   acquireLock = acquireMembershipBaselineLock,
   assertLockOwner = assertMembershipBaselineLockOwnership,
   releaseLock = releaseMembershipBaselineLock,
+  assertTransactionSupport = assertMembershipBaselineTransactionSupport,
+  ensureLockCollection = ensureMembershipBaselineLockCollection,
+  runTransaction = runMembershipBaselineTransaction,
   ownerIdFactory = randomUUID,
+  readMetadata = readMembershipBaselineMetadata,
   readSource = readMembershipBaselineSource,
   ensureBaselineStorage = ensureCollectionsAndMembershipIndex,
   createDocuments = createBaselineDocuments,
+  mutationCheckpoint = async () => {},
 }) => {
   const validatedOptions = validateMembershipBaselineOptions(
     { ...options },
@@ -789,6 +926,8 @@ export const runMembershipBaselineBootstrap = async ({
       throw new Error("La base conectada no coincide con la base confirmada");
     }
 
+    await assertTransactionSupport(activeConnection.db);
+
     if (validatedOptions.mode === "plan") {
       const source = await readSource(activeConnection.db);
       const plan = await buildVerifiedMembershipBaselinePlan(
@@ -799,40 +938,52 @@ export const runMembershipBaselineBootstrap = async ({
       return { plan, applied: false, exitCode: plan.canApply ? 0 : 2 };
     }
 
+    await ensureLockCollection(activeConnection.db);
+
     const ownerId = ownerIdFactory();
-    let lockAcquired = false;
-    try {
-      await acquireLock(activeConnection.db, { ownerId });
-      lockAcquired = true;
-
-      const assertOwnership = () =>
-        assertLockOwner(activeConnection.db, { ownerId });
-      await assertOwnership();
-
-      const source = await readSource(activeConnection.db);
-      await assertOwnership();
-      const plan = await buildVerifiedMembershipBaselinePlan(
-        source,
-        manifest,
-        passwordVerifier,
-      );
-      if (!plan.canApply) {
-        throw new Error(
-          "Bootstrap bloqueado: la base está parcialmente inicializada o contiene contradicciones",
-        );
-      }
-      if (plan.idempotentNoop) {
-        return { plan, applied: false, exitCode: 0 };
-      }
-
+    return await runTransaction(activeConnection, async (session) => {
+      let lockAcquired = false;
       try {
+        await acquireLock(activeConnection.db, { ownerId, session });
+        lockAcquired = true;
+
+        const assertOwnership = () =>
+          assertLockOwner(activeConnection.db, { ownerId, session });
+        await assertOwnership();
+
+        const metadata = await readMetadata(activeConnection.db);
+        await assertOwnership();
+        const source = await readSource(activeConnection.db, {
+          metadata,
+          session,
+        });
+        await assertOwnership();
+        const plan = await buildVerifiedMembershipBaselinePlan(
+          source,
+          manifest,
+          passwordVerifier,
+        );
+        if (!plan.canApply) {
+          throw new Error(
+            "Bootstrap bloqueado: la base está parcialmente inicializada o contiene contradicciones",
+          );
+        }
+        if (plan.idempotentNoop) {
+          return { plan, applied: false, exitCode: 0 };
+        }
+
         mutationStarted = true;
+        await mutationCheckpoint("before:functional-mutations");
         await ensureBaselineStorage(activeConnection.db, source, {
           assertOwnership,
+          mutationCheckpoint,
+          session,
         });
         if (plan.state === "empty") {
           await createDocuments(activeConnection.db, manifest, passwordHasher, {
             assertOwnership,
+            mutationCheckpoint,
+            session,
           });
         }
 
@@ -840,7 +991,24 @@ export const runMembershipBaselineBootstrap = async ({
 
         let verification;
         try {
-          const verificationSource = await readSource(activeConnection.db);
+          const createdIndex = source.indexes.some(isExactMembershipUniqueIndex)
+            ? []
+            : [{
+              name: "user_1_business_1",
+              key: { user: 1, business: 1 },
+              unique: true,
+            }];
+          const verificationMetadata = {
+            observedCollections: [...new Set([
+              ...metadata.observedCollections,
+              ...MEMBERSHIP_BASELINE_COLLECTIONS,
+            ])].sort(),
+            indexes: [...source.indexes, ...createdIndex],
+          };
+          const verificationSource = await readSource(activeConnection.db, {
+            metadata: verificationMetadata,
+            session,
+          });
           verification = await buildVerifiedMembershipBaselinePlan(
             verificationSource,
             manifest,
@@ -857,26 +1025,18 @@ export const runMembershipBaselineBootstrap = async ({
         }
 
         return { plan: verification, applied: true, exitCode: 0 };
-      } catch (error) {
-        if (
-          error instanceof MembershipBaselineUnknownResultError ||
-          error.message?.includes("estado parcial confirmado")
-        ) {
-          throw error;
-        }
-        if (mutationStarted) throw new MembershipBaselineUnknownResultError();
-        throw error;
-      }
-    } finally {
-      if (lockAcquired) {
-        try {
-          const released = await releaseLock(activeConnection.db, { ownerId });
-          if (released !== true) throw new Error("lock ownership changed");
-        } catch {
-          throw new MembershipBaselineUnknownResultError();
+      } finally {
+        if (lockAcquired) {
+          const released = await releaseLock(activeConnection.db, {
+            ownerId,
+            session,
+          });
+          if (released !== true) {
+            throw new MembershipBaselineUnknownResultError();
+          }
         }
       }
-    }
+    });
   } finally {
     if (typeof closeConnection === "function") {
       try {

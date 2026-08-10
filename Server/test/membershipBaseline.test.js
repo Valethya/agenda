@@ -6,8 +6,10 @@ import { mongo } from "mongoose";
 import { TEST_DB_URI } from "./setup.js";
 import {
   acquireMembershipBaselineLock,
+  ensureMembershipBaselineLockCollection,
   MEMBERSHIP_BASELINE_CONFIRMATION,
   MEMBERSHIP_BASELINE_LOCK_COLLECTION,
+  readMembershipBaselineMetadata,
   readMembershipBaselineSource,
   runMembershipBaselineBootstrap,
 } from "../scripts/bootstrap/membership-baseline.js";
@@ -70,6 +72,20 @@ const cleanAuthorityCollections = () =>
     ]) {
       if ((await db.listCollections({ name: collection }).toArray()).length > 0) {
         await db.collection(collection).deleteMany({});
+      }
+    }
+  });
+
+const dropAuthorityCollections = () =>
+  withClient(async (db) => {
+    for (const collection of [
+      MEMBERSHIP_BASELINE_LOCK_COLLECTION,
+      "memberships",
+      "users",
+      "businesses",
+    ]) {
+      if ((await db.listCollections({ name: collection }).toArray()).length > 0) {
+        await db.collection(collection).drop();
       }
     }
   });
@@ -260,50 +276,55 @@ test("dos apply concurrentes serializan la baseline y una tercera ejecución es 
   await cleanAuthorityCollections();
 });
 
-test("un lock vencido no admite un segundo escritor mientras el propietario está suspendido", async () => {
-  await cleanAuthorityCollections();
-  let releaseFirstRead;
-  let firstReadCompleted;
-  const firstReadGate = new Promise((resolve) => { firstReadCompleted = resolve; });
-  const resumeFirst = new Promise((resolve) => { releaseFirstRead = resolve; });
-  let firstReads = 0;
-  const shortLock = (db, lockOptions) => acquireMembershipBaselineLock(db, {
-    ...lockOptions,
-    ttlMs: 20,
-  });
+test("una transacción expirada se recupera y el propietario anterior queda cercado", async () => {
+  await dropAuthorityCollections();
+  const client = new mongo.MongoClient(BASELINE_TEST_URI);
+  await client.connect();
+  const db = client.db(database);
+  const admin = client.db("admin");
+  const session = client.startSession();
+  try {
+    await admin.command({ setParameter: 1, transactionLifetimeLimitSeconds: 1 });
+    await ensureMembershipBaselineLockCollection(db);
+    session.startTransaction({
+      readConcern: { level: "local" },
+      writeConcern: { w: "majority" },
+    });
+    await acquireMembershipBaselineLock(db, {
+      ownerId: "suspended-owner",
+      session,
+    });
+    const metadata = await readMembershipBaselineMetadata(db);
+    const source = await readMembershipBaselineSource(db, { metadata, session });
+    assert.equal(source.businesses.length, 0);
+    assert.equal(source.users.length, 0);
+    assert.equal(source.memberships.length, 0);
 
-  const firstApply = runMembershipBaselineBootstrap({
-    mongoUri: BASELINE_TEST_URI,
-    options: options("apply"),
-    environment,
-    acquireLock: shortLock,
-    readSource: async (db) => {
-      const source = await readMembershipBaselineSource(db);
-      firstReads += 1;
-      if (firstReads === 1) {
-        firstReadCompleted();
-        await resumeFirst;
+    await new Promise((resolve) => setTimeout(resolve, 1_500));
+
+    let recovered;
+    const recoveryDeadline = Date.now() + 75_000;
+    while (!recovered && Date.now() < recoveryDeadline) {
+      try {
+        recovered = await runMembershipBaselineBootstrap({
+          mongoUri: BASELINE_TEST_URI,
+          options: options("apply"),
+          environment,
+        });
+      } catch (error) {
+        if (!/otra ejecución apply activa/u.test(error.message)) throw error;
+        await new Promise((resolve) => setTimeout(resolve, 500));
       }
-      return source;
-    },
-  });
+    }
+    assert.equal(recovered?.applied, true);
 
-  await firstReadGate;
-  await new Promise((resolve) => setTimeout(resolve, 40));
-  await assert.rejects(
-    runMembershipBaselineBootstrap({
-      mongoUri: BASELINE_TEST_URI,
-      options: options("apply"),
-      environment,
-      acquireLock: shortLock,
-    }),
-    /otra ejecución apply activa/u,
-  );
-  releaseFirstRead();
-  const result = await firstApply;
-  assert.equal(result.applied, true);
+    await assert.rejects(
+      db.collection("businesses").insertOne(
+        { marker: "must-not-commit" },
+        { session },
+      ),
+    );
 
-  await withClient(async (db) => {
     assert.equal(await db.collection("businesses").countDocuments({}), 2);
     assert.equal(await db.collection("users").countDocuments({}), 2);
     assert.equal(await db.collection("memberships").countDocuments({}), 2);
@@ -311,8 +332,56 @@ test("un lock vencido no admite un segundo escritor mientras el propietario est�
       await db.collection(MEMBERSHIP_BASELINE_LOCK_COLLECTION).countDocuments({}),
       0,
     );
-  });
-  await cleanAuthorityCollections();
+  } finally {
+    try {
+      if (session.inTransaction()) await session.abortTransaction();
+    } catch {}
+    await session.endSession();
+    await admin.command({ setParameter: 1, transactionLifetimeLimitSeconds: 60 });
+    await client.close();
+    await dropAuthorityCollections();
+  }
+});
+
+test("cada fallo controlado revierte colecciones, índice y documentos", async () => {
+  const stages = [
+    "before:functional-mutations",
+    "collection:businesses",
+    "collection:memberships",
+    "collection:users",
+    "index:memberships",
+    "documents:businesses",
+    "documents:users",
+    "documents:memberships",
+  ];
+
+  for (const stage of stages) {
+    await dropAuthorityCollections();
+    await assert.rejects(
+      runMembershipBaselineBootstrap({
+        mongoUri: BASELINE_TEST_URI,
+        options: options("apply"),
+        environment,
+        mutationCheckpoint: async (observedStage) => {
+          if (observedStage === stage) throw new Error(`controlled:${stage}`);
+        },
+      }),
+      new RegExp(`controlled:${stage}`, "u"),
+    );
+
+    await withClient(async (db) => {
+      const collections = (await db.listCollections({}, { nameOnly: true }).toArray())
+        .map(({ name }) => name);
+      for (const collection of ["businesses", "users", "memberships"]) {
+        assert.equal(collections.includes(collection), false);
+      }
+      assert.equal(
+        await db.collection(MEMBERSHIP_BASELINE_LOCK_COLLECTION).countDocuments({}),
+        0,
+      );
+    });
+  }
+  await dropAuthorityCollections();
 });
 
 test("credenciales diferentes bloquean plan y apply sin rotar hashes ni escribir", async () => {

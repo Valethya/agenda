@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { mongo } from "mongoose";
 import {
   acquireMembershipBaselineLock,
+  assertMembershipBaselineTransactionSupport,
   assertMembershipBaselineLockOwnership,
   buildMembershipBaselineManifest,
   buildMembershipBaselineManifestFromOwners,
@@ -13,9 +14,11 @@ import {
   MEMBERSHIP_BASELINE_CONFIRMATION,
   MEMBERSHIP_BASELINE_LOCK_COLLECTION,
   MEMBERSHIP_BASELINE_LOCK_KEY,
+  MEMBERSHIP_BASELINE_LOCK_PROTOCOL_VERSION,
   parseMembershipBaselineArgs,
   releaseMembershipBaselineLock,
   runMembershipBaselineBootstrap,
+  runMembershipBaselineTransaction,
   validateMembershipBaselineOptions,
   validateMembershipBaselineRuntime,
   verifyMembershipBaselinePasswords,
@@ -38,6 +41,12 @@ const exactMembershipIndex = () => ({
 });
 
 const VALID_PASSWORD_HASH = `$2b$10$${"a".repeat(53)}`;
+
+const transactionalTestDependencies = {
+  assertTransactionSupport: async () => true,
+  ensureLockCollection: async () => false,
+  runTransaction: async (_connection, callback) => callback({ test: true }),
+};
 
 const readySource = (manifest) => {
   const businessIds = new Map(
@@ -355,6 +364,24 @@ describe("membership baseline preflight", () => {
     assert.equal(plan.canApply, true);
   });
 
+  it("bloquea un índice faltante sobre una colección existente", () => {
+    const manifest = buildMembershipBaselineManifest(manifestEnvironment());
+    const plan = buildMembershipBaselinePlan(
+      {
+        observedCollections: ["businesses", "memberships", "users"],
+        businesses: [],
+        users: [],
+        memberships: [],
+        indexes: [],
+      },
+      manifest,
+    );
+
+    assert.equal(plan.state, "partial");
+    assert.equal(plan.canApply, false);
+    assert.ok(plan.findings.includes("transactionalMembershipIndexMissing"));
+  });
+
   it("permite la colección técnica de lock vacía sin ocultar colecciones ajenas", () => {
     const manifest = buildMembershipBaselineManifest(manifestEnvironment());
     const technicalOnly = buildMembershipBaselinePlan(
@@ -573,6 +600,7 @@ describe("membership baseline controlled mutation failures", () => {
     let guards = 0;
     await ensureCollectionsAndMembershipIndex(db, {
       observedCollections: [],
+      indexes: [],
     }, {
       assertOwnership: async () => { guards += 1; },
     });
@@ -597,20 +625,24 @@ describe("membership baseline controlled mutation failures", () => {
         }),
       };
       await assert.rejects(
-        ensureCollectionsAndMembershipIndex(db, { observedCollections: [] }),
+        ensureCollectionsAndMembershipIndex(db, {
+          observedCollections: [],
+          indexes: [],
+        }),
         new RegExp(`collection:${failingCollection}`, "u"),
       );
     }
 
     const indexDb = {
+      createCollection: async () => {},
       collection: () => ({
-        listIndexes: () => ({ toArray: async () => [] }),
         createIndex: async () => { throw new Error("index:create"); },
       }),
     };
     await assert.rejects(
       ensureCollectionsAndMembershipIndex(indexDb, {
-        observedCollections: ["businesses", "memberships", "users"],
+        observedCollections: [],
+        indexes: [],
       }),
       /index:create/u,
     );
@@ -663,15 +695,18 @@ describe("membership baseline controlled mutation failures", () => {
 });
 
 describe("membership baseline apply lock", () => {
-  it("adquiere un lock inexistente con clave estable y expiración", async () => {
+  it("adquiere el fence dentro de la sesión transaccional", async () => {
     let call;
+    let insertOptions;
     const ownerId = "owner-one";
+    const session = { id: "session-one" };
     const db = {
       collection(name) {
         assert.equal(name, MEMBERSHIP_BASELINE_LOCK_COLLECTION);
         return {
-          async insertOne(document) {
+          async insertOne(document, options) {
             call = document;
+            insertOptions = options;
             return { acknowledged: true };
           },
         };
@@ -681,17 +716,19 @@ describe("membership baseline apply lock", () => {
     const lock = await acquireMembershipBaselineLock(db, {
       ownerId,
       now,
-      ttlMs: 60_000,
+      session,
     });
 
     assert.equal(call._id, MEMBERSHIP_BASELINE_LOCK_KEY);
     assert.equal(call.ownerId, ownerId);
-    assert.equal(call.expiresAt, "2026-08-01T00:01:00.000Z");
-    assert.equal(call.recoveryPolicy, "manual-after-owner-termination");
-    assert.equal(lock.expiresAt.toISOString(), "2026-08-01T00:01:00.000Z");
+    assert.equal(call.protocolVersion, MEMBERSHIP_BASELINE_LOCK_PROTOCOL_VERSION);
+    assert.equal(call.fencingMechanism, "mongodb-transaction");
+    assert.equal(lock.acquiredAt.toISOString(), now.toISOString());
+    assert.equal(lock.ownerId, ownerId);
+    assert.equal(insertOptions.session, session);
   });
 
-  it("rechaza locks ajenos incluso vencidos; nunca los recupera automáticamente", async () => {
+  it("rechaza un fence ajeno o un conflicto transaccional", async () => {
     const activeDb = {
       collection: () => ({
         insertOne: async () => {
@@ -709,7 +746,6 @@ describe("membership baseline apply lock", () => {
     await assert.rejects(
       acquireMembershipBaselineLock(activeDb, {
         ownerId: "new-owner",
-        now: new Date("2030-08-01T01:00:00.000Z"),
       }),
       /otra ejecución apply activa/,
     );
@@ -718,7 +754,11 @@ describe("membership baseline apply lock", () => {
   it("comprueba la propiedad del lock antes de permitir una mutación", async () => {
     const dbFor = (ownerId) => ({
       collection: () => ({
-        findOne: async () => ({ ownerId }),
+        findOne: async () => ({
+          ownerId,
+          protocolVersion: MEMBERSHIP_BASELINE_LOCK_PROTOCOL_VERSION,
+          fencingMechanism: "mongodb-transaction",
+        }),
       }),
     });
     assert.equal(
@@ -758,9 +798,72 @@ describe("membership baseline apply lock", () => {
       false,
     );
     assert.deepEqual(filters, [
-      { _id: MEMBERSHIP_BASELINE_LOCK_KEY, ownerId: "owner-one" },
-      { _id: MEMBERSHIP_BASELINE_LOCK_KEY, ownerId: "foreign-owner" },
+      {
+        _id: MEMBERSHIP_BASELINE_LOCK_KEY,
+        ownerId: "owner-one",
+        protocolVersion: MEMBERSHIP_BASELINE_LOCK_PROTOCOL_VERSION,
+      },
+      {
+        _id: MEMBERSHIP_BASELINE_LOCK_KEY,
+        ownerId: "foreign-owner",
+        protocolVersion: MEMBERSHIP_BASELINE_LOCK_PROTOCOL_VERSION,
+      },
     ]);
+  });
+
+  it("rechaza MongoDB standalone antes de abrir una transacción", async () => {
+    const db = {
+      admin: () => ({ command: async () => ({ isWritablePrimary: true }) }),
+    };
+    await assert.rejects(
+      assertMembershipBaselineTransactionSupport(db),
+      /debe admitir transacciones/u,
+    );
+    assert.equal(
+      await assertMembershipBaselineTransactionSupport({
+        admin: () => ({
+          command: async () => ({ isWritablePrimary: true, setName: "rs0" }),
+        }),
+      }),
+      true,
+    );
+  });
+
+  it("aborta una sección crítica fallida y no permite confirmar una transacción perdida", async () => {
+    const events = [];
+    let active = false;
+    const session = {
+      startTransaction: () => { active = true; events.push("start"); },
+      inTransaction: () => active,
+      abortTransaction: async () => { active = false; events.push("abort"); },
+      commitTransaction: async () => { events.push("commit"); },
+      endSession: async () => { events.push("end"); },
+    };
+    await assert.rejects(
+      runMembershipBaselineTransaction(
+        { startSession: async () => session },
+        async () => {
+          events.push("work");
+          throw new Error("lost fence");
+        },
+      ),
+      /lost fence/u,
+    );
+    assert.deepEqual(events, ["start", "work", "abort", "end"]);
+
+    const unknownCommitSession = {
+      ...session,
+      startTransaction: () => { active = true; },
+      commitTransaction: async () => { throw new Error("network during commit"); },
+      endSession: async () => {},
+    };
+    await assert.rejects(
+      runMembershipBaselineTransaction(
+        { startSession: async () => unknownCommitSession },
+        async () => "result",
+      ),
+      /ejecute --mode=plan antes de reintentar/u,
+    );
   });
 
   it("plan no adquiere lock y apply lo libera en finally ante error", async () => {
@@ -776,12 +879,17 @@ describe("membership baseline apply lock", () => {
       }),
     };
     const common = {
+      ...transactionalTestDependencies,
       mongoUri: uri,
       environment: manifestEnvironment(),
       processEnvironment: processEnvironment("development"),
       connect: async () => {},
       disconnect: async () => {},
       connection: { db },
+      readMetadata: async () => ({
+        observedCollections: [...observed],
+        indexes: [],
+      }),
       acquireLock: async () => {
         acquired += 1;
       },
@@ -831,6 +939,7 @@ describe("membership baseline apply lock", () => {
 
     await assert.rejects(
       runMembershipBaselineBootstrap({
+        ...transactionalTestDependencies,
         mongoUri: uri,
         options: {
           mode: "apply",
@@ -844,6 +953,10 @@ describe("membership baseline apply lock", () => {
         connect: async () => {},
         disconnect: async () => {},
         connection: { db: { databaseName: "agenda_dev" } },
+        readMetadata: async () => ({
+          observedCollections: ["businesses", "memberships", "users"],
+          indexes: [exactMembershipIndex()],
+        }),
         acquireLock: async () => {},
         assertLockOwner: async () => true,
         releaseLock: async () => {
@@ -874,6 +987,7 @@ describe("membership baseline apply lock", () => {
 
     await assert.rejects(
       runMembershipBaselineBootstrap({
+        ...transactionalTestDependencies,
         mongoUri: uri,
         options: {
           mode: "apply",
@@ -887,6 +1001,7 @@ describe("membership baseline apply lock", () => {
         connect: async () => {},
         disconnect: async () => {},
         connection: { db: { databaseName: "agenda_dev" } },
+        readMetadata: async () => ({ observedCollections: [], indexes: [] }),
         acquireLock: async () => {},
         assertLockOwner: async () => true,
         releaseLock: async () => {
@@ -928,6 +1043,7 @@ describe("membership baseline apply lock", () => {
       indexes: [],
     };
     const base = {
+      ...transactionalTestDependencies,
       mongoUri: uri,
       options: {
         mode: "apply",
@@ -940,6 +1056,7 @@ describe("membership baseline apply lock", () => {
       processEnvironment: processEnvironment("development"),
       connect: async () => {},
       connection: { db: { databaseName: "agenda_dev" } },
+      readMetadata: async () => ({ observedCollections: [], indexes: [] }),
       acquireLock: async () => {},
       assertLockOwner: async () => true,
       readSource: async () => emptySource,
@@ -958,7 +1075,7 @@ describe("membership baseline apply lock", () => {
           ensureBaselineStorage: async () => { throw new Error(stage); },
           createDocuments: async () => assert.fail("no debe insertar"),
         }),
-        /ejecute --mode=plan antes de reintentar/u,
+        new RegExp(stage, "u"),
       );
     }
 
