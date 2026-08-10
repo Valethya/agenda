@@ -131,6 +131,12 @@ const exactKeys = (value, expected, label) => {
   }
 };
 
+const PLAN_TOKEN_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
+
+const isPlanToken = (value) =>
+  typeof value === "string" && PLAN_TOKEN_PATTERN.test(value);
+
 const normalizeOperation = (payload, { apply }) => {
   exactKeys(
     payload,
@@ -174,12 +180,7 @@ const normalizeOperation = (payload, { apply }) => {
   ]));
 
   if (apply) {
-    if (
-      typeof payload.planToken !== "string" ||
-      !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(
-        payload.planToken,
-      )
-    ) {
+    if (!isPlanToken(payload.planToken)) {
       throw publicError(
         409,
         "PLAN_REQUIRED",
@@ -232,8 +233,43 @@ const equalDigest = (left, right) =>
   left.length === right.length &&
   timingSafeEqual(left, right);
 
+const parseRequestTarget = (rawTarget) => {
+  if (
+    typeof rawTarget !== "string" ||
+    !rawTarget.startsWith("/") ||
+    rawTarget.startsWith("//") ||
+    rawTarget.includes("\\") ||
+    /[\u0000-\u001f\u007f]/u.test(rawTarget)
+  ) {
+    throw publicError(
+      400,
+      "INVALID_REQUEST_TARGET",
+      "El destino de la solicitud no es válido",
+    );
+  }
+
+  try {
+    const parsed = new URL(
+      rawTarget,
+      `http://${MEMBERSHIP_BASELINE_UI_HOST}`,
+    );
+    if (parsed.search || parsed.hash) {
+      throw new Error("ambiguous request target");
+    }
+    return parsed;
+  } catch {
+    throw publicError(
+      400,
+      "INVALID_REQUEST_TARGET",
+      "El destino de la solicitud no es válido",
+    );
+  }
+};
+
 const parseStrictJson = (source) => {
   let index = 0;
+  let duplicateKeys = false;
+  const topLevelPlanTokens = [];
   const whitespace = () => {
     while (/\s/u.test(source[index] ?? "")) index += 1;
   };
@@ -256,12 +292,12 @@ const parseStrictJson = (source) => {
     }
     throw new Error("unterminated string");
   };
-  const parseValue = () => {
+  const parseValue = (depth = 0) => {
     whitespace();
     const character = source[index];
     if (character === '"') return parseString();
-    if (character === "{") return parseObject();
-    if (character === "[") return parseArray();
+    if (character === "{") return parseObject(depth);
+    if (character === "[") return parseArray(depth);
     for (const [literal, value] of [["true", true], ["false", false], ["null", null]]) {
       if (source.startsWith(literal, index)) {
         index += literal.length;
@@ -275,10 +311,10 @@ const parseStrictJson = (source) => {
     }
     throw new Error("invalid value");
   };
-  const parseObject = () => {
+  const parseObject = (depth) => {
     index += 1;
     whitespace();
-    const result = {};
+    const result = Object.create(null);
     const keys = new Set();
     if (source[index] === "}") {
       index += 1;
@@ -288,12 +324,16 @@ const parseStrictJson = (source) => {
       whitespace();
       if (source[index] !== '"') throw new Error("invalid object key");
       const key = parseString();
-      if (keys.has(key)) throw new Error("duplicate object key");
+      if (keys.has(key)) duplicateKeys = true;
       keys.add(key);
       whitespace();
       if (source[index] !== ":") throw new Error("missing colon");
       index += 1;
-      result[key] = parseValue();
+      const value = parseValue(depth + 1);
+      if (depth === 0 && key === "planToken" && typeof value === "string") {
+        topLevelPlanTokens.push(value);
+      }
+      result[key] = value;
       whitespace();
       if (source[index] === "}") {
         index += 1;
@@ -304,7 +344,7 @@ const parseStrictJson = (source) => {
     }
     throw new Error("unterminated object");
   };
-  const parseArray = () => {
+  const parseArray = (depth) => {
     index += 1;
     whitespace();
     const result = [];
@@ -313,7 +353,7 @@ const parseStrictJson = (source) => {
       return result;
     }
     while (index < source.length) {
-      result.push(parseValue());
+      result.push(parseValue(depth + 1));
       whitespace();
       if (source[index] === "]") {
         index += 1;
@@ -328,7 +368,7 @@ const parseStrictJson = (source) => {
   const value = parseValue();
   whitespace();
   if (index !== source.length) throw new Error("trailing data");
-  return value;
+  return { value, duplicateKeys, topLevelPlanTokens };
 };
 
 const readJson = async (request) => {
@@ -569,78 +609,80 @@ export const createMembershipBaselineUiServer = ({
   const approvals = new Map();
   let planSequence = 0;
 
-  const server = createServer(async (request, response) => {
-    const localPort = request.socket.localPort;
-    const expectedHost = `${MEMBERSHIP_BASELINE_UI_HOST}:${localPort}`;
-    const expectedOrigin = `http://${expectedHost}`;
-    const hasForwardingHeader = ALLOWED_FORWARDING_HEADERS.some(
-      (header) => request.headers[header] !== undefined,
-    );
-    if (
-      !isAllowedMembershipBaselineUiSocket(request.socket) ||
-      request.headers.host !== expectedHost ||
-      hasForwardingHeader
-    ) {
-      writePublicError(
-        response,
-        publicError(421, "LOCAL_BOUNDARY_REJECTED", "Conexión local no permitida"),
-      );
-      return;
-    }
-    if (
-      request.headers.origin !== undefined &&
-      request.headers.origin !== expectedOrigin
-    ) {
-      writePublicError(
-        response,
-        publicError(403, "ORIGIN_REJECTED", "Origen local no autorizado"),
-      );
-      return;
-    }
-
-    const requestUrl = new URL(request.url ?? "/", `http://${MEMBERSHIP_BASELINE_UI_HOST}`);
-    if (request.method === "GET" && requestUrl.pathname === "/") {
-      response.writeHead(200, HTML_HEADERS);
-      response.end(renderPage({ csrfToken, ...validated }));
-      return;
-    }
-
-    const allowedMethod = requestUrl.pathname === "/" ? "GET" :
-      ["/api/plan", "/api/apply"].includes(requestUrl.pathname) ? "POST" : null;
-    if (allowedMethod && request.method !== allowedMethod) {
-      response.setHeader("allow", allowedMethod);
-      writePublicError(
-        response,
-        publicError(405, "METHOD_NOT_ALLOWED", "Método no permitido"),
-      );
-      return;
-    }
-    if (!allowedMethod) {
-      writePublicError(
-        response,
-        publicError(404, "NOT_FOUND", "Ruta no disponible"),
-      );
-      return;
-    }
-    if (request.headers["x-bootstrap-csrf"] !== csrfToken) {
-      writePublicError(
-        response,
-        publicError(403, "CSRF_REJECTED", "Solicitud local no autorizada"),
-      );
-      return;
-    }
-    if (!isAllowedJsonContentType(request.headers["content-type"])) {
-      writePublicError(
-        response,
-        publicError(415, "UNSUPPORTED_MEDIA_TYPE", "Se requiere application/json válido"),
-      );
-      return;
-    }
-
+  const handleRequest = async (request, response) => {
     let operation;
     try {
-      const payload = await readJson(request);
+      const localPort = request.socket.localPort;
+      const expectedHost = `${MEMBERSHIP_BASELINE_UI_HOST}:${localPort}`;
+      const expectedOrigin = `http://${expectedHost}`;
+      const hasForwardingHeader = ALLOWED_FORWARDING_HEADERS.some(
+        (header) => request.headers[header] !== undefined,
+      );
+      if (
+        !isAllowedMembershipBaselineUiSocket(request.socket) ||
+        request.headers.host !== expectedHost ||
+        hasForwardingHeader
+      ) {
+        throw publicError(
+          421,
+          "LOCAL_BOUNDARY_REJECTED",
+          "Conexión local no permitida",
+        );
+      }
+      if (
+        request.headers.origin !== undefined &&
+        request.headers.origin !== expectedOrigin
+      ) {
+        throw publicError(
+          403,
+          "ORIGIN_REJECTED",
+          "Origen local no autorizado",
+        );
+      }
+
+      const requestUrl = parseRequestTarget(request.url);
+      if (request.method === "GET" && requestUrl.pathname === "/") {
+        response.writeHead(200, HTML_HEADERS);
+        response.end(renderPage({ csrfToken, ...validated }));
+        return;
+      }
+
+      const allowedMethod = requestUrl.pathname === "/" ? "GET" :
+        ["/api/plan", "/api/apply"].includes(requestUrl.pathname) ? "POST" : null;
+      if (allowedMethod && request.method !== allowedMethod) {
+        response.setHeader("allow", allowedMethod);
+        throw publicError(405, "METHOD_NOT_ALLOWED", "Método no permitido");
+      }
+      if (!allowedMethod) {
+        throw publicError(404, "NOT_FOUND", "Ruta no disponible");
+      }
+      if (request.headers["x-bootstrap-csrf"] !== csrfToken) {
+        throw publicError(403, "CSRF_REJECTED", "Solicitud local no autorizada");
+      }
+      if (!isAllowedJsonContentType(request.headers["content-type"])) {
+        throw publicError(
+          415,
+          "UNSUPPORTED_MEDIA_TYPE",
+          "Se requiere application/json válido",
+        );
+      }
+
+      const parsedJson = await readJson(request);
+      const payload = parsedJson.value;
       const apply = requestUrl.pathname === "/api/apply";
+      let approval;
+      if (apply) {
+        for (const candidateToken of parsedJson.topLevelPlanTokens) {
+          if (isPlanToken(candidateToken)) {
+            approval ??= approvals.get(candidateToken);
+            approvals.delete(candidateToken);
+          }
+        }
+      }
+      if (parsedJson.duplicateKeys) {
+        throw publicError(400, "INVALID_JSON", "La solicitud JSON no es válida");
+      }
+
       operation = normalizeOperation(payload, { apply });
       const commonOptions = {
         environment: validated.environment,
@@ -673,8 +715,6 @@ export const createMembershipBaselineUiServer = ({
         return;
       }
 
-      const approval = approvals.get(operation.planToken);
-      approvals.delete(operation.planToken);
       if (
         !approval ||
         approval.expiresAt <= now() ||
@@ -700,10 +740,37 @@ export const createMembershipBaselineUiServer = ({
       });
       writeJson(response, 200, result);
     } catch (error) {
-      writePublicError(response, error);
+      if (!response.headersSent) {
+        writePublicError(response, error);
+      } else {
+        response.destroy();
+      }
     } finally {
       clearSensitiveOperation(operation);
     }
+  };
+
+  const server = createServer((request, response) => {
+    void Promise.resolve(handleRequest(request, response)).catch(() => {
+      try {
+        if (!response.headersSent) {
+          writePublicError(
+            response,
+            publicError(
+              500,
+              "INTERNAL_ERROR",
+              "La solicitud local no pudo completarse",
+            ),
+          );
+        } else {
+          response.destroy();
+        }
+      } catch {
+        try {
+          response.destroy();
+        } catch {}
+      }
+    });
   });
 
   server.requestTimeout = REQUEST_TIMEOUT_MS;

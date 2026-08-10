@@ -1,6 +1,7 @@
 import { afterEach, describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { request as httpRequest } from "node:http";
+import { connect as connectSocket } from "node:net";
 import {
   createMembershipBaselineUiServer,
   isAllowedMembershipBaselineUiSocket,
@@ -99,6 +100,25 @@ const rawPost = (app, path, body, headers = {}) => new Promise((resolve, reject)
   request.end(JSON.stringify(body));
 });
 
+const rawHttp = (app, requestTarget) => new Promise((resolve, reject) => {
+  const { port } = app.address();
+  const socket = connectSocket({ host: "127.0.0.1", port });
+  const chunks = [];
+  socket.setTimeout(2_000, () => socket.destroy(new Error("raw request timeout")));
+  socket.once("connect", () => {
+    socket.write(
+      `GET ${requestTarget} HTTP/1.1\r\n` +
+      `Host: 127.0.0.1:${port}\r\n` +
+      "Connection: close\r\n\r\n",
+    );
+  });
+  socket.on("data", (chunk) => chunks.push(chunk));
+  socket.once("error", reject);
+  socket.once("close", (hadError) => {
+    if (!hadError) resolve(Buffer.concat(chunks).toString("utf8"));
+  });
+});
+
 const plan = async (app, body = requestBody()) => {
   const response = await post(app, "/api/plan", body);
   assert.equal(response.status, 200);
@@ -180,6 +200,35 @@ describe("membership baseline local UI", () => {
     assert.match(html, /Crear propietarios iniciales/u);
     assert.match(html, /No crea trabajadores/u);
     assert.equal(html.includes(mongoUri), false);
+  });
+
+  it("rechaza request-targets malformados o absolutos sin terminar el servidor", async () => {
+    let calls = 0;
+    const processFailures = [];
+    const onUncaught = (error) => processFailures.push(error);
+    const onUnhandled = (error) => processFailures.push(error);
+    process.on("uncaughtException", onUncaught);
+    process.on("unhandledRejection", onUnhandled);
+    const app = await startServer(async () => {
+      calls += 1;
+      return { plan: safePlan(), applied: false, exitCode: 0 };
+    });
+
+    try {
+      const malformed = await rawHttp(app, "http://[");
+      assert.match(malformed, /^HTTP\/1\.1 (?:400|421) /u);
+
+      const absolute = await rawHttp(app, "http://evil.example/");
+      assert.match(absolute, /^HTTP\/1\.1 (?:400|421) /u);
+
+      const healthy = await fetch(app.url);
+      assert.equal(healthy.status, 200);
+      assert.equal(calls, 0);
+      assert.deepEqual(processFailures, []);
+    } finally {
+      process.off("uncaughtException", onUncaught);
+      process.off("unhandledRejection", onUnhandled);
+    }
   });
 
   it("rechaza Host, Origin y cabeceras de proxy sin invocar el bootstrap", async () => {
@@ -301,6 +350,96 @@ describe("membership baseline local UI", () => {
       assert.equal(rejected.status, 409);
     }
     assert.equal(calls.filter(({ options }) => options.mode === "apply").length, 0);
+  });
+
+  it("consume la aprobación antes de validar cualquier apply alterado", async () => {
+    let applyCalls = 0;
+    const app = await startServer(async ({ options }) => {
+      if (options.mode === "apply") applyCalls += 1;
+      return {
+        plan: safePlan(),
+        applied: options.mode === "apply",
+        exitCode: 0,
+      };
+    });
+    const attempts = [
+      (body, token) => ({ ...applyBody(body, token), extra: true }),
+      (body, token) => {
+        const changed = applyBody(structuredClone(body), token);
+        delete changed.owners.dam.lastName;
+        return changed;
+      },
+      (body, token) => ({
+        ...applyBody(body, token),
+        owners: {
+          ...body.owners,
+          atmosfera: { ...body.owners.atmosfera, email: "invalid" },
+        },
+      }),
+      (body, token) => ({
+        ...applyBody(body, token),
+        owners: {
+          ...body.owners,
+          dam: { ...body.owners.dam, password: "short" },
+        },
+      }),
+      (body, token) => ({
+        ...applyBody(body, token),
+        confirmation: "WRONG",
+      }),
+      (body, token) => ({
+        ...applyBody(body, token),
+        owners: {
+          ...body.owners,
+          dam: { ...body.owners.dam, firstName: "Changed" },
+        },
+      }),
+    ];
+
+    for (const alter of attempts) {
+      const body = requestBody();
+      const planned = await plan(app, body);
+      const rejected = await post(
+        app,
+        "/api/apply",
+        alter(body, planned.planToken),
+      );
+      assert.ok(rejected.status >= 400 && rejected.status < 500);
+
+      const retry = await post(
+        app,
+        "/api/apply",
+        applyBody(body, planned.planToken),
+      );
+      assert.equal(retry.status, 409);
+      assert.equal((await retry.json()).error.code, "PLAN_REQUIRED");
+    }
+
+    const duplicateBody = requestBody();
+    const duplicatePlan = await plan(app, duplicateBody);
+    const serialized = JSON.stringify(
+      applyBody(duplicateBody, duplicatePlan.planToken),
+    );
+    const duplicateTokenJson = serialized.replace(
+      `"planToken":"${duplicatePlan.planToken}"`,
+      `"planToken":"${duplicatePlan.planToken}","planToken":"${duplicatePlan.planToken}"`,
+    );
+    const duplicateRejected = await post(
+      app,
+      "/api/apply",
+      duplicateTokenJson,
+      { raw: true },
+    );
+    assert.equal(duplicateRejected.status, 400);
+
+    const duplicateRetry = await post(
+      app,
+      "/api/apply",
+      applyBody(duplicateBody, duplicatePlan.planToken),
+    );
+    assert.equal(duplicateRetry.status, 409);
+    assert.equal((await duplicateRetry.json()).error.code, "PLAN_REQUIRED");
+    assert.equal(applyCalls, 0);
   });
 
   it("canonicaliza orden y correo, pero rechaza reutilización y confirmación incorrecta", async () => {
