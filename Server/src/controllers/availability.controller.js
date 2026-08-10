@@ -32,6 +32,8 @@ export const saveShift = async (req, res, next) => {
       throw new ValidationError("workerId y dayOfWeek son obligatorios");
     }
 
+    await availabilityService.resolveActiveWorkerInTenant(workerId, req.businessId);
+
     const { role, userId } = req.tenantAuthority;
     if (role !== "admin" && !(role === "worker" && userId.toString() === workerId)) {
       return res.status(403).json({ status: "fail", message: "No tiene permisos para modificar turnos de otro trabajador" });
@@ -50,6 +52,8 @@ export const createBlock = async (req, res, next) => {
     if (!workerId || !date || !startTime || !endTime) {
       throw new ValidationError("workerId, date, startTime y endTime son requeridos");
     }
+
+    await availabilityService.resolveActiveWorkerInTenant(workerId, req.businessId);
 
     const { role, userId } = req.tenantAuthority;
     if (role !== "admin" && !(role === "worker" && userId.toString() === workerId)) {
@@ -77,6 +81,8 @@ export const deleteBlock = async (req, res, next) => {
     }
 
     const blockOwnerId = block[0].worker._id.toString();
+    await availabilityService.resolveActiveWorkerInTenant(blockOwnerId, req.businessId);
+
     const { role, userId } = req.tenantAuthority;
     if (role !== "admin" && !(role === "worker" && userId.toString() === blockOwnerId)) {
       return res.status(403).json({ status: "fail", message: "No tiene permisos para eliminar bloqueos de otro trabajador" });
