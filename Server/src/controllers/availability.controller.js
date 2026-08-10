@@ -88,7 +88,11 @@ export const deleteBlock = async (req, res, next) => {
       return res.status(403).json({ status: "fail", message: "No tiene permisos para eliminar bloqueos de otro trabajador" });
     }
 
-    await blockRepository.deleteById(req.params.id);
+    const deleted = await blockRepository.deleteByIdAndWorker(req.params.id, blockOwnerId);
+    if (!deleted) {
+      return res.status(404).json({ status: "fail", message: "El bloqueo especificado no existe" });
+    }
+
     const dateStr = new Date(block[0].date).toISOString().split("T")[0];
     emitAvailabilityChange(blockOwnerId, dateStr, req.businessId);
     res.status(200).json({ status: "success", message: "Horario desbloqueado correctamente" });
