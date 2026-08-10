@@ -16,7 +16,7 @@ const membershipSchema = new mongoose.Schema(
     },
     role: {
       type: String,
-      enum: ["admin", "worker", "superadmin"],
+      enum: ["admin", "worker"],
       required: [true, "El rol de membresía es obligatorio"],
     },
     isActive: {

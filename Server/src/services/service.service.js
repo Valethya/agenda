@@ -6,8 +6,8 @@ export const getAllServices = async (businessId, onlyActive = false) => {
   return await serviceRepository.findAll(query);
 };
 
-export const getServiceById = async (id) => {
-  const service = await serviceRepository.findById(id);
+export const getServiceById = async (id, businessId, onlyActive = false) => {
+  const service = await serviceRepository.findByIdAndBusiness(id, businessId, { onlyActive });
   if (!service) {
     throw new NotFoundError("El servicio solicitado no existe");
   }
@@ -16,8 +16,7 @@ export const getServiceById = async (id) => {
 
 export const createService = async (data, businessId) => {
   const { name } = data;
-  
-  // Evitar duplicados por nombre en el mismo negocio
+
   const existingService = await serviceRepository.findByName(name, businessId);
   if (existingService) {
     throw new ConflictError("Ya existe un servicio registrado con este nombre en tu negocio");
@@ -27,34 +26,36 @@ export const createService = async (data, businessId) => {
 };
 
 export const updateService = async (id, data, businessId) => {
-  // Verificar existencia
-  const service = await serviceRepository.findById(id);
+  const service = await serviceRepository.findByIdAndBusiness(id, businessId);
   if (!service) {
     throw new NotFoundError("El servicio que intenta actualizar no existe");
   }
 
-  // Si cambia el nombre, verificar que el nuevo nombre no esté tomado por otro servicio en el mismo negocio
   if (data.name && data.name !== service.name) {
     const nameCollision = await serviceRepository.findByName(data.name, businessId);
-    if (nameCollision) {
+    if (nameCollision && nameCollision._id.toString() !== service._id.toString()) {
       throw new ConflictError("Ya existe otro servicio registrado con este nombre en tu negocio");
     }
   }
 
-  return await serviceRepository.update(id, data);
+  const updated = await serviceRepository.updateByIdAndBusiness(id, businessId, data);
+  if (!updated) throw new NotFoundError("El servicio que intenta actualizar no existe");
+  return updated;
 };
 
-export const deleteService = async (id, softDelete = true) => {
-  const service = await serviceRepository.findById(id);
+export const deleteService = async (id, businessId, softDelete = true) => {
+  const service = await serviceRepository.findByIdAndBusiness(id, businessId);
   if (!service) {
     throw new NotFoundError("El servicio que intenta eliminar no existe");
   }
 
   if (softDelete) {
-    // Soft delete: mantiene integridad referencial para citas pasadas
-    return await serviceRepository.update(id, { isActive: false });
-  } else {
-    // Hard delete
-    return await serviceRepository.deleteById(id);
+    const updated = await serviceRepository.updateByIdAndBusiness(id, businessId, { isActive: false });
+    if (!updated) throw new NotFoundError("El servicio que intenta eliminar no existe");
+    return updated;
   }
+
+  const deleted = await serviceRepository.deleteByIdAndBusiness(id, businessId);
+  if (!deleted) throw new NotFoundError("El servicio que intenta eliminar no existe");
+  return deleted;
 };

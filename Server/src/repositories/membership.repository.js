@@ -16,6 +16,22 @@ export const findActiveByUserAndBusiness = async (userId, businessId) => {
   }).populate("business");
 };
 
+export const findActiveByIdAndUser = async (membershipId, userId) => {
+  return await Membership.findOne({
+    _id: membershipId,
+    user: userId,
+    isActive: true,
+  }).populate("business");
+};
+
+export const findActiveByBusinessAndRole = async (businessId, role) => {
+  return await Membership.findOne({
+    business: businessId,
+    role,
+    isActive: true,
+  }).populate("user");
+};
+
 export const findActiveByUser = async (userId) => {
   return await Membership.find({ user: userId, isActive: true }).populate("business");
 };

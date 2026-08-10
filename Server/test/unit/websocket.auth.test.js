@@ -6,25 +6,11 @@ import { connectDB } from "../../src/db/db.js";
 import { seedTestData, cleanTestData, teardown } from "../fixtures.js";
 import { io as ioClient } from "socket.io-client";
 import { initSocket, emitAvailabilityChange } from "../../src/config/socket.js";
+import Membership from "../../src/db/models/membership.model.js";
 
 await connectDB();
-let seed, port, httpServer;
+let seed, port, httpServer, adminCookie, userBCookie;
 
-before(async () => {
-  await cleanTestData();
-  seed = await seedTestData();
-  httpServer = app.listen(0);
-  port = httpServer.address().port;
-  initSocket(httpServer);
-});
-
-after(async () => {
-  await teardown(httpServer, sessionStore);
-});
-
-/**
- * Helper: realiza login HTTP y retorna la cookie de sesión.
- */
 async function loginAndGetCookie(email, password) {
   const res = await fetch(`http://localhost:${port}/api/login`, {
     method: "POST",
@@ -38,9 +24,28 @@ async function loginAndGetCookie(email, password) {
   return res.headers.get("set-cookie");
 }
 
-/**
- * Helper: crea un cliente Socket.IO con cookie de sesión.
- */
+before(async () => {
+  await cleanTestData();
+  seed = await seedTestData();
+  httpServer = app.listen(0);
+  port = httpServer.address().port;
+  initSocket(httpServer);
+  adminCookie = await loginAndGetCookie("test-admin@example.com", "passwordAdmin");
+  userBCookie = await loginAndGetCookie("user-b@example.com", "passwordUserB");
+});
+
+after(async () => {
+  await teardown(httpServer, sessionStore);
+});
+
+async function switchBusiness(cookie, businessId) {
+  return fetch(`http://localhost:${port}/api/switch-business`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Cookie: cookie },
+    body: JSON.stringify({ businessId }),
+  });
+}
+
 function createSocketClient(cookie) {
   return ioClient(`http://localhost:${port}`, {
     transports: ["websocket"],
@@ -49,9 +54,6 @@ function createSocketClient(cookie) {
   });
 }
 
-/**
- * Helper: conecta un socket y espera el evento 'connect'.
- */
 async function connectSocket(socket) {
   return new Promise((resolve, reject) => {
     const timeout = setTimeout(() => reject(new Error("Timeout esperando conexión")), 5000);
@@ -67,124 +69,155 @@ async function connectSocket(socket) {
   });
 }
 
-// ================================================================
-// Tests de autenticación básica
-// ================================================================
-describe("WebSocket Authentication (6.5)", () => {
-  it("rechaza conexión sin sesión (anónimo)", async () => {
+async function emitAndWaitForWsError(socket, event, payload, timeoutMs = 2000) {
+  return new Promise((resolve) => {
+    const timeout = setTimeout(() => resolve(null), timeoutMs);
+    socket.once("ws_error", (data) => {
+      clearTimeout(timeout);
+      resolve(data);
+    });
+    socket.emit(event, payload);
+  });
+}
+
+describe("WebSocket Authentication (6.2.2-D)", () => {
+  it("rechaza conexión sin sesión", async () => {
     const socket = createSocketClient(null);
-    
     const error = await new Promise((resolve) => {
-      socket.on("connect_error", (err) => {
-        resolve(err);
-      });
+      socket.on("connect_error", resolve);
       socket.connect();
     });
-    
-    assert.ok(error, "Debería recibir un error de conexión");
-    assert.ok(
-      error.message.includes("No autorizado") || error.message.includes("Unauthorized"),
-      `Error esperado de autenticación, recibido: ${error.message}`
-    );
+    assert.ok(error);
+    assert.ok(error.message.includes("No autorizado") || error.message.includes("Unauthorized"));
     socket.disconnect();
   });
 
-  it("permite conexión autenticada con sesión válida", async () => {
-    const cookie = await loginAndGetCookie("test-admin@example.com", "passwordAdmin");
-    assert.ok(cookie, "Debería obtener cookie de sesión");
-    
-    const socket = createSocketClient(cookie);
+  it("permite conexión autenticada con Membership activa", async () => {
+    const socket = createSocketClient(adminCookie);
     await connectSocket(socket);
-    
-    assert.ok(true, "Debería conectar exitosamente");
+    assert.ok(socket.connected);
     socket.disconnect();
   });
 
   it("permite join_availability para worker del mismo negocio", async () => {
-    const cookie = await loginAndGetCookie("test-admin@example.com", "passwordAdmin");
-    const socket = createSocketClient(cookie);
+    const socket = createSocketClient(adminCookie);
     await connectSocket(socket);
-    
-    const workerId = seed.worker._id.toString();
-    
-    // join_availability no emite callback; si hay error emite ws_error
-    const result = await new Promise((resolve) => {
-      const timeout = setTimeout(() => resolve("ok"), 1500);
-      socket.on("ws_error", (data) => {
-        clearTimeout(timeout);
-        resolve(data);
-      });
-      socket.emit("join_availability", { workerId, date: "2026-07-22" });
-    });
-    
-    assert.equal(result, "ok", "No debería recibir ws_error para worker del mismo negocio");
+
+    const error = await emitAndWaitForWsError(
+      socket,
+      "join_availability",
+      { workerId: seed.worker._id.toString(), date: "2026-07-22" },
+      800,
+    );
+    assert.equal(error, null);
     socket.disconnect();
+  });
+
+  it("revocar Membership después del handshake bloquea la siguiente operación", async () => {
+    const socket = createSocketClient(adminCookie);
+    await connectSocket(socket);
+
+    const membership = await Membership.findOne({ user: seed.admin._id, business: seed.business._id });
+    membership.isActive = false;
+    await membership.save();
+
+    try {
+      const error = await emitAndWaitForWsError(socket, "join_availability", {
+        workerId: seed.worker._id.toString(),
+        date: "2026-07-22",
+      });
+      assert.ok(error?.message?.includes("ya no está vigente"));
+    } finally {
+      membership.isActive = true;
+      await membership.save();
+      socket.disconnect();
+    }
+  });
+
+  it("un socket revocado deja de recibir broadcasts tenant", async () => {
+    const socket = createSocketClient(adminCookie);
+    await connectSocket(socket);
+
+    const joinError = await emitAndWaitForWsError(socket, "join_availability", {
+      workerId: seed.worker._id.toString(),
+      date: "2026-07-23",
+    }, 500);
+    assert.equal(joinError, null);
+
+    const membership = await Membership.findOne({ user: seed.admin._id, business: seed.business._id });
+    membership.isActive = false;
+    await membership.save();
+
+    let receivedAvailability = false;
+    socket.on("availability_changed", () => { receivedAvailability = true; });
+    try {
+      emitAvailabilityChange(seed.worker._id.toString(), "2026-07-23", seed.business._id.toString());
+      await new Promise((resolve) => setTimeout(resolve, 800));
+      assert.equal(receivedAvailability, false);
+    } finally {
+      membership.isActive = true;
+      await membership.save();
+      socket.disconnect();
+    }
   });
 });
 
-// ================================================================
-// Tests de aislamiento multitenant
-// ================================================================
 describe("WebSocket Multitenant Isolation", () => {
   it("rechaza join_availability cuando el worker pertenece a otro negocio", async () => {
-    // Usuario del negocio A intenta acceder a un worker del negocio B
-    const cookieA = await loginAndGetCookie("test-admin@example.com", "passwordAdmin");
-    const socketA = createSocketClient(cookieA);
+    const socketA = createSocketClient(adminCookie);
     await connectSocket(socketA);
 
-    // workerB pertenece al negocio B
-    const workerBId = seed.workerB._id.toString();
-
-    const result = await new Promise((resolve) => {
-      const timeout = setTimeout(() => resolve("timeout_sin_error"), 2000);
-      socketA.on("ws_error", (data) => {
-        clearTimeout(timeout);
-        resolve(data);
-      });
-      socketA.emit("join_availability", { workerId: workerBId, date: "2026-07-22" });
+    const result = await emitAndWaitForWsError(socketA, "join_availability", {
+      workerId: seed.workerB._id.toString(),
+      date: "2026-07-22",
     });
-
-    assert.ok(
-      result && result.message && result.message.includes("no pertenece"),
-      `Debería rechazar con "no pertenece a su negocio", recibido: ${JSON.stringify(result)}`
-    );
+    assert.ok(result?.message?.includes("no pertenece"));
     socketA.disconnect();
   });
 
   it("socket del negocio B no recibe calendar_update emitido para el negocio A", async () => {
-    // Conectar socket del negocio A
-    const cookieA = await loginAndGetCookie("test-admin@example.com", "passwordAdmin");
-    const socketA = createSocketClient(cookieA);
+    const socketA = createSocketClient(adminCookie);
     await connectSocket(socketA);
-
-    // Conectar socket del negocio B
-    const cookieB = await loginAndGetCookie("user-b@example.com", "passwordUserB");
-    const socketB = createSocketClient(cookieB);
+    const socketB = createSocketClient(userBCookie);
     await connectSocket(socketB);
 
-    // Registrar si cada socket recibe calendar_update
     let socketAReceived = false;
     let socketBReceived = false;
+    socketA.on("calendar_update", () => { socketAReceived = true; });
+    socketB.on("calendar_update", () => { socketBReceived = true; });
 
-    socketA.on("calendar_update", () => {
-      socketAReceived = true;
-    });
-    socketB.on("calendar_update", () => {
-      socketBReceived = true;
-    });
-
-    // Emitir calendar_update para el negocio A
-    const businessAId = seed.business._id.toString();
-    const workerAId = seed.worker._id.toString();
-    emitAvailabilityChange(workerAId, "2026-07-22", businessAId);
-
-    // Esperar un tiempo prudencial para que los eventos se propaguen
+    emitAvailabilityChange(seed.worker._id.toString(), "2026-07-22", seed.business._id.toString());
     await new Promise((resolve) => setTimeout(resolve, 1000));
 
-    assert.equal(socketAReceived, true, "Socket A DEBE recibir calendar_update de su propio negocio");
-    assert.equal(socketBReceived, false, "Socket B NO debe recibir calendar_update del negocio A");
-
+    assert.equal(socketAReceived, true);
+    assert.equal(socketBReceived, false);
     socketA.disconnect();
     socketB.disconnect();
+  });
+
+  it("cambiar tenant en HTTP invalida el contexto antiguo del socket", async () => {
+    const socket = createSocketClient(userBCookie);
+    await connectSocket(socket);
+
+    const addedMembership = await Membership.create({
+      user: seed.userB._id,
+      business: seed.business._id,
+      role: "admin",
+      isActive: true,
+    });
+
+    try {
+      const switched = await switchBusiness(userBCookie, seed.business._id.toString());
+      assert.equal(switched.status, 200);
+
+      const error = await emitAndWaitForWsError(socket, "join_availability", {
+        workerId: seed.workerB._id.toString(),
+        date: "2026-07-22",
+      });
+      assert.ok(error?.message?.includes("ya no está vigente"));
+    } finally {
+      await Membership.findByIdAndDelete(addedMembership._id);
+      socket.disconnect();
+    }
   });
 });

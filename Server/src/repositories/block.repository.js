@@ -18,6 +18,10 @@ export const deleteById = async (id) => {
   return await Block.findByIdAndDelete(id);
 };
 
+export const deleteByIdAndWorker = async (id, workerId) => {
+  return await Block.findOneAndDelete({ _id: id, worker: workerId });
+};
+
 export const findAll = async (query = {}) => {
   return await Block.find(query).populate("worker", "firstName lastName email");
 };
