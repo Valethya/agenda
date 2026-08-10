@@ -50,6 +50,7 @@ const shiftSchema = new mongoose.Schema(
   {
     timestamps: true,
     versionKey: false,
+    autoIndex: false,
   }
 );
 
