@@ -1,7 +1,6 @@
 import Appointment from "../db/models/appointment.model.js";
 
-export const findByWorkerAndDate = async (workerId, date) => {
-  // Ajustar la fecha para buscar solo en ese día (ignorar horas/minutos/segundos al comparar)
+export const findByBusinessWorkerAndDate = async (businessId, workerId, date) => {
   const startOfDay = new Date(date);
   startOfDay.setUTCHours(0, 0, 0, 0);
 
@@ -9,12 +8,12 @@ export const findByWorkerAndDate = async (workerId, date) => {
   endOfDay.setUTCHours(23, 59, 59, 999);
 
   return await Appointment.find({
+    business: businessId,
     worker: workerId,
     date: {
       $gte: startOfDay,
       $lte: endOfDay,
     },
-    // No restamos disponibilidad si la cita está cancelada
     status: { $ne: "cancelled" },
   });
 };
