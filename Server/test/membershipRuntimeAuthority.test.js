@@ -33,51 +33,17 @@ const login = async (email, password) => {
 const adminMembership = async () => Membership.findOne({ user: seed.admin._id, business: seed.business._id });
 
 test("6.2.2-D runtime Membership authority", async (t) => {
-  await t.test("Membership admin activa permite una operación admin", async () => {
-    const { cookie } = await login("test-admin@example.com", "passwordAdmin");
-    const response = await request("/business-settings/metrics", { cookie });
-    assert.equal(response.status, 200);
-  });
+  let adminCookie;
 
-  await t.test("revocar Membership después del login deniega inmediatamente", async () => {
-    const { cookie } = await login("test-admin@example.com", "passwordAdmin");
-    const membership = await adminMembership();
-    membership.isActive = false;
-    await membership.save();
-
-    try {
-      const protectedResponse = await request("/business-settings/metrics", { cookie });
-      assert.equal(protectedResponse.status, 403);
-
-      const meResponse = await request("/me", { cookie });
-      assert.equal(meResponse.status, 401);
-    } finally {
-      membership.isActive = true;
-      await membership.save();
-    }
-  });
-
-  await t.test("User.role=admin sin Membership no concede sesión tenant", async () => {
-    const password = await createHash("legacyOnlyPassword");
-    await User.create({
-      firstName: "Legacy",
-      lastName: "Admin",
-      email: ["legacy-admin-no-membership@example.com"],
-      password,
-      role: "admin",
-      business: seed.business._id,
-      isActive: true,
-    });
-
-    const { response } = await login("legacy-admin-no-membership@example.com", "legacyOnlyPassword");
-    assert.equal(response.status, 401);
-  });
-
-  await t.test("Membership admin prevalece sobre User.role worker", async () => {
+  await t.test("Membership admin prevalece sobre User.role worker y permite admin", async () => {
     await User.findByIdAndUpdate(seed.admin._id, { role: "worker" });
     try {
-      const { cookie } = await login("test-admin@example.com", "passwordAdmin");
-      const response = await request("/business-settings/metrics", { cookie });
+      const loginResult = await login("test-admin@example.com", "passwordAdmin");
+      assert.equal(loginResult.response.status, 201);
+      adminCookie = loginResult.cookie;
+      assert.equal(loginResult.payload.payload.role, "admin");
+
+      const response = await request("/business-settings/metrics", { cookie: adminCookie });
       assert.equal(response.status, 200);
     } finally {
       await User.findByIdAndUpdate(seed.admin._id, { role: "admin" });
@@ -85,16 +51,15 @@ test("6.2.2-D runtime Membership authority", async (t) => {
   });
 
   await t.test("cambiar Membership admin a worker invalida el admin copiado en sesión", async () => {
-    const { cookie } = await login("test-admin@example.com", "passwordAdmin");
     const membership = await adminMembership();
     membership.role = "worker";
     await membership.save();
 
     try {
-      const response = await request("/business-settings/metrics", { cookie });
+      const response = await request("/business-settings/metrics", { cookie: adminCookie });
       assert.equal(response.status, 403);
 
-      const meResponse = await request("/me", { cookie });
+      const meResponse = await request("/me", { cookie: adminCookie });
       assert.equal(meResponse.status, 200);
       const me = await meResponse.json();
       assert.equal(me.payload.role, "worker");
@@ -104,14 +69,55 @@ test("6.2.2-D runtime Membership authority", async (t) => {
     }
   });
 
+  await t.test("Membership vigente prevalece sobre rol de sesión ya obsoleto", async () => {
+    const response = await request("/business-settings/metrics", { cookie: adminCookie });
+    assert.equal(response.status, 200);
+  });
+
   await t.test("Membership de Business A no permite cambiar contexto a Business B", async () => {
-    const { cookie } = await login("test-admin@example.com", "passwordAdmin");
     const response = await request("/switch-business", {
       method: "POST",
-      cookie,
+      cookie: adminCookie,
       body: { businessId: seed.businessB._id.toString() },
     });
     assert.equal(response.status, 401);
+  });
+
+  await t.test("revocar Membership después del login deniega inmediatamente y /me falla cerrado", async () => {
+    const membership = await adminMembership();
+    membership.isActive = false;
+    await membership.save();
+
+    try {
+      const protectedResponse = await request("/business-settings/metrics", { cookie: adminCookie });
+      assert.equal(protectedResponse.status, 403);
+
+      const meResponse = await request("/me", { cookie: adminCookie });
+      assert.equal(meResponse.status, 401);
+    } finally {
+      membership.isActive = true;
+      await membership.save();
+    }
+  });
+
+  await t.test("User.role=admin sin Membership no concede sesión tenant", async () => {
+    const password = await createHash("legacyOnlyPassword");
+    const legacy = await User.create({
+      firstName: "Legacy",
+      lastName: "Admin",
+      email: ["legacy-admin-no-membership@example.com"],
+      password,
+      role: "admin",
+      business: seed.business._id,
+      isActive: true,
+    });
+
+    try {
+      const { response } = await login("legacy-admin-no-membership@example.com", "legacyOnlyPassword");
+      assert.equal(response.status, 401);
+    } finally {
+      await User.findByIdAndDelete(legacy._id);
+    }
   });
 
   await t.test("selección temporal vuelve a consultar Membership activa", async () => {
@@ -127,21 +133,23 @@ test("6.2.2-D runtime Membership authority", async (t) => {
     const membershipA = await Membership.create({ user: multi._id, business: seed.business._id, role: "admin", isActive: true });
     const membershipB = await Membership.create({ user: multi._id, business: seed.businessB._id, role: "worker", isActive: true });
 
-    const { response, payload, cookie } = await login("multi-membership@example.com", "multiMembershipPassword");
-    assert.equal(response.status, 200);
-    assert.equal(payload.status, "needs_selection");
+    try {
+      const { response, payload, cookie } = await login("multi-membership@example.com", "multiMembershipPassword");
+      assert.equal(response.status, 200);
+      assert.equal(payload.status, "needs_selection");
 
-    membershipB.isActive = false;
-    await membershipB.save();
-    const selectResponse = await request("/select-membership", {
-      method: "POST",
-      cookie,
-      body: { membershipId: membershipB._id.toString() },
-    });
-    assert.equal(selectResponse.status, 401);
-
-    await Membership.deleteMany({ _id: { $in: [membershipA._id, membershipB._id] } });
-    await User.findByIdAndDelete(multi._id);
+      membershipB.isActive = false;
+      await membershipB.save();
+      const selectResponse = await request("/select-membership", {
+        method: "POST",
+        cookie,
+        body: { membershipId: membershipB._id.toString() },
+      });
+      assert.equal(selectResponse.status, 401);
+    } finally {
+      await Membership.deleteMany({ _id: { $in: [membershipA._id, membershipB._id] } });
+      await User.findByIdAndDelete(multi._id);
+    }
   });
 
   await t.test("superadmin selecciona contexto sin adquirir admin tenant", async () => {
@@ -155,28 +163,33 @@ test("6.2.2-D runtime Membership authority", async (t) => {
       isActive: true,
     });
 
-    const { cookie } = await login("runtime-superadmin@example.com", "superadminPassword");
-    const switchResponse = await request("/switch-business", {
-      method: "POST",
-      cookie,
-      body: { businessId: seed.business._id.toString() },
-    });
-    assert.equal(switchResponse.status, 200);
-
-    const tenantResponse = await request("/business-settings/metrics", { cookie });
-    assert.equal(tenantResponse.status, 403);
-
-    const membership = await Membership.create({
-      user: superadmin._id,
-      business: seed.business._id,
-      role: "admin",
-      isActive: true,
-    });
     try {
-      const withMembership = await request("/business-settings/metrics", { cookie });
-      assert.equal(withMembership.status, 200);
+      const { response: loginResponse, cookie } = await login("runtime-superadmin@example.com", "superadminPassword");
+      assert.equal(loginResponse.status, 200);
+
+      const switchResponse = await request("/switch-business", {
+        method: "POST",
+        cookie,
+        body: { businessId: seed.business._id.toString() },
+      });
+      assert.equal(switchResponse.status, 200);
+
+      const tenantResponse = await request("/business-settings/metrics", { cookie });
+      assert.equal(tenantResponse.status, 403);
+
+      const membership = await Membership.create({
+        user: superadmin._id,
+        business: seed.business._id,
+        role: "admin",
+        isActive: true,
+      });
+      try {
+        const withMembership = await request("/business-settings/metrics", { cookie });
+        assert.equal(withMembership.status, 200);
+      } finally {
+        await Membership.findByIdAndDelete(membership._id);
+      }
     } finally {
-      await Membership.findByIdAndDelete(membership._id);
       await User.findByIdAndDelete(superadmin._id);
     }
   });
