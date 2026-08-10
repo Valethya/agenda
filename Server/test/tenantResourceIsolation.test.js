@@ -259,7 +259,13 @@ test("6.2.2-D adversarial tenant resource isolation", async (t) => {
     assert.equal(await Service.findById(serviceAForHardDelete._id), null);
   });
 
-  await t.test("Admin A sólo puede modificar turnos de workers con Membership worker activa en A", async () => {
+  await t.test("Turnos de workers de B no se leen ni modifican desde contexto A", async () => {
+    const readCrossTenant = await request(`/availability/shifts/${seed.workerB._id}?slug=${seed.business.slug}`);
+    assert.equal(readCrossTenant.status, 404);
+
+    const readSameTenant = await request(`/availability/shifts/${seed.worker._id}?slug=${seed.business.slug}`);
+    assert.equal(readSameTenant.status, 200);
+
     const crossTenant = await request("/availability/shifts", {
       method: "POST",
       cookie: adminCookie,
