@@ -128,9 +128,15 @@ export const bookAppointment = async (appointmentData) => {
 const canOperateAsAssignedWorker = (appointment, userId, tenantRole) =>
   tenantRole === "worker" && appointment.worker._id.toString() === userId;
 
-export const confirmAppointment = async (appointmentId, userId, tenantRole) => {
-  const appointment = await appointmentRepository.findById(appointmentId);
+const findTenantAppointment = async (appointmentId, businessId) => {
+  if (!businessId) throw new NotFoundError("La cita especificada no existe");
+  const appointment = await appointmentRepository.findByIdAndBusiness(appointmentId, businessId);
   if (!appointment) throw new NotFoundError("La cita especificada no existe");
+  return appointment;
+};
+
+export const confirmAppointment = async (appointmentId, userId, tenantRole, businessId) => {
+  const appointment = await findTenantAppointment(appointmentId, businessId);
 
   const isAdmin = tenantRole === "admin";
   const isWorker = canOperateAsAssignedWorker(appointment, userId, tenantRole);
@@ -139,14 +145,19 @@ export const confirmAppointment = async (appointmentId, userId, tenantRole) => {
 
   let updatedAppointment;
   try {
-    updatedAppointment = await appointmentRepository.update(appointmentId, { status: "confirmed" });
+    updatedAppointment = await appointmentRepository.updateByIdAndBusiness(
+      appointmentId,
+      businessId,
+      { status: "confirmed" },
+    );
+    if (!updatedAppointment) throw new NotFoundError("La cita especificada no existe");
     await logEvent({
       appointmentId,
       userId,
       event: "APPOINTMENT_CONFIRMED",
       level: "SUCCESS",
       message: "Reserva confirmada exitosamente.",
-      metadata: { confirmedBy: userId, tenantRole },
+      metadata: { confirmedBy: userId, tenantRole, businessId },
     });
   } catch (dbError) {
     await logEvent({
@@ -156,7 +167,7 @@ export const confirmAppointment = async (appointmentId, userId, tenantRole) => {
       level: "CRITICAL",
       message: "Error al actualizar estado de la reserva a confirmado en BD.",
       technicalMessage: dbError.message,
-      metadata: { confirmedBy: userId },
+      metadata: { confirmedBy: userId, businessId },
     });
     throw dbError;
   }
@@ -165,9 +176,8 @@ export const confirmAppointment = async (appointmentId, userId, tenantRole) => {
   return updatedAppointment;
 };
 
-export const completeAppointment = async (appointmentId, userId, tenantRole) => {
-  const appointment = await appointmentRepository.findById(appointmentId);
-  if (!appointment) throw new NotFoundError("La cita especificada no existe");
+export const completeAppointment = async (appointmentId, userId, tenantRole, businessId) => {
+  const appointment = await findTenantAppointment(appointmentId, businessId);
 
   const isAdmin = tenantRole === "admin";
   const isWorker = canOperateAsAssignedWorker(appointment, userId, tenantRole);
@@ -176,14 +186,19 @@ export const completeAppointment = async (appointmentId, userId, tenantRole) => 
 
   let updatedAppointment;
   try {
-    updatedAppointment = await appointmentRepository.update(appointmentId, { status: "completed" });
+    updatedAppointment = await appointmentRepository.updateByIdAndBusiness(
+      appointmentId,
+      businessId,
+      { status: "completed" },
+    );
+    if (!updatedAppointment) throw new NotFoundError("La cita especificada no existe");
     await logEvent({
       appointmentId,
       userId,
       event: "APPOINTMENT_COMPLETED",
       level: "SUCCESS",
       message: "Reserva marcada como completada exitosamente.",
-      metadata: { completedBy: userId, tenantRole },
+      metadata: { completedBy: userId, tenantRole, businessId },
     });
   } catch (dbError) {
     await logEvent({
@@ -193,16 +208,15 @@ export const completeAppointment = async (appointmentId, userId, tenantRole) => 
       level: "CRITICAL",
       message: "Error al actualizar estado de la reserva a completado en BD.",
       technicalMessage: dbError.message,
-      metadata: { completedBy: userId },
+      metadata: { completedBy: userId, businessId },
     });
     throw dbError;
   }
   return updatedAppointment;
 };
 
-export const cancelAppointment = async (appointmentId, userId, tenantRole) => {
-  const appointment = await appointmentRepository.findById(appointmentId);
-  if (!appointment) throw new NotFoundError("La cita especificada no existe");
+export const cancelAppointment = async (appointmentId, userId, tenantRole, businessId) => {
+  const appointment = await findTenantAppointment(appointmentId, businessId);
 
   const isClient = appointment.client._id.toString() === userId;
   const isWorker = canOperateAsAssignedWorker(appointment, userId, tenantRole);
@@ -222,31 +236,36 @@ export const cancelAppointment = async (appointmentId, userId, tenantRole) => {
         event: "APPOINTMENT_CANCELLED_FAILED",
         level: "WARN",
         message: "Intento de cancelación de reserva fallido: Fuera del plazo permitido de 2 horas de anticipación.",
-        metadata: { differenceInHours, userId },
+        metadata: { differenceInHours, userId, businessId },
       });
       throw new ValidationError("Las citas solo pueden cancelarse con un mínimo de 2 horas de anticipación");
     }
   }
 
-  const updatedAppointment = await appointmentRepository.update(appointmentId, { status: "cancelled" });
+  const updatedAppointment = await appointmentRepository.updateByIdAndBusiness(
+    appointmentId,
+    businessId,
+    { status: "cancelled" },
+  );
+  if (!updatedAppointment) throw new NotFoundError("La cita especificada no existe");
+
   await logEvent({
     appointmentId,
     userId,
     event: "APPOINTMENT_CANCELLED",
     level: "INFO",
     message: "Reserva cancelada exitosamente.",
-    metadata: { cancelledBy: userId, tenantRole },
+    metadata: { cancelledBy: userId, tenantRole, businessId },
   });
 
   const dateStr = new Date(appointment.date).toISOString().split("T")[0];
-  emitAvailabilityChange(appointment.worker._id.toString(), dateStr, appointment.business._id || appointment.business);
+  emitAvailabilityChange(appointment.worker._id.toString(), dateStr, businessId);
   notifyAppointmentCancelled(appointmentId, userId);
   return updatedAppointment;
 };
 
-export const getAppointmentDetails = async (appointmentId, userId, tenantRole) => {
-  const appointment = await appointmentRepository.findById(appointmentId);
-  if (!appointment) throw new NotFoundError("La cita especificada no existe");
+export const getAppointmentDetails = async (appointmentId, userId, tenantRole, businessId) => {
+  const appointment = await findTenantAppointment(appointmentId, businessId);
 
   const isClient = appointment.client._id.toString() === userId;
   const isWorker = canOperateAsAssignedWorker(appointment, userId, tenantRole);
@@ -259,13 +278,13 @@ export const getAppointmentDetails = async (appointmentId, userId, tenantRole) =
 
 export const getMyAppointments = async (userId, tenantRole, businessId) => {
   const query = {};
+  if (businessId) query.business = businessId;
+
   if (tenantRole === "worker") {
     query.worker = userId;
-    if (businessId) query.business = businessId;
-  } else if (tenantRole === "admin") {
-    if (businessId) query.business = businessId;
-  } else {
+  } else if (tenantRole !== "admin") {
     query.client = userId;
   }
+
   return await appointmentRepository.findAll(query);
 };
