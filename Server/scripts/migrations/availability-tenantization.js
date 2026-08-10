@@ -12,7 +12,7 @@ import {
   validateTargetFingerprint,
 } from "./membership-authority-provenance.js";
 
-export const AVAILABILITY_TENANTIZATION_VERSION = "1.1.2";
+export const AVAILABILITY_TENANTIZATION_VERSION = "1.1.3";
 export const AVAILABILITY_TENANTIZATION_CONFIRMATION = "TENANTIZE_AVAILABILITY_6_2_3";
 export const AVAILABILITY_EXTERNAL_TARGET_CONFIRMATION = "AUTHORIZE_EXTERNAL_AVAILABILITY_TARGET";
 export const AVAILABILITY_MAINTENANCE_CONFIRMATION = "MAINTENANCE_WINDOW_CONFIRMED";
@@ -50,6 +50,18 @@ export const ACTIVE_APPOINTMENT_STATUSES = Object.freeze([
   "confirmed",
   "completed",
 ]);
+export const ALLOWED_APPOINTMENT_STATUSES = Object.freeze([
+  ...ACTIVE_APPOINTMENT_STATUSES,
+  "cancelled",
+]);
+
+export const AVAILABILITY_DECLARED_LEGACY_APPOINTMENT_INDEX = Object.freeze({
+  key: { worker: 1, date: 1, startTime: 1 },
+  options: {
+    unique: true,
+    partialFilterExpression: { status: { $ne: "cancelled" } },
+  },
+});
 
 export const AVAILABILITY_INDEX_SPECS = Object.freeze({
   shiftDesired: {
@@ -275,14 +287,25 @@ export const validateAvailabilityTenantizationOptions = (
   return { ...options, ...runtime };
 };
 
-const membershipsByWorker = (memberships) => {
+const activeBusinessesById = (businesses) => {
+  const result = new Map();
+  for (const business of businesses) {
+    if (!isObjectId(business?._id) || business?.isActive !== true) continue;
+    result.set(objectIdKey(business._id), business._id);
+  }
+  return result;
+};
+
+const membershipsByWorker = (memberships, businesses) => {
+  const activeBusinesses = activeBusinessesById(businesses);
   const result = new Map();
   for (const membership of memberships) {
     if (
       membership?.role !== "worker" ||
       membership?.isActive !== true ||
       !isObjectId(membership.user) ||
-      !isObjectId(membership.business)
+      !isObjectId(membership.business) ||
+      !activeBusinesses.has(objectIdKey(membership.business))
     ) continue;
 
     const worker = objectIdKey(membership.user);
@@ -292,8 +315,8 @@ const membershipsByWorker = (memberships) => {
   return result;
 };
 
-export const classifyAvailabilityDocuments = (documents, memberships) => {
-  const byWorker = membershipsByWorker(memberships);
+export const classifyAvailabilityDocuments = (documents, memberships, businesses = []) => {
+  const byWorker = membershipsByWorker(memberships, businesses);
   const result = {
     alreadyMigrated: [],
     deterministic: [],
@@ -309,11 +332,14 @@ export const classifyAvailabilityDocuments = (documents, memberships) => {
     }
 
     const workerKey = objectIdKey(document.worker);
-    const businesses = [...(byWorker.get(workerKey)?.values() ?? [])];
+    const eligibleBusinesses = [...(byWorker.get(workerKey)?.values() ?? [])];
     const existingBusiness = document.business;
 
     if (existingBusiness !== undefined && existingBusiness !== null) {
-      if (!isObjectId(existingBusiness) || !byWorker.get(workerKey)?.has(objectIdKey(existingBusiness))) {
+      if (
+        !isObjectId(existingBusiness) ||
+        !byWorker.get(workerKey)?.has(objectIdKey(existingBusiness))
+      ) {
         result.invalidExisting.push(document);
       } else {
         result.alreadyMigrated.push(document);
@@ -321,9 +347,9 @@ export const classifyAvailabilityDocuments = (documents, memberships) => {
       continue;
     }
 
-    if (businesses.length === 1) {
-      result.deterministic.push({ document, inferredBusiness: businesses[0] });
-    } else if (businesses.length > 1) {
+    if (eligibleBusinesses.length === 1) {
+      result.deterministic.push({ document, inferredBusiness: eligibleBusinesses[0] });
+    } else if (eligibleBusinesses.length > 1) {
       result.ambiguous.push(document);
     } else {
       result.unresolved.push(document);
@@ -354,15 +380,22 @@ const duplicateShiftKeys = (classification) => {
 const activeAppointmentConflicts = (appointments) => {
   const counts = new Map();
   let invalid = 0;
+  let invalidStatus = 0;
 
   for (const appointment of appointments) {
-    if (!ACTIVE_APPOINTMENT_STATUSES.includes(appointment?.status)) continue;
+    const status = appointment?.status;
+    if (status === "cancelled") continue;
+    if (!ACTIVE_APPOINTMENT_STATUSES.includes(status)) {
+      invalidStatus += 1;
+      continue;
+    }
     if (
       !isObjectId(appointment.business) ||
       !isObjectId(appointment.worker) ||
       !(appointment.date instanceof Date) ||
       Number.isNaN(appointment.date.getTime()) ||
-      typeof appointment.startTime !== "string"
+      typeof appointment.startTime !== "string" ||
+      appointment.startTime.length === 0
     ) {
       invalid += 1;
       continue;
@@ -379,6 +412,7 @@ const activeAppointmentConflicts = (appointments) => {
 
   return {
     invalid,
+    invalidStatus,
     duplicateKeys: [...counts.values()].filter((count) => count > 1).length,
   };
 };
@@ -409,13 +443,14 @@ export const buildAvailabilityTenantizationPlan = ({
   shifts = [],
   blocks = [],
   memberships = [],
+  businesses = [],
   appointments = [],
   shiftIndexes = [],
   blockIndexes = [],
   appointmentIndexes = [],
 }) => {
-  const shiftClassification = classifyAvailabilityDocuments(shifts, memberships);
-  const blockClassification = classifyAvailabilityDocuments(blocks, memberships);
+  const shiftClassification = classifyAvailabilityDocuments(shifts, memberships, businesses);
+  const blockClassification = classifyAvailabilityDocuments(blocks, memberships, businesses);
   const appointmentConflicts = activeAppointmentConflicts(appointments);
   const shiftDuplicateKeys = duplicateShiftKeys(shiftClassification);
 
@@ -445,6 +480,9 @@ export const buildAvailabilityTenantizationPlan = ({
   addClassificationFindings("block", blockClassification);
   if (shiftDuplicateKeys) findings.push(`shift:targetDuplicateKeys:${shiftDuplicateKeys}`);
   if (appointmentConflicts.invalid) findings.push(`appointment:invalidActive:${appointmentConflicts.invalid}`);
+  if (appointmentConflicts.invalidStatus) {
+    findings.push(`appointment:invalidStatus:${appointmentConflicts.invalidStatus}`);
+  }
   if (appointmentConflicts.duplicateKeys) {
     findings.push(`appointment:targetDuplicateKeys:${appointmentConflicts.duplicateKeys}`);
   }
@@ -476,6 +514,7 @@ export const buildAvailabilityTenantizationPlan = ({
       appointments: {
         total: appointments.length,
         invalidActive: appointmentConflicts.invalid,
+        invalidStatus: appointmentConflicts.invalidStatus,
         duplicateActiveKeys: appointmentConflicts.duplicateKeys,
       },
     },
@@ -504,6 +543,7 @@ export const readAvailabilityTenantizationSnapshot = async (db) => {
     shifts,
     blocks,
     memberships,
+    businesses,
     appointments,
     shiftIndexes,
     blockIndexes,
@@ -512,6 +552,7 @@ export const readAvailabilityTenantizationSnapshot = async (db) => {
     readCollection(db, names, "shifts", { _id: 1, business: 1, worker: 1, dayOfWeek: 1 }),
     readCollection(db, names, "blocks", { _id: 1, business: 1, worker: 1, date: 1 }),
     readCollection(db, names, "memberships", { _id: 1, user: 1, business: 1, role: 1, isActive: 1 }),
+    readCollection(db, names, "businesses", { _id: 1, isActive: 1 }),
     readCollection(
       db,
       names,
@@ -527,6 +568,7 @@ export const readAvailabilityTenantizationSnapshot = async (db) => {
     shifts,
     blocks,
     memberships,
+    businesses,
     appointments,
     shiftIndexes,
     blockIndexes,
@@ -717,13 +759,15 @@ export const fenceAvailabilityTenantizationLockInTransaction = async (
   return true;
 };
 
-const uniqueActiveWorkerBusinesses = (memberships) => {
+const uniqueActiveWorkerBusinesses = (memberships, businesses) => {
+  const activeBusinesses = activeBusinessesById(businesses);
   const unique = new Map();
   for (const membership of memberships) {
     if (
       membership?.role === "worker" &&
       membership?.isActive === true &&
-      isObjectId(membership.business)
+      isObjectId(membership.business) &&
+      activeBusinesses.has(objectIdKey(membership.business))
     ) {
       unique.set(objectIdKey(membership.business), membership.business);
     }
@@ -737,13 +781,23 @@ const revalidateAssignmentMembership = async (db, assignment, session) => {
     { session, projection: { business: 1, role: 1, isActive: 1 } },
   ).toArray();
 
-  const businesses = uniqueActiveWorkerBusinesses(memberships);
+  const membershipBusinessIds = memberships
+    .map((membership) => membership.business)
+    .filter(isObjectId);
+  const businesses = membershipBusinessIds.length
+    ? await db.collection("businesses").find(
+      { _id: { $in: membershipBusinessIds }, isActive: true },
+      { session, projection: { _id: 1, isActive: 1 } },
+    ).toArray()
+    : [];
+
+  const eligibleBusinesses = uniqueActiveWorkerBusinesses(memberships, businesses);
   if (
-    businesses.length !== 1 ||
-    objectIdKey(businesses[0]) !== objectIdKey(assignment.inferredBusiness)
+    eligibleBusinesses.length !== 1 ||
+    objectIdKey(eligibleBusinesses[0]) !== objectIdKey(assignment.inferredBusiness)
   ) {
     throw new Error(
-      "Backfill abortado: Membership cambió desde el plan y la inferencia ya no es determinística",
+      "Backfill abortado: Membership o Business cambió desde el plan y la inferencia ya no es determinística",
     );
   }
 };
@@ -946,8 +1000,8 @@ export const runAvailabilityTenantization = async ({
       await fenceLockInTransaction(connection.db, lock, session);
 
       // No se ejecuta metadata DDL (`listCollections`/`listIndexes`) dentro de la
-      // transacción. Cada asignación del plan obtenido bajo lock vuelve a consultar
-      // Membership dentro del snapshot transaccional antes de escribir.
+      // transacción. Cada asignación obtenida bajo lock vuelve a consultar tanto
+      // Membership como Business físico y activo dentro del snapshot transaccional.
       await applyBackfill(connection.db, lockedPlan, session, mutationCheckpoint);
     });
     await checkpointLock();
