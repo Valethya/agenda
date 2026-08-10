@@ -9,6 +9,26 @@ import * as membershipRepository from "../repositories/membership.repository.js"
 import { NotFoundError, ValidationError } from "../utils/appError.js";
 import { timeToMinutes, minutesToTime, checkOverlap } from "../utils/time.js";
 
+export const resolveActiveWorkerInTenant = async (workerId, businessId) => {
+  const [worker, membership] = await Promise.all([
+    userRepository.findById(workerId),
+    membershipRepository.findActiveByUserAndBusiness(workerId, businessId),
+  ]);
+
+  if (
+    !worker ||
+    worker.isActive !== true ||
+    !membership ||
+    membership.role !== "worker" ||
+    !membership.business ||
+    membership.business.isActive !== true
+  ) {
+    throw new NotFoundError("El profesional especificado no está disponible");
+  }
+
+  return { worker, membership };
+};
+
 export const getAvailableSlots = async (workerId, dateStr, serviceId, businessId, excludeAppointmentId = null) => {
   if (!businessId) throw new ValidationError("El contexto de negocio es obligatorio para consultar disponibilidad");
 
