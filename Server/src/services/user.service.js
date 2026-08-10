@@ -1,5 +1,6 @@
 import * as userRepository from "../repositories/user.repository.js";
 import * as shiftRepository from "../repositories/shift.repository.js";
+import * as blockRepository from "../repositories/block.repository.js";
 import { createHash } from "../utils/password.js";
 import { ConflictError, NotFoundError } from "../utils/appError.js";
 import * as membershipRepository from "../repositories/membership.repository.js";
@@ -81,21 +82,24 @@ export const createWorker = async (workerData, businessId) => {
 // 2. Dar de baja a un trabajador (Soft Delete en membresía)
 export const deleteWorker = async (workerId, businessId, softDelete = true) => {
   const membership = await membershipRepository.findByUserBusinessAndRole(workerId, businessId, "worker");
-  
+
   if (!membership) {
     throw new NotFoundError("El trabajador especificado no existe o no tiene ese rol en este negocio");
   }
 
   if (softDelete) {
-    // Desactivamos la membresía en este negocio
+    // Soft delete conserva recursos operacionales tenant para una eventual reactivación.
     membership.isActive = false;
     await membershipRepository.save(membership);
   } else {
-    // Eliminación física de la membresía y de sus turnos únicamente en este negocio
+    // Hard delete retira únicamente los recursos operacionales del tenant actual.
     await membershipRepository.deleteOne(membership);
-    await shiftRepository.deleteByBusinessAndWorker(businessId, workerId);
-    
-    // Si no tiene más membresías activas en ningún otro negocio, desactivamos el usuario global
+    await Promise.all([
+      shiftRepository.deleteByBusinessAndWorker(businessId, workerId),
+      blockRepository.deleteByBusinessAndWorker(businessId, workerId),
+    ]);
+
+    // Si no tiene más membresías en ningún otro negocio, desactivamos el usuario global.
     const otherMembershipsCount = await membershipRepository.countByUser(workerId);
     if (otherMembershipsCount === 0) {
       await userRepository.updateUser(workerId, { isActive: false });
@@ -109,12 +113,12 @@ export const getWorkersList = async (businessId, onlyActive = true) => {
   if (onlyActive) {
     query.isActive = true;
   }
-  
+
   const memberships = await membershipRepository.findAll(query);
-  
+
   return memberships
-    .filter(m => m.user && (!onlyActive || m.user.isActive))
-    .map(m => {
+    .filter((m) => m.user && (!onlyActive || m.user.isActive))
+    .map((m) => {
       const userObj = m.user.toObject();
       return {
         ...userObj,
