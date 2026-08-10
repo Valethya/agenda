@@ -47,6 +47,7 @@ export const confirmAppointment = async (req, res, next) => {
       req.params.id,
       req.session.user.id,
       effectiveTenantRole(req),
+      req.businessId,
     );
     res.status(200).json({ status: "success", message: "Cita confirmada correctamente", payload: updatedAppointment });
   } catch (error) { next(error); }
@@ -58,6 +59,7 @@ export const completeAppointment = async (req, res, next) => {
       req.params.id,
       req.session.user.id,
       effectiveTenantRole(req),
+      req.businessId,
     );
     res.status(200).json({ status: "success", message: "Cita completada correctamente", payload: updatedAppointment });
   } catch (error) { next(error); }
@@ -69,6 +71,7 @@ export const cancelAppointment = async (req, res, next) => {
       req.params.id,
       req.session.user.id,
       effectiveTenantRole(req),
+      req.businessId,
     );
     res.status(200).json({ status: "success", message: "Cita cancelada correctamente", payload: updatedAppointment });
   } catch (error) { next(error); }
@@ -80,6 +83,7 @@ export const getAppointment = async (req, res, next) => {
       req.params.id,
       req.session.user.id,
       effectiveTenantRole(req),
+      req.businessId,
     );
     res.status(200).json({ status: "success", payload: appointment });
   } catch (error) { next(error); }
@@ -102,6 +106,7 @@ export const getAppointmentTimeline = async (req, res, next) => {
       req.params.id,
       req.session.user.id,
       effectiveTenantRole(req),
+      req.businessId,
     );
     const AuditLog = (await import("../db/models/auditLog.model.js")).default;
     const timeline = await AuditLog.find({ appointmentId: req.params.id }).sort({ createdAt: 1 });
