@@ -20,6 +20,7 @@ export const getSlots = async (req, res, next) => {
 
 export const getWorkerShifts = async (req, res, next) => {
   try {
+    await availabilityService.resolveActiveWorkerInTenant(req.params.workerId, req.businessId);
     const shifts = await shiftRepository.findByWorker(req.params.workerId);
     res.status(200).json({ status: "success", payload: shifts });
   } catch (error) { next(error); }
