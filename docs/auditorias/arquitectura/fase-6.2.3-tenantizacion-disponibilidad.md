@@ -453,7 +453,7 @@ Cobertura de la corrección adversarial:
 - pérdida del fencing lock => abort y no libera lock ajeno;
 - fallo de `createIndex` => índices legacy conservados.
 
-En el run de estabilización de código #109, la suite de migración quedó **15/15 pass** y la integración completa **88/88 pass**.
+En GitHub Actions #111, sobre HEAD de código y gate `3b89de91163ad8eaa8d6115317c2391eb26dd7f8`, la suite de migración quedó **15/15 pass** y la integración completa **88/88 pass**.
 
 # Lifecycle de worker
 
@@ -494,16 +494,16 @@ Se mantienen:
 
 # CI de esta corrección adversarial
 
-Run de estabilización de código antes del cierre documental:
+Último run completo de código + gate antes del commit documental de cierre:
 
 ```text
-GitHub Actions #109
-HEAD: 77b0973a65c337cab6f663e9d7fb6bf21f97d3b4
+GitHub Actions #111
+HEAD: 3b89de91163ad8eaa8d6115317c2391eb26dd7f8
 ```
 
 Resultado:
 
-- Backend unit: **249/249 pass, 0 fail**.
+- Backend unit: **250/250 pass, 0 fail**.
 - Backend integration: **88/88 pass, 0 fail**:
   - Membership physical audit 1/1;
   - Membership baseline 7/7;
@@ -519,7 +519,7 @@ Resultado:
 - Frontend policy + Astro + strict TypeScript + production build: **SUCCESS**.
 - Gitleaks: **SUCCESS**.
 
-El HEAD documental generado por este archivo debe volver a ejecutar la misma CI. El número/run final asociado al HEAD definitivo se registra en la descripción del PR una vez estabilizado, para evitar presentar un run de un commit anterior como si validara un HEAD posterior.
+Este archivo es una mutación documental posterior al run #111 y por ello genera un nuevo HEAD/run. La descripción del PR registra el run exacto que valida el HEAD definitivo, evitando afirmar que un CI anterior validó un commit posterior.
 
 Los advisories de dependencias preexistentes permanecen fuera del alcance 6.2.3; el workflow continúa usando threshold `critical`.
 
