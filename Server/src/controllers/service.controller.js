@@ -10,7 +10,8 @@ export const getServices = async (req, res, next) => {
 
 export const getService = async (req, res, next) => {
   try {
-    const service = await serviceService.getServiceById(req.params.id);
+    const onlyActive = req.tenantAuthority?.role !== "admin";
+    const service = await serviceService.getServiceById(req.params.id, req.businessId, onlyActive);
     res.status(200).json({ status: "success", payload: service });
   } catch (error) { next(error); }
 };
@@ -32,7 +33,7 @@ export const updateService = async (req, res, next) => {
 export const deleteService = async (req, res, next) => {
   try {
     const hardDelete = req.query.hard === "true";
-    await serviceService.deleteService(req.params.id, !hardDelete);
+    await serviceService.deleteService(req.params.id, req.businessId, !hardDelete);
     res.status(200).json({
       status: "success",
       message: hardDelete ? "Servicio eliminado físicamente de la base de datos" : "Servicio desactivado correctamente (Soft Delete)",
