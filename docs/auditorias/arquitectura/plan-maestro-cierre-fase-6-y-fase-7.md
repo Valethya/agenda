@@ -246,25 +246,31 @@ declaradas verifican contra los hashes almacenados. Una contraseña distinta,
 un hash inválido o un fallo de verificación produce un estado `partial`; no se
 rotan contraseñas automáticamente.
 
-Las ejecuciones `apply` se serializan mediante un lock atómico de clave estable
-en una colección técnica controlada. El lock tiene propietario y una marca de
-expiración operativa, pero nunca se recupera automáticamente: incluso vencido
-bloquea hasta confirmar manualmente que su propietario terminó. La propiedad se
-comprueba antes de cada mutación y sólo el propietario vigente puede liberarlo.
-Una vez adquirido, el bootstrap vuelve a leer todo el estado antes de decidir
-si crea, aborta o termina como no-op. Si la comprobación posterior a las
-escrituras no es concluyente, no declara éxito ni compensa a ciegas: informa un
-resultado `unknown` y exige ejecutar `plan` antes de reintentar. Una baseline
-completa se denomina `ready`; no existe un estado redundante `existing`. Los
-seeds destructivos anteriores de Atmósfera y DAM quedan desactivados.
+Las ejecuciones `apply` se serializan dentro de una transacción MongoDB sobre
+replica set. La clave estable del lock, su propietario, las lecturas de datos,
+las colecciones, el índice, los documentos, la verificación y la liberación
+comparten la misma sesión y número de transacción, que actúan como fence. El
+catálogo se relee después de adquirir el fence mediante comandos read-only que
+MongoDB no permite dentro de una transacción; cualquier cambio concurrente hace
+fallar el flujo de forma cerrada. Si el proceso cae o la transacción expira,
+MongoDB revierte la unidad completa y libera el conflicto; el propietario
+anterior no puede confirmar ninguna escritura al reanudarse. MongoDB standalone
+se rechaza antes de mutar. Si un commit o cierre queda incierto, no declara
+éxito ni compensa a ciegas: informa `unknown` y exige ejecutar `plan` antes de
+reintentar. Una baseline completa se denomina `ready`; no existe un estado
+redundante `existing`. Los seeds destructivos anteriores de Atmósfera y DAM
+quedan desactivados.
 
 El PR #21 añade un asistente local separado cuya API controla el bind
 exclusivamente a `127.0.0.1` y verifica socket, `Host` y `Origin` sin confiar en
 cabeceras de proxy. Recibe en memoria los datos de las dos personas
 propietarias, aplica JSON estricto, CSRF, límite de 32 KiB, timeouts y errores
 públicos estables. Exige un `plan` seguro antes de habilitar `apply`; el token
-es aleatorio, de un solo uso, sólo existe en memoria, se consume antes de
-aplicar y vence con `expiresAt <= now`. No persiste, registra ni devuelve
+es aleatorio, de un solo uso y sólo existe en memoria. Un intento de `apply`
+con token identificable lo consume antes de validar el resto del payload, por
+lo que cualquier alteración invalida la aprobación. Los request-targets
+malformados, absolutos o ambiguos se rechazan sin terminar el servidor. El token
+vence con `expiresAt <= now`. No persiste, registra ni devuelve
 credenciales y no se conecta al arranque normal, a Railway, Vercel ni al
 despliegue. `MONGO_URI` continúa siendo un secreto local de conexión; los datos
 de los propietarios no necesitan almacenarse en `.env` cuando se utiliza el
@@ -847,10 +853,10 @@ preproductiva sin mezclar todavía 6.2.3, 6.2.4 ni el responsive:
    fingerprint del destino de desarrollo;
 3. ejecutar primero `plan` y conservar su evidencia operativa sin secretos;
 4. ejecutar `apply` de forma manual y controlada únicamente si el preflight
-   declara la base elegible; no lanzar escritores concurrentes y, ante un
-   resultado `unknown`, volver obligatoriamente a `plan` antes de reintentar;
-   un lock abandonado sólo puede retirarse después de comprobar que el proceso
-   propietario terminó y nunca por la mera expiración;
+   declara la base elegible y confirma una topología replica set; ante un
+   resultado `unknown`, volver obligatoriamente a `plan` antes de reintentar.
+   Una sesión caída o transacción expirada se recupera mediante rollback del
+   servidor, nunca borrando manualmente un lock comprometido;
 5. crear y verificar de forma controlada el índice único físico, sin depender
    de `autoIndex`,
    `{ user: 1, business: 1 }`;

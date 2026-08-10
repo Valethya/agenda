@@ -849,9 +849,16 @@ timeouts, cabeceras defensivas y errores públicos estables sin mensajes del
 driver o dependencias. Sólo acepta `development` o `test`, exige un fingerprint
 aprobado, ejecuta `plan` antes de habilitar `apply` y vincula la aprobación
 temporal al contenido normalizado exacto que consumirá el bootstrap. El token
-es aleatorio, en memoria, de un solo uso, se consume antes de `apply` y vence
-cuando `expiresAt <= now`; un reinicio lo invalida. No forma parte de `start`,
-`dev`, Railway, Vercel ni del despliegue.
+es aleatorio, en memoria y de un solo uso. En `/api/apply`, un token con formato
+válido se consume atómicamente inmediatamente después de parsear el JSON y
+antes de validar o normalizar el resto del payload; por ello, cualquier intento
+alterado invalida la aprobación aunque falle por campos adicionales, omitidos,
+credenciales inválidas, confirmación o digest. Vence cuando
+`expiresAt <= now` y un reinicio lo invalida. Los request-targets deben usar
+origin-form, comenzar con `/` y no ser absolutos ni ambiguos; el handler superior
+convierte cualquier fallo controlado por el cliente en un error público estable
+sin terminar el proceso. No forma parte de `start`, `dev`, Railway, Vercel ni
+del despliegue.
 
 `MEMBERSHIP_BASELINE_BOOTSTRAP_VERSION` avanza a `2.0.0` porque la definición
 exacta cambia de cuatro identidades a dos propietarios administradores y admite
@@ -890,46 +897,65 @@ El preflight y la sección crítica se comportan de forma fail-closed:
 4. un índice compuesto `{ user: 1, business: 1 }` existente pero incorrecto, o
    cualquier definición incompatible que ocupe el nombre físico
    `user_1_business_1`, bloquea y no se elimina ni modifica automáticamente;
-5. si falta el índice en una base elegible, `apply` lo crea de forma explícita
-   con `unique: true` y comprueba físicamente su definición;
-6. cada `apply` usa la clave estable `membership-baseline-v1` en la colección
-   técnica controlada `membership_baseline_locks`. La adquisición es una
-   inserción atómica que registra `ownerId`, `acquiredAt` y `expiresAt`, y sólo
-   admite un propietario. `expiresAt` se persiste como marca ISO informativa,
-   no como fecha apta para un índice TTL que pudiera borrar el lock;
-7. `expiresAt` es una señal operativa y nunca habilita recuperación automática.
-   Un segundo proceso rechaza incluso un lock vencido, porque el propietario
-   anterior podría estar suspendido y reanudarse. La propiedad se comprueba
-   antes de cada creación de colección, índice e inserción. Sólo el propietario
-   vigente puede liberar el lock y la liberación se intenta en `finally`;
-8. después de adquirir el lock, `apply` vuelve a leer y clasificar la base. Si
+5. si las colecciones funcionales todavía no existen, `apply` las crea y crea
+   el índice `unique: true` dentro de la misma transacción. MongoDB sólo permite
+   crear transaccionalmente un índice en una colección nueva y vacía creada en
+   esa transacción; por eso, una colección `memberships` preexistente sin el
+   índice exacto se clasifica `partial` y se bloquea en vez de crear el índice
+   fuera de la sección crítica;
+6. `plan` y `apply` exigen una topología replica set que admita transacciones.
+   MongoDB standalone se rechaza antes de crear la colección técnica o iniciar
+   mutaciones. El MongoDB efímero de CI usa un replica set aislado de un nodo;
+7. cada `apply` abre una transacción con `readConcern: local`, escritura
+   `majority` y lectura primaria. Dentro de esa transacción inserta de forma
+   atómica la clave estable `membership-baseline-v1` en
+   `membership_baseline_locks`, con `ownerId`, versión de protocolo y mecanismo
+   de fencing `mongodb-transaction`. El documento nunca queda comprometido:
+   sólo el mismo propietario puede eliminarlo antes del commit;
+8. la sesión y el número de transacción constituyen el fence real. Todas las
+   comprobaciones de propiedad, lecturas de documentos, creaciones de
+   colecciones e índice, inserciones y liberación reciben la misma sesión. Si el
+   servidor expira o aborta la transacción, una operación del propietario
+   anterior ya no puede ejecutarse ni confirmarse, incluso si el proceso se
+   reanuda después de una pausa;
+9. después de adquirir el fence, `apply` relee el catálogo y los documentos y
+   vuelve a clasificar la base. Los comandos `listCollections` y `listIndexes`,
+   que MongoDB no admite dentro de una transacción, se ejecutan después de
+   adquirir el fence pero fuera de la sesión; sólo aportan metadatos al plan y
+   nunca escriben. Los documentos sí se releen dentro de la transacción. Un
+   cambio concurrente del catálogo hace fallar la operación de forma cerrada.
+   Si
    otro proceso ya dejó la baseline `ready`, finaliza como no-op; si observa un
    estado `partial`, aborta sin escribir;
-9. la colección técnica de lock vacía es compatible con una base funcional
+10. la colección técnica de lock vacía es compatible con una base funcional
    `empty`, pero no vuelve admisibles documentos funcionales ni otras
    colecciones ajenas;
-10. no existe compensación ciega después de comenzar las escrituras. Si la
-    lectura de verificación no permite confirmar el resultado, el comando no
-    declara `applied: true`, informa un resultado desconocido y exige ejecutar
-    `plan` antes de cualquier reintento. Un estado parcial confirmado también
-    bloquea; nunca se eliminan documentos que podrían pertenecer a otra
-    ejecución.
+11. una caída antes del commit o una expiración de la transacción provoca
+    rollback automático, incluida la creación de colecciones e índice. El
+    siguiente proceso adquiere un fence nuevo, relee desde cero y puede aplicar;
+    no existe un lock comprometido que deba borrarse manualmente;
+12. un error de commit, aborto, liberación, verificación o cierre cuyo resultado
+    no pueda confirmarse nunca declara `applied: true`: informa `unknown` y
+    exige un nuevo `plan`. No existe compensación destructiva ni se eliminan
+    documentos funcionales para reparar un estado inesperado.
 
 Una baseline completa se representa como `ready`; no existe un estado separado
 `existing` porque no aportaría una transición distinta. `ready` con el índice
 exacto es no-op idempotente. `empty` es elegible para creación, `partial`
 bloquea y un fallo posterior al inicio de mutaciones produce resultado
-`unknown`. Ante `partial` o `unknown` no existe recuperación automática: se
+`unknown`. Ante `partial` o `unknown` no existe reparación automática: se
 debe detener toda escritura, ejecutar un nuevo `plan`, inspeccionar manualmente
 colecciones, documentos e índices y decidir una remediación explícita sin
 borrados compensatorios.
 
-Un lock abandonado sólo puede retirarse manualmente después de confirmar fuera
-del proceso que el propietario terminó y no puede reanudarse. Después de
-retirarlo es obligatorio ejecutar un nuevo `plan`; la mera expiración nunca
-autoriza otro `apply`. Los IDs deterministas BSON de los seis documentos
-esperados actúan además como defensa frente a duplicación accidental, sin
-convertirse en un mecanismo de recuperación.
+No existe recuperación por robo de un documento según una fecha controlada por
+la aplicación. La recuperación pertenece a MongoDB: al terminar la sesión,
+caer el proceso o superar el límite de vida de la transacción, el servidor
+aborta la unidad completa y libera el conflicto de escritura. Un proceso
+reanudado conserva una transacción inválida y no puede escribir; debe cerrar
+su flujo. El reintento operativo siempre comienza con un nuevo `plan`. Los IDs
+deterministas BSON actúan además como defensa frente a duplicación accidental,
+sin sustituir la atomicidad transaccional.
 
 Los seeds destructivos heredados `seed-atmosfera.js` y `seed-dam.js` quedan
 desactivados e indican utilizar el nuevo comando. Esta implementación no ha sido
