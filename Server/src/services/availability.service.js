@@ -40,10 +40,10 @@ export const getAvailableSlots = async (workerId, dateStr, serviceId, businessId
     serviceRepository.findByIdAndBusiness(serviceId, businessId),
     userRepository.findById(workerId),
     membershipRepository.findActiveByUserAndBusiness(workerId, businessId),
-    shiftRepository.findByWorkerAndDay(workerId, dayOfWeek),
-    holidayRepository.findByDate(new Date(Date.UTC(dateParts[0], dateParts[1] - 1, dateParts[2]))),
-    appointmentRepository.findByWorkerAndDate(workerId, targetDate),
-    blockRepository.findByWorkerAndDateRange(workerId, targetDate, targetDate),
+    shiftRepository.findByBusinessWorkerAndDay(businessId, workerId, dayOfWeek),
+    holidayRepository.findByDate(targetDate),
+    appointmentRepository.findByBusinessWorkerAndDate(businessId, workerId, targetDate),
+    blockRepository.findByBusinessWorkerAndDateRange(businessId, workerId, targetDate, targetDate),
     businessConfigRepository.getConfig(businessId),
   ]);
 
@@ -52,7 +52,9 @@ export const getAvailableSlots = async (workerId, dateStr, serviceId, businessId
     !worker ||
     worker.isActive !== true ||
     !workerMembership ||
-    workerMembership.role !== "worker"
+    workerMembership.role !== "worker" ||
+    !workerMembership.business ||
+    workerMembership.business.isActive !== true
   ) {
     throw new NotFoundError("El profesional especificado no está disponible");
   }
