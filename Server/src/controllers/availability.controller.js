@@ -21,7 +21,7 @@ export const getSlots = async (req, res, next) => {
 export const getWorkerShifts = async (req, res, next) => {
   try {
     await availabilityService.resolveActiveWorkerInTenant(req.params.workerId, req.businessId);
-    const shifts = await shiftRepository.findByWorker(req.params.workerId);
+    const shifts = await shiftRepository.findByBusinessAndWorker(req.businessId, req.params.workerId);
     res.status(200).json({ status: "success", payload: shifts });
   } catch (error) { next(error); }
 };
@@ -40,9 +40,12 @@ export const saveShift = async (req, res, next) => {
       return res.status(403).json({ status: "fail", message: "No tiene permisos para modificar turnos de otro trabajador" });
     }
 
-    const updatedShift = await shiftRepository.upsert(workerId, dayOfWeek, {
-      isOpen, startTime, endTime, breaks,
-    });
+    const updatedShift = await shiftRepository.upsertByBusinessWorkerAndDay(
+      req.businessId,
+      workerId,
+      dayOfWeek,
+      { isOpen, startTime, endTime, breaks },
+    );
     res.status(200).json({ status: "success", message: "Configuración de turno guardada correctamente", payload: updatedShift });
   } catch (error) { next(error); }
 };
@@ -61,13 +64,16 @@ export const createBlock = async (req, res, next) => {
       return res.status(403).json({ status: "fail", message: "No tiene permisos para bloquear el horario de otro trabajador" });
     }
 
-    const newBlock = await blockRepository.create({
-      worker: workerId,
-      date: new Date(date),
-      startTime,
-      endTime,
-      reason,
-    });
+    const newBlock = await blockRepository.createForBusinessWorker(
+      req.businessId,
+      workerId,
+      {
+        date: new Date(date),
+        startTime,
+        endTime,
+        reason,
+      },
+    );
     const dateStr = new Date(date).toISOString().split("T")[0];
     emitAvailabilityChange(workerId, dateStr, req.businessId);
     res.status(201).json({ status: "success", message: "Horario bloqueado administrativamente con éxito", payload: newBlock });
@@ -76,12 +82,12 @@ export const createBlock = async (req, res, next) => {
 
 export const deleteBlock = async (req, res, next) => {
   try {
-    const block = await blockRepository.findAll({ _id: req.params.id });
-    if (!block || block.length === 0) {
+    const block = await blockRepository.findByIdAndBusiness(req.params.id, req.businessId);
+    if (!block) {
       return res.status(404).json({ status: "fail", message: "El bloqueo especificado no existe" });
     }
 
-    const blockOwnerId = block[0].worker._id.toString();
+    const blockOwnerId = block.worker.toString();
     await availabilityService.resolveActiveWorkerInTenant(blockOwnerId, req.businessId);
 
     const { role, userId } = req.tenantAuthority;
@@ -89,12 +95,16 @@ export const deleteBlock = async (req, res, next) => {
       return res.status(403).json({ status: "fail", message: "No tiene permisos para eliminar bloqueos de otro trabajador" });
     }
 
-    const deleted = await blockRepository.deleteByIdAndWorker(req.params.id, blockOwnerId);
+    const deleted = await blockRepository.deleteByIdBusinessAndWorker(
+      req.params.id,
+      req.businessId,
+      blockOwnerId,
+    );
     if (!deleted) {
       return res.status(404).json({ status: "fail", message: "El bloqueo especificado no existe" });
     }
 
-    const dateStr = new Date(block[0].date).toISOString().split("T")[0];
+    const dateStr = new Date(block.date).toISOString().split("T")[0];
     emitAvailabilityChange(blockOwnerId, dateStr, req.businessId);
     res.status(200).json({ status: "success", message: "Horario desbloqueado correctamente" });
   } catch (error) { next(error); }
