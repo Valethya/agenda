@@ -25,13 +25,10 @@ const revalidateSocketTenant = async (socket) => {
   const storedSession = await getStoredSession(socket);
   const sessionUser = storedSession?.user;
   if (!sessionUser?.id || !sessionUser.businessId) return null;
-
-  // Un cambio de tenant invalida el contexto capturado por este socket.
   if (sessionUser.businessId.toString() !== socket.data.businessId?.toString()) return null;
 
   const authority = await findTenantAuthority(sessionUser.id, sessionUser.businessId);
   if (!authority) return null;
-
   socket.data.tenantRole = authority.role;
   return authority;
 };
@@ -46,7 +43,6 @@ const revokeSocketTenantAccess = (socket) => {
 
 export const initSocket = (httpServer) => {
   const allowedOrigins = corsOrigins.split(",").map((o) => o.trim());
-
   io = new Server(httpServer, {
     cors: { origin: allowedOrigins, methods: ["GET", "POST"], credentials: true },
   });
@@ -68,11 +64,8 @@ export const initSocket = (httpServer) => {
 
       if (socket.data.businessId) {
         const authority = await findTenantAuthority(user._id, socket.data.businessId, { user });
-        if (authority) {
-          socket.data.tenantRole = authority.role;
-        } else if (user.role !== "superadmin") {
-          return next(new Error("No autorizado"));
-        }
+        if (authority) socket.data.tenantRole = authority.role;
+        else if (user.role !== "superadmin") return next(new Error("No autorizado"));
       } else if (user.role !== "superadmin") {
         return next(new Error("No autorizado"));
       }
@@ -86,14 +79,10 @@ export const initSocket = (httpServer) => {
 
   io.on("connection", (socket) => {
     logger.info(`Cliente WebSocket conectado: ${socket.id} (user=${socket.data.userId})`);
-
-    if (socket.data.businessId && socket.data.tenantRole) {
-      socket.join(`business:${socket.data.businessId}`);
-    }
+    if (socket.data.businessId && socket.data.tenantRole) socket.join(`business:${socket.data.businessId}`);
 
     socket.on("join_availability", async ({ workerId, date }) => {
       if (!workerId || !date) return;
-
       try {
         const authority = await revalidateSocketTenant(socket);
         if (!authority) {
@@ -102,10 +91,7 @@ export const initSocket = (httpServer) => {
           return;
         }
 
-        const workerMembership = await membershipRepository.findActiveByUserAndBusiness(
-          workerId,
-          authority.businessId,
-        );
+        const workerMembership = await membershipRepository.findActiveByUserAndBusiness(workerId, authority.businessId);
         if (!workerMembership || workerMembership.role !== "worker") {
           socket.emit("ws_error", { message: "El trabajador no pertenece a su negocio" });
           return;
@@ -124,9 +110,7 @@ export const initSocket = (httpServer) => {
       if (workerId && date) socket.leave(`availability:${workerId}:${date}`);
     });
 
-    socket.on("disconnect", () => {
-      logger.info(`Cliente WebSocket desconectado: ${socket.id}`);
-    });
+    socket.on("disconnect", () => logger.info(`Cliente WebSocket desconectado: ${socket.id}`));
   });
 
   return io;
@@ -137,36 +121,34 @@ export const getIO = () => {
   return io;
 };
 
-const emitTenantCalendarUpdate = async (businessId) => {
-  if (!io || !businessId) return;
+const pruneTenantSockets = async (businessId) => {
   const businessRoom = `business:${businessId}`;
-
-  // Antes de emitir a una sala tenant, retirar sockets cuya Membership fue
-  // revocada o cuyo tenant activo cambió desde el handshake.
   for (const socket of io.sockets.sockets.values()) {
     if (!socket.rooms.has(businessRoom)) continue;
     try {
-      const authority = await revalidateSocketTenant(socket);
-      if (!authority) revokeSocketTenantAccess(socket);
+      if (!await revalidateSocketTenant(socket)) revokeSocketTenantAccess(socket);
     } catch (error) {
       logger.error(`Error al revalidar socket ${socket.id}: ${error.message}`);
       revokeSocketTenantAccess(socket);
     }
   }
+};
 
+const emitTenantAvailabilityChange = async (workerId, dateStr, businessId) => {
+  await pruneTenantSockets(businessId);
+
+  const availabilityRoom = `availability:${workerId}:${dateStr}`;
+  io.to(availabilityRoom).emit("availability_changed", { workerId, date: dateStr });
+  logger.info(`WS Broadcast: Cambios de disponibilidad en la sala ${availabilityRoom}`);
+
+  const businessRoom = `business:${businessId}`;
   io.to(businessRoom).emit("calendar_update");
   logger.info(`WS Broadcast: calendar_update emitido a ${businessRoom}`);
 };
 
 export const emitAvailabilityChange = (workerId, dateStr, businessId) => {
-  if (!io) return;
-  const room = `availability:${workerId}:${dateStr}`;
-  io.to(room).emit("availability_changed", { workerId, date: dateStr });
-  logger.info(`WS Broadcast: Cambios de disponibilidad en la sala ${room}`);
-
-  if (businessId) {
-    void emitTenantCalendarUpdate(businessId).catch((error) => {
-      logger.error(`Error al emitir calendar_update tenant: ${error.message}`);
-    });
-  }
+  if (!io || !businessId) return;
+  void emitTenantAvailabilityChange(workerId, dateStr, businessId).catch((error) => {
+    logger.error(`Error al emitir actualización tenant por WebSocket: ${error.message}`);
+  });
 };
