@@ -1,4 +1,3 @@
-import { mongo } from "mongoose";
 import {
   ALLOWED_APPOINTMENT_STATUSES,
   AVAILABILITY_INDEX_SPECS,
@@ -59,6 +58,17 @@ const countNonObjectIdBusiness = (collection) => collection.countDocuments({
   $expr: { $ne: [{ $type: "$business" }, "objectId"] },
 });
 
+const countInvalidAppointmentStatuses = (collection) => collection.countDocuments({
+  $expr: {
+    $not: [{
+      $and: [
+        { $eq: [{ $type: "$status" }, "string"] },
+        { $in: ["$status", [...ALLOWED_APPOINTMENT_STATUSES]] },
+      ],
+    }],
+  },
+});
+
 export const assertAvailabilityRuntimeStorageReady = async (
   db,
   processEnvironment = process.env,
@@ -84,9 +94,7 @@ export const assertAvailabilityRuntimeStorageReady = async (
   const [invalidShifts, invalidBlocks, invalidAppointmentStatuses] = await Promise.all([
     countNonObjectIdBusiness(db.collection("shifts")),
     countNonObjectIdBusiness(db.collection("blocks")),
-    db.collection("appointments").countDocuments({
-      status: { $nin: [...ALLOWED_APPOINTMENT_STATUSES] },
-    }),
+    countInvalidAppointmentStatuses(db.collection("appointments")),
   ]);
 
   if (invalidShifts || invalidBlocks) {
@@ -117,5 +125,3 @@ export const assertAvailabilityRuntimeStorageReady = async (
 
   return { enforced: true, ready: true };
 };
-
-export const isPhysicalObjectId = (value) => value instanceof mongo.ObjectId;
