@@ -63,7 +63,9 @@ appointmentSchema.index(
   { business: 1, worker: 1, date: 1, startTime: 1 },
   {
     unique: true,
-    partialFilterExpression: { status: { $ne: "cancelled" } },
+    partialFilterExpression: {
+      status: { $in: ["pending_payment", "pending", "confirmed", "completed"] },
+    },
     name: "appointment_business_worker_date_start_active_unique",
   }
 );
