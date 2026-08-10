@@ -55,7 +55,7 @@ const appointmentSchema = new mongoose.Schema(
   {
     timestamps: true,
     versionKey: false,
-    autoIndex: false,
+    autoIndex: process.env.NODE_ENV === "test",
   }
 );
 
