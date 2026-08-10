@@ -26,3 +26,7 @@ export const deleteByIdBusinessAndWorker = async (id, businessId, workerId) => {
     worker: workerId,
   });
 };
+
+export const deleteByBusinessAndWorker = async (businessId, workerId) => {
+  return await Block.deleteMany({ business: businessId, worker: workerId });
+};
