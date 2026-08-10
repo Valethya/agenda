@@ -9,19 +9,7 @@ import { initSocket, emitAvailabilityChange } from "../../src/config/socket.js";
 import Membership from "../../src/db/models/membership.model.js";
 
 await connectDB();
-let seed, port, httpServer;
-
-before(async () => {
-  await cleanTestData();
-  seed = await seedTestData();
-  httpServer = app.listen(0);
-  port = httpServer.address().port;
-  initSocket(httpServer);
-});
-
-after(async () => {
-  await teardown(httpServer, sessionStore);
-});
+let seed, port, httpServer, adminCookie, userBCookie;
 
 async function loginAndGetCookie(email, password) {
   const res = await fetch(`http://localhost:${port}/api/login`, {
@@ -35,6 +23,20 @@ async function loginAndGetCookie(email, password) {
   }
   return res.headers.get("set-cookie");
 }
+
+before(async () => {
+  await cleanTestData();
+  seed = await seedTestData();
+  httpServer = app.listen(0);
+  port = httpServer.address().port;
+  initSocket(httpServer);
+  adminCookie = await loginAndGetCookie("test-admin@example.com", "passwordAdmin");
+  userBCookie = await loginAndGetCookie("user-b@example.com", "passwordUserB");
+});
+
+after(async () => {
+  await teardown(httpServer, sessionStore);
+});
 
 async function switchBusiness(cookie, businessId) {
   return fetch(`http://localhost:${port}/api/switch-business`, {
@@ -91,16 +93,14 @@ describe("WebSocket Authentication (6.2.2-D)", () => {
   });
 
   it("permite conexión autenticada con Membership activa", async () => {
-    const cookie = await loginAndGetCookie("test-admin@example.com", "passwordAdmin");
-    const socket = createSocketClient(cookie);
+    const socket = createSocketClient(adminCookie);
     await connectSocket(socket);
     assert.ok(socket.connected);
     socket.disconnect();
   });
 
   it("permite join_availability para worker del mismo negocio", async () => {
-    const cookie = await loginAndGetCookie("test-admin@example.com", "passwordAdmin");
-    const socket = createSocketClient(cookie);
+    const socket = createSocketClient(adminCookie);
     await connectSocket(socket);
 
     const error = await emitAndWaitForWsError(
@@ -114,8 +114,7 @@ describe("WebSocket Authentication (6.2.2-D)", () => {
   });
 
   it("revocar Membership después del handshake bloquea la siguiente operación", async () => {
-    const cookie = await loginAndGetCookie("test-admin@example.com", "passwordAdmin");
-    const socket = createSocketClient(cookie);
+    const socket = createSocketClient(adminCookie);
     await connectSocket(socket);
 
     const membership = await Membership.findOne({ user: seed.admin._id, business: seed.business._id });
@@ -136,8 +135,7 @@ describe("WebSocket Authentication (6.2.2-D)", () => {
   });
 
   it("un socket revocado deja de recibir broadcasts tenant", async () => {
-    const cookie = await loginAndGetCookie("test-admin@example.com", "passwordAdmin");
-    const socket = createSocketClient(cookie);
+    const socket = createSocketClient(adminCookie);
     await connectSocket(socket);
 
     const joinError = await emitAndWaitForWsError(socket, "join_availability", {
@@ -166,8 +164,7 @@ describe("WebSocket Authentication (6.2.2-D)", () => {
 
 describe("WebSocket Multitenant Isolation", () => {
   it("rechaza join_availability cuando el worker pertenece a otro negocio", async () => {
-    const cookieA = await loginAndGetCookie("test-admin@example.com", "passwordAdmin");
-    const socketA = createSocketClient(cookieA);
+    const socketA = createSocketClient(adminCookie);
     await connectSocket(socketA);
 
     const result = await emitAndWaitForWsError(socketA, "join_availability", {
@@ -179,12 +176,9 @@ describe("WebSocket Multitenant Isolation", () => {
   });
 
   it("socket del negocio B no recibe calendar_update emitido para el negocio A", async () => {
-    const cookieA = await loginAndGetCookie("test-admin@example.com", "passwordAdmin");
-    const socketA = createSocketClient(cookieA);
+    const socketA = createSocketClient(adminCookie);
     await connectSocket(socketA);
-
-    const cookieB = await loginAndGetCookie("user-b@example.com", "passwordUserB");
-    const socketB = createSocketClient(cookieB);
+    const socketB = createSocketClient(userBCookie);
     await connectSocket(socketB);
 
     let socketAReceived = false;
@@ -202,8 +196,7 @@ describe("WebSocket Multitenant Isolation", () => {
   });
 
   it("cambiar tenant en HTTP invalida el contexto antiguo del socket", async () => {
-    const cookie = await loginAndGetCookie("user-b@example.com", "passwordUserB");
-    const socket = createSocketClient(cookie);
+    const socket = createSocketClient(userBCookie);
     await connectSocket(socket);
 
     const addedMembership = await Membership.create({
@@ -214,7 +207,7 @@ describe("WebSocket Multitenant Isolation", () => {
     });
 
     try {
-      const switched = await switchBusiness(cookie, seed.business._id.toString());
+      const switched = await switchBusiness(userBCookie, seed.business._id.toString());
       assert.equal(switched.status, 200);
 
       const error = await emitAndWaitForWsError(socket, "join_availability", {
