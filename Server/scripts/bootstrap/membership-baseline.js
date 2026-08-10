@@ -1,6 +1,6 @@
 import "dotenv/config";
 
-import { randomUUID } from "node:crypto";
+import { createHash as createNodeHash, randomUUID } from "node:crypto";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import mongoose, { mongo } from "mongoose";
@@ -11,16 +11,16 @@ import {
 import { isExactMembershipUniqueIndex } from "../migrations/membership-authority-audit.js";
 import {
   fingerprintMongoTarget,
-  sanitizeAuditErrorMessage,
   validateTargetFingerprint,
 } from "../migrations/membership-authority-provenance.js";
 
-export const MEMBERSHIP_BASELINE_BOOTSTRAP_VERSION = "1.1.0";
+export const MEMBERSHIP_BASELINE_BOOTSTRAP_VERSION = "2.0.0";
 export const MEMBERSHIP_BASELINE_CONFIRMATION = "CREATE_MEMBERSHIP_BASELINE";
 export const MEMBERSHIP_BASELINE_LOCK_COLLECTION =
   "membership_baseline_locks";
 export const MEMBERSHIP_BASELINE_LOCK_KEY = "membership-baseline-v1";
-export const MEMBERSHIP_BASELINE_LOCK_TTL_MS = 30 * 60 * 1000;
+export const MEMBERSHIP_BASELINE_LOCK_PROTOCOL_VERSION = 2;
+export const MEMBERSHIP_BASELINE_MAX_COMMIT_TIME_MS = 15_000;
 
 export const MEMBERSHIP_BASELINE_COLLECTIONS = Object.freeze([
   "businesses",
@@ -30,6 +30,21 @@ export const MEMBERSHIP_BASELINE_COLLECTIONS = Object.freeze([
 
 const ALLOWED_ENVIRONMENTS = new Set(["development", "test"]);
 const RESERVED_DATABASES = new Set(["admin", "config", "local"]);
+const DEPLOYMENT_ENVIRONMENT_INDICATORS = Object.freeze([
+  "AWS_LAMBDA_FUNCTION_NAME",
+  "DYNO",
+  "FLY_APP_NAME",
+  "K_SERVICE",
+  "NETLIFY",
+  "RAILWAY_ENVIRONMENT",
+  "RAILWAY_ENVIRONMENT_ID",
+  "RAILWAY_PROJECT_ID",
+  "RENDER",
+  "RENDER_SERVICE_ID",
+  "VERCEL",
+  "VERCEL_ENV",
+  "WEBSITE_INSTANCE_ID",
+]);
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/u;
 const PASSWORD_HASH_PATTERN = /^\$2[abxy]\$\d{2}\$[./A-Za-z0-9]{53}$/u;
 
@@ -38,47 +53,27 @@ const BASELINE_DEFINITION = Object.freeze([
     key: "atmosfera",
     name: "Atmósfera",
     slug: "atmosfera",
-    identities: [
-      {
-        key: "atmosfera-admin",
-        firstName: "Administración",
-        lastName: "Atmósfera",
-        role: "admin",
-        emailVariable: "BASELINE_ATMOSFERA_ADMIN_EMAIL",
-        passwordVariable: "BASELINE_ATMOSFERA_ADMIN_PASSWORD",
-      },
-      {
-        key: "atmosfera-worker",
-        firstName: "Profesional",
-        lastName: "Atmósfera",
-        role: "worker",
-        emailVariable: "BASELINE_ATMOSFERA_WORKER_EMAIL",
-        passwordVariable: "BASELINE_ATMOSFERA_WORKER_PASSWORD",
-      },
-    ],
+    identity: {
+      key: "atmosfera-admin",
+      firstName: "Administración",
+      lastName: "Atmósfera",
+      role: "admin",
+      emailVariable: "BASELINE_ATMOSFERA_ADMIN_EMAIL",
+      passwordVariable: "BASELINE_ATMOSFERA_ADMIN_PASSWORD",
+    },
   },
   {
     key: "dam",
     name: "DAM",
     slug: "dam",
-    identities: [
-      {
-        key: "dam-admin",
-        firstName: "Administración",
-        lastName: "DAM",
-        role: "admin",
-        emailVariable: "BASELINE_DAM_ADMIN_EMAIL",
-        passwordVariable: "BASELINE_DAM_ADMIN_PASSWORD",
-      },
-      {
-        key: "dam-worker",
-        firstName: "Profesional",
-        lastName: "DAM",
-        role: "worker",
-        emailVariable: "BASELINE_DAM_WORKER_EMAIL",
-        passwordVariable: "BASELINE_DAM_WORKER_PASSWORD",
-      },
-    ],
+    identity: {
+      key: "dam-admin",
+      firstName: "Administración",
+      lastName: "DAM",
+      role: "admin",
+      emailVariable: "BASELINE_DAM_ADMIN_EMAIL",
+      passwordVariable: "BASELINE_DAM_ADMIN_PASSWORD",
+    },
   },
 ]);
 
@@ -90,7 +85,35 @@ const requireEnvironmentValue = (environment, variable) => {
   return value.trim();
 };
 
-export const buildMembershipBaselineManifest = (environment = process.env) => {
+const validateOwnerInput = (owner, definition) => {
+  if (!owner || typeof owner !== "object" || Array.isArray(owner)) {
+    throw new Error(`Los datos del propietario ${definition.key} son obligatorios`);
+  }
+
+  const firstName = typeof owner.firstName === "string" ? owner.firstName.trim() : "";
+  const lastName = typeof owner.lastName === "string" ? owner.lastName.trim() : "";
+  const email = typeof owner.email === "string" ? owner.email.trim().toLowerCase() : "";
+  const password = typeof owner.password === "string" ? owner.password : "";
+
+  if (!firstName || firstName.length > 80) {
+    throw new Error(`El nombre del propietario ${definition.key} no es válido`);
+  }
+  if (!lastName || lastName.length > 80) {
+    throw new Error(`El apellido del propietario ${definition.key} no es válido`);
+  }
+  if (!EMAIL_PATTERN.test(email) || email.length > 254) {
+    throw new Error(`El correo del propietario ${definition.key} no es válido`);
+  }
+  if (password.length < 12 || password.length > 256) {
+    throw new Error(
+      `La contraseña del propietario ${definition.key} debe tener entre 12 y 256 caracteres`,
+    );
+  }
+
+  return { firstName, lastName, email, password };
+};
+
+export const buildMembershipBaselineManifestFromOwners = (owners) => {
   const businesses = BASELINE_DEFINITION.map((definition) => ({
     key: definition.key,
     name: definition.name,
@@ -98,38 +121,17 @@ export const buildMembershipBaselineManifest = (environment = process.env) => {
     isActive: true,
   }));
 
-  const users = BASELINE_DEFINITION.flatMap((definition) =>
-    definition.identities.map((identity) => {
-      const email = requireEnvironmentValue(
-        environment,
-        identity.emailVariable,
-      ).toLowerCase();
-      const password = requireEnvironmentValue(
-        environment,
-        identity.passwordVariable,
-      );
-
-      if (!EMAIL_PATTERN.test(email)) {
-        throw new Error(`La variable ${identity.emailVariable} no es un correo válido`);
-      }
-      if (password.length < 12) {
-        throw new Error(
-          `La variable ${identity.passwordVariable} debe tener al menos 12 caracteres`,
-        );
-      }
-
-      return {
-        key: identity.key,
-        businessKey: definition.key,
-        firstName: identity.firstName,
-        lastName: identity.lastName,
-        email,
-        password,
-        role: identity.role,
-        isActive: true,
-      };
-    }),
-  );
+  const users = BASELINE_DEFINITION.map((definition) => {
+    const identity = definition.identity;
+    const owner = validateOwnerInput(owners?.[definition.key], definition);
+    return {
+      key: identity.key,
+      businessKey: definition.key,
+      ...owner,
+      role: identity.role,
+      isActive: true,
+    };
+  });
 
   const uniqueEmails = new Set(users.map((user) => user.email));
   if (uniqueEmails.size !== users.length) {
@@ -150,6 +152,24 @@ export const buildMembershipBaselineManifest = (environment = process.env) => {
     users,
     memberships,
   };
+};
+
+export const buildMembershipBaselineManifest = (environment = process.env) => {
+  const owners = Object.fromEntries(
+    BASELINE_DEFINITION.map((definition) => {
+      const identity = definition.identity;
+      return [
+        definition.key,
+        {
+          firstName: identity.firstName,
+          lastName: identity.lastName,
+          email: requireEnvironmentValue(environment, identity.emailVariable),
+          password: requireEnvironmentValue(environment, identity.passwordVariable),
+        },
+      ];
+    }),
+  );
+  return buildMembershipBaselineManifestFromOwners(owners);
 };
 
 export const parseMembershipBaselineArgs = (argv) => {
@@ -184,6 +204,9 @@ export const parseMembershipBaselineArgs = (argv) => {
 
     const optionName =
       key === "expected-target-fingerprint" ? "expectedTargetFingerprint" : key;
+    if (Object.hasOwn(options, optionName)) {
+      throw new Error(`Opción duplicada: --${key}`);
+    }
     options[optionName] = value;
     if (inlineValue === undefined) index += 1;
   }
@@ -191,7 +214,54 @@ export const parseMembershipBaselineArgs = (argv) => {
   return options;
 };
 
-export const validateMembershipBaselineOptions = (options) => {
+const hasEnvironmentValue = (value) =>
+  value !== undefined && value !== null && String(value).trim() !== "";
+
+export const validateMembershipBaselineRuntime = ({
+  requestedEnvironment,
+  database,
+  processEnvironment = process.env,
+}) => {
+  const effectiveEnvironment = processEnvironment?.NODE_ENV;
+  if (!ALLOWED_ENVIRONMENTS.has(effectiveEnvironment)) {
+    throw new Error(
+      "NODE_ENV debe existir y ser literalmente development o test",
+    );
+  }
+  if (requestedEnvironment !== effectiveEnvironment) {
+    throw new Error(
+      "El entorno solicitado debe coincidir exactamente con NODE_ENV",
+    );
+  }
+
+  const deploymentIndicator = DEPLOYMENT_ENVIRONMENT_INDICATORS.find((name) =>
+    hasEnvironmentValue(processEnvironment?.[name]),
+  );
+  if (deploymentIndicator) {
+    throw new Error(
+      "El bootstrap local no puede ejecutarse dentro de una plataforma de despliegue",
+    );
+  }
+
+  const requiredSuffix = effectiveEnvironment === "test" ? "_test" : "_dev";
+  if (typeof database !== "string" || !database.endsWith(requiredSuffix)) {
+    throw new Error(
+      `En ${effectiveEnvironment}, --database debe terminar en "${requiredSuffix}"`,
+    );
+  }
+
+  return { effectiveEnvironment };
+};
+
+export const validateMembershipBaselineOptions = (
+  options,
+  processEnvironment = process.env,
+) => {
+  validateMembershipBaselineRuntime({
+    requestedEnvironment: options.environment,
+    database: options.database,
+    processEnvironment,
+  });
   if (!options.mode || !["plan", "apply"].includes(options.mode)) {
     throw new Error('--mode es obligatorio y sólo acepta "plan" o "apply"');
   }
@@ -207,10 +277,6 @@ export const validateMembershipBaselineOptions = (options) => {
   ) {
     throw new Error("--database es obligatorio y debe identificar una base permitida");
   }
-  if (options.environment === "test" && !options.database.endsWith("_test")) {
-    throw new Error('En test, --database debe terminar en "_test"');
-  }
-
   options.expectedTargetFingerprint = validateTargetFingerprint(
     options.expectedTargetFingerprint,
   );
@@ -372,7 +438,18 @@ export const buildMembershipBaselinePlan = (
   const conflictingCompoundIndex = indexes.some(
     (index) => hasExactCompoundKey(index) && !isExactMembershipUniqueIndex(index),
   );
+  const conflictingNamedIndex = indexes.some(
+    (index) =>
+      index?.name === "user_1_business_1" &&
+      !isExactMembershipUniqueIndex(index),
+  );
+  const transactionalIndexCreationBlocked =
+    observedCollections.includes("memberships") && !exactUniqueIndex;
   if (conflictingCompoundIndex) findings.push("conflictingMembershipIndex");
+  if (conflictingNamedIndex) findings.push("conflictingMembershipIndexName");
+  if (transactionalIndexCreationBlocked) {
+    findings.push("transactionalMembershipIndexMissing");
+  }
 
   const uniqueFindings = [...new Set(findings)].sort();
   const dataMatches = !empty && uniqueFindings.every(
@@ -388,7 +465,11 @@ export const buildMembershipBaselinePlan = (
       : dataMatches
         ? "ready"
         : "partial";
-  const blocking = state === "partial" || conflictingCompoundIndex;
+  const blocking =
+    state === "partial" ||
+    conflictingCompoundIndex ||
+    conflictingNamedIndex ||
+    transactionalIndexCreationBlocked;
 
   return {
     version: manifest.version,
@@ -405,6 +486,7 @@ export const buildMembershipBaselinePlan = (
     membershipIndex: {
       exactUniqueExists: exactUniqueIndex,
       conflictingDefinitionExists: conflictingCompoundIndex,
+      conflictingNameExists: conflictingNamedIndex,
     },
     findings: uniqueFindings,
   };
@@ -476,98 +558,212 @@ export class MembershipBaselineUnknownResultError extends Error {
   }
 }
 
+export class MembershipBaselineLockLostError extends Error {
+  constructor() {
+    super("Bootstrap bloqueado: se perdió la propiedad exclusiva del lock");
+    this.name = "MembershipBaselineLockLostError";
+  }
+}
+
+export class MembershipBaselineTransactionRequiredError extends Error {
+  constructor() {
+    super(
+      "Bootstrap bloqueado: el destino debe admitir transacciones MongoDB",
+    );
+    this.name = "MembershipBaselineTransactionRequiredError";
+  }
+}
+
+export const assertMembershipBaselineTransactionSupport = async (db) => {
+  let hello;
+  try {
+    hello = await db.admin().command({ hello: 1 });
+  } catch {
+    throw new MembershipBaselineTransactionRequiredError();
+  }
+  if (!hello?.setName) {
+    throw new MembershipBaselineTransactionRequiredError();
+  }
+  return true;
+};
+
+export const ensureMembershipBaselineLockCollection = async (db) => {
+  const exists = await db
+    .listCollections({ name: MEMBERSHIP_BASELINE_LOCK_COLLECTION }, { nameOnly: true })
+    .hasNext();
+  if (exists) return false;
+  try {
+    await db.createCollection(MEMBERSHIP_BASELINE_LOCK_COLLECTION);
+    return true;
+  } catch (error) {
+    if (error?.code === 48 || error?.codeName === "NamespaceExists") return false;
+    throw new Error("No fue posible preparar el lock transaccional");
+  }
+};
+
 export const acquireMembershipBaselineLock = async (
   db,
   {
     ownerId,
     now = new Date(),
-    ttlMs = MEMBERSHIP_BASELINE_LOCK_TTL_MS,
+    session,
   },
 ) => {
   const acquiredAt = new Date(now);
-  const expiresAt = new Date(acquiredAt.getTime() + ttlMs);
 
   try {
-    const lock = await db.collection(MEMBERSHIP_BASELINE_LOCK_COLLECTION)
-      .findOneAndUpdate(
-        {
-          _id: MEMBERSHIP_BASELINE_LOCK_KEY,
-          $or: [
-            { expiresAt: { $lte: acquiredAt } },
-            { ownerId },
-          ],
-        },
-        {
-          $set: { ownerId, acquiredAt, expiresAt },
-        },
-        { upsert: true, returnDocument: "after" },
-      );
-
-    if (lock?.ownerId !== ownerId) {
-      throw new MembershipBaselineLockActiveError();
-    }
-    return { acquiredAt, expiresAt };
+    await db.collection(MEMBERSHIP_BASELINE_LOCK_COLLECTION).insertOne({
+      _id: MEMBERSHIP_BASELINE_LOCK_KEY,
+      ownerId,
+      acquiredAt,
+      protocolVersion: MEMBERSHIP_BASELINE_LOCK_PROTOCOL_VERSION,
+      fencingMechanism: "mongodb-transaction",
+    }, { session });
+    return { acquiredAt, ownerId };
   } catch (error) {
     if (error instanceof MembershipBaselineLockActiveError) throw error;
-    if (error?.code === 11000) throw new MembershipBaselineLockActiveError();
+    if (
+      error?.code === 11000 ||
+      error?.code === 112 ||
+      error?.codeName === "WriteConflict" ||
+      error?.hasErrorLabel?.("TransientTransactionError")
+    ) {
+      throw new MembershipBaselineLockActiveError();
+    }
     throw new Error("No fue posible adquirir el lock del bootstrap");
   }
 };
 
-export const releaseMembershipBaselineLock = async (db, { ownerId }) => {
+export const assertMembershipBaselineLockOwnership = async (
+  db,
+  { ownerId, session },
+) => {
+  const lock = await db.collection(MEMBERSHIP_BASELINE_LOCK_COLLECTION)
+    .findOne({ _id: MEMBERSHIP_BASELINE_LOCK_KEY }, { session });
+  if (
+    lock?.ownerId !== ownerId ||
+    lock?.protocolVersion !== MEMBERSHIP_BASELINE_LOCK_PROTOCOL_VERSION ||
+    lock?.fencingMechanism !== "mongodb-transaction"
+  ) {
+    throw new MembershipBaselineLockLostError();
+  }
+  return true;
+};
+
+export const releaseMembershipBaselineLock = async (
+  db,
+  { ownerId, session },
+) => {
   const result = await db.collection(MEMBERSHIP_BASELINE_LOCK_COLLECTION)
-    .deleteOne({ _id: MEMBERSHIP_BASELINE_LOCK_KEY, ownerId });
+    .deleteOne({
+      _id: MEMBERSHIP_BASELINE_LOCK_KEY,
+      ownerId,
+      protocolVersion: MEMBERSHIP_BASELINE_LOCK_PROTOCOL_VERSION,
+    }, { session });
   return result.deletedCount === 1;
 };
 
-export const readMembershipBaselineSource = async (db) => {
+export const readMembershipBaselineMetadata = async (db) => {
   const observedCollections = (await db.listCollections({}, { nameOnly: true }).toArray())
     .map((collection) => collection.name)
     .sort();
   const has = (name) => observedCollections.includes(name);
 
-  const [businesses, users, memberships, indexes] = await Promise.all([
+  const indexes = has("memberships")
+    ? await db.collection("memberships").listIndexes().toArray()
+    : [];
+  return { observedCollections, indexes };
+};
+
+export const readMembershipBaselineSource = async (
+  db,
+  { session, metadata } = {},
+) => {
+  const observedMetadata = metadata ?? await readMembershipBaselineMetadata(db);
+  const { observedCollections, indexes } = observedMetadata;
+  const has = (name) => observedCollections.includes(name);
+
+  const [businesses, users, memberships] = await Promise.all([
     has("businesses")
-      ? db.collection("businesses").find({}).toArray()
+      ? db.collection("businesses").find({}, { session }).toArray()
       : [],
     has("users")
-      ? db.collection("users").find({}).toArray()
+      ? db.collection("users").find({}, { session }).toArray()
       : [],
     has("memberships")
-      ? db.collection("memberships").find({}).toArray()
-      : [],
-    has("memberships")
-      ? db.collection("memberships").listIndexes().toArray()
+      ? db.collection("memberships").find({}, { session }).toArray()
       : [],
   ]);
 
   return { observedCollections, businesses, users, memberships, indexes };
 };
 
-const ensureCollectionsAndMembershipIndex = async (db, source) => {
+export const ensureCollectionsAndMembershipIndex = async (
+  db,
+  source,
+  {
+    assertOwnership = async () => {},
+    mutationCheckpoint = async () => {},
+    session,
+  } = {},
+) => {
   const observed = new Set(source.observedCollections);
   for (const collection of MEMBERSHIP_BASELINE_COLLECTIONS) {
-    if (!observed.has(collection)) await db.createCollection(collection);
+    if (!observed.has(collection)) {
+      await assertOwnership();
+      await db.createCollection(collection, { session });
+      await mutationCheckpoint(`collection:${collection}`);
+    }
   }
 
-  const indexes = await db.collection("memberships").listIndexes().toArray();
-  if (!indexes.some(isExactMembershipUniqueIndex)) {
+  if (!source.indexes.some(isExactMembershipUniqueIndex)) {
+    if (observed.has("memberships")) {
+      throw new Error(
+        "Bootstrap bloqueado: el índice faltante no puede crearse transaccionalmente sobre una colección existente",
+      );
+    }
+    await assertOwnership();
     await db.collection("memberships").createIndex(
       { user: 1, business: 1 },
-      { unique: true, name: "user_1_business_1" },
+      { unique: true, name: "user_1_business_1", session },
     );
+    await mutationCheckpoint("index:memberships");
   }
 };
 
-export const createBaselineDocuments = async (db, manifest, passwordHasher) => {
+const deterministicObjectId = (manifest, scope, key) =>
+  new mongo.ObjectId(
+    createNodeHash("sha256")
+      .update(`${manifest.version}:${scope}:${key}`, "utf8")
+      .digest()
+      .subarray(0, 12),
+  );
+
+export const createBaselineDocuments = async (
+  db,
+  manifest,
+  passwordHasher,
+  {
+    assertOwnership = async () => {},
+    mutationCheckpoint = async () => {},
+    session,
+  } = {},
+) => {
   const now = new Date();
   const businessIds = new Map(
-    manifest.businesses.map((business) => [business.key, new mongo.ObjectId()]),
+    manifest.businesses.map((business) => [
+      business.key,
+      deterministicObjectId(manifest, "business", business.key),
+    ]),
   );
   const userIds = new Map(
-    manifest.users.map((user) => [user.key, new mongo.ObjectId()]),
+    manifest.users.map((user) => [
+      user.key,
+      deterministicObjectId(manifest, "user", user.key),
+    ]),
   );
-  const membershipIds = manifest.memberships.map(() => new mongo.ObjectId());
+  const membershipIds = manifest.memberships.map((membership) =>
+    deterministicObjectId(manifest, "membership", membership.key));
   const passwordHashes = new Map();
 
   for (const user of manifest.users) {
@@ -607,9 +803,21 @@ export const createBaselineDocuments = async (db, manifest, passwordHasher) => {
     updatedAt: now,
   }));
 
-  await db.collection("businesses").insertMany(businesses, { ordered: true });
-  await db.collection("users").insertMany(users, { ordered: true });
-  await db.collection("memberships").insertMany(memberships, { ordered: true });
+  await assertOwnership();
+  await db.collection("businesses").insertMany(
+    businesses,
+    { ordered: true, session },
+  );
+  await mutationCheckpoint("documents:businesses");
+  await assertOwnership();
+  await db.collection("users").insertMany(users, { ordered: true, session });
+  await mutationCheckpoint("documents:users");
+  await assertOwnership();
+  await db.collection("memberships").insertMany(
+    memberships,
+    { ordered: true, session },
+  );
+  await mutationCheckpoint("documents:memberships");
 };
 
 const openIsolatedMongooseConnection = async (mongoUri, options) => {
@@ -618,10 +826,48 @@ const openIsolatedMongooseConnection = async (mongoUri, options) => {
   return isolatedConnection;
 };
 
+export const runMembershipBaselineTransaction = async (
+  connection,
+  callback,
+) => {
+  const session = await connection.startSession();
+  let commitStarted = false;
+  try {
+    session.startTransaction({
+      readConcern: { level: "local" },
+      writeConcern: { w: "majority" },
+      readPreference: "primary",
+      maxCommitTimeMS: MEMBERSHIP_BASELINE_MAX_COMMIT_TIME_MS,
+    });
+    const result = await callback(session);
+    commitStarted = true;
+    await session.commitTransaction();
+    return result;
+  } catch (error) {
+    if (commitStarted) throw new MembershipBaselineUnknownResultError();
+    if (session.inTransaction()) {
+      try {
+        await session.abortTransaction();
+      } catch {
+        throw new MembershipBaselineUnknownResultError();
+      }
+    }
+    throw error;
+  } finally {
+    try {
+      await session.endSession();
+    } catch {
+      throw new MembershipBaselineUnknownResultError();
+    }
+  }
+};
+
 export const runMembershipBaselineBootstrap = async ({
   mongoUri,
   options,
   environment = process.env,
+  processEnvironment = process.env,
+  manifest: suppliedManifest,
   connect,
   disconnect,
   connection,
@@ -629,14 +875,23 @@ export const runMembershipBaselineBootstrap = async ({
   passwordHasher = hashPassword,
   passwordVerifier = isValidPassword,
   acquireLock = acquireMembershipBaselineLock,
+  assertLockOwner = assertMembershipBaselineLockOwnership,
   releaseLock = releaseMembershipBaselineLock,
+  assertTransactionSupport = assertMembershipBaselineTransactionSupport,
+  ensureLockCollection = ensureMembershipBaselineLockCollection,
+  runTransaction = runMembershipBaselineTransaction,
   ownerIdFactory = randomUUID,
+  readMetadata = readMembershipBaselineMetadata,
   readSource = readMembershipBaselineSource,
   ensureBaselineStorage = ensureCollectionsAndMembershipIndex,
   createDocuments = createBaselineDocuments,
+  mutationCheckpoint = async () => {},
 }) => {
-  const validatedOptions = validateMembershipBaselineOptions({ ...options });
-  const manifest = buildMembershipBaselineManifest(environment);
+  const validatedOptions = validateMembershipBaselineOptions(
+    { ...options },
+    processEnvironment,
+  );
+  const manifest = suppliedManifest ?? buildMembershipBaselineManifest(environment);
   if (!mongoUri) throw new Error("MONGO_URI es obligatoria");
 
   const observedFingerprint = fingerprintMongoTarget(
@@ -651,6 +906,7 @@ export const runMembershipBaselineBootstrap = async ({
 
   let activeConnection;
   let closeConnection;
+  let mutationStarted = false;
   try {
     const connectionOptions = {
       dbName: validatedOptions.database,
@@ -670,6 +926,8 @@ export const runMembershipBaselineBootstrap = async ({
       throw new Error("La base conectada no coincide con la base confirmada");
     }
 
+    await assertTransactionSupport(activeConnection.db);
+
     if (validatedOptions.mode === "plan") {
       const source = await readSource(activeConnection.db);
       const plan = await buildVerifiedMembershipBaselinePlan(
@@ -680,38 +938,77 @@ export const runMembershipBaselineBootstrap = async ({
       return { plan, applied: false, exitCode: plan.canApply ? 0 : 2 };
     }
 
+    await ensureLockCollection(activeConnection.db);
+
     const ownerId = ownerIdFactory();
-    let lockAcquired = false;
-    try {
-      await acquireLock(activeConnection.db, { ownerId });
-      lockAcquired = true;
-
-      const source = await readSource(activeConnection.db);
-      const plan = await buildVerifiedMembershipBaselinePlan(
-        source,
-        manifest,
-        passwordVerifier,
-      );
-      if (!plan.canApply) {
-        throw new Error(
-          "Bootstrap bloqueado: la base está parcialmente inicializada o contiene contradicciones",
-        );
-      }
-      if (plan.idempotentNoop) {
-        return { plan, applied: false, exitCode: 0 };
-      }
-
-      let mutationStarted = false;
+    return await runTransaction(activeConnection, async (session) => {
+      let lockAcquired = false;
       try {
-        mutationStarted = true;
-        await ensureBaselineStorage(activeConnection.db, source);
-        if (plan.state === "empty") {
-          await createDocuments(activeConnection.db, manifest, passwordHasher);
+        await acquireLock(activeConnection.db, { ownerId, session });
+        lockAcquired = true;
+
+        const assertOwnership = () =>
+          assertLockOwner(activeConnection.db, { ownerId, session });
+        await assertOwnership();
+
+        const metadata = await readMetadata(activeConnection.db);
+        await assertOwnership();
+        const source = await readSource(activeConnection.db, {
+          metadata,
+          session,
+        });
+        await assertOwnership();
+        const plan = await buildVerifiedMembershipBaselinePlan(
+          source,
+          manifest,
+          passwordVerifier,
+        );
+        if (!plan.canApply) {
+          throw new Error(
+            "Bootstrap bloqueado: la base está parcialmente inicializada o contiene contradicciones",
+          );
         }
+        if (plan.idempotentNoop) {
+          return { plan, applied: false, exitCode: 0 };
+        }
+
+        mutationStarted = true;
+        await mutationCheckpoint("before:functional-mutations");
+        await ensureBaselineStorage(activeConnection.db, source, {
+          assertOwnership,
+          mutationCheckpoint,
+          session,
+        });
+        if (plan.state === "empty") {
+          await createDocuments(activeConnection.db, manifest, passwordHasher, {
+            assertOwnership,
+            mutationCheckpoint,
+            session,
+          });
+        }
+
+        await assertOwnership();
 
         let verification;
         try {
-          const verificationSource = await readSource(activeConnection.db);
+          const createdIndex = source.indexes.some(isExactMembershipUniqueIndex)
+            ? []
+            : [{
+              name: "user_1_business_1",
+              key: { user: 1, business: 1 },
+              unique: true,
+            }];
+          const verificationMetadata = {
+            observedCollections: [...new Set([
+              ...metadata.observedCollections,
+              ...MEMBERSHIP_BASELINE_COLLECTIONS,
+            ])].sort(),
+            indexes: [...source.indexes, ...createdIndex],
+          };
+          const verificationSource = await readSource(activeConnection.db, {
+            metadata: verificationMetadata,
+            session,
+          });
           verification = await buildVerifiedMembershipBaselinePlan(
             verificationSource,
             manifest,
@@ -728,41 +1025,41 @@ export const runMembershipBaselineBootstrap = async ({
         }
 
         return { plan: verification, applied: true, exitCode: 0 };
-      } catch (error) {
-        if (
-          error instanceof MembershipBaselineUnknownResultError ||
-          error.message?.includes("estado parcial confirmado")
-        ) {
-          throw error;
+      } finally {
+        if (lockAcquired) {
+          const released = await releaseLock(activeConnection.db, {
+            ownerId,
+            session,
+          });
+          if (released !== true) {
+            throw new MembershipBaselineUnknownResultError();
+          }
         }
-        if (mutationStarted) throw new MembershipBaselineUnknownResultError();
-        throw error;
       }
-    } finally {
-      if (lockAcquired) {
-        try {
-          const released = await releaseLock(activeConnection.db, { ownerId });
-          if (released !== true) throw new Error("lock ownership changed");
-        } catch {
-          throw new MembershipBaselineUnknownResultError();
-        }
+    });
+  } finally {
+    if (typeof closeConnection === "function") {
+      try {
+        await closeConnection();
+      } catch {
+        if (mutationStarted) throw new MembershipBaselineUnknownResultError();
+        throw new Error("No fue posible cerrar la conexión aislada");
       }
     }
-  } finally {
-    if (typeof closeConnection === "function") await closeConnection();
   }
 };
 
 const usage = () => {
   console.log(`Uso:
-  npm run bootstrap:membership-baseline -- \\
+  NODE_ENV=development npm run bootstrap:membership-baseline -- \\
     --mode=plan|apply \\
     --environment=development \\
     --database=agenda_dev \\
     --expected-target-fingerprint=<sha256-aprobado> \\
     [--confirm=${MEMBERSHIP_BASELINE_CONFIRMATION}]
 
-El comando sólo admite development y test. Nunca se ejecuta durante el arranque.`);
+NODE_ENV debe coincidir con --environment. El comando sólo admite development
+y test, rechaza plataformas de despliegue y nunca se ejecuta durante el arranque.`);
 };
 
 export const main = async (argv = process.argv.slice(2)) => {
@@ -793,18 +1090,10 @@ if (isDirectExecution) {
     .then((exitCode) => {
       process.exitCode = exitCode;
     })
-    .catch((error) => {
-      const sensitiveValues = BASELINE_DEFINITION.flatMap((business) =>
-        business.identities.flatMap((identity) => [
-          process.env[identity.emailVariable],
-          process.env[identity.passwordVariable],
-        ]),
-      ).filter(Boolean);
-      let message = sanitizeAuditErrorMessage(error, process.env.MONGO_URI);
-      for (const value of sensitiveValues) {
-        message = message.split(value).join("[REDACTED]");
-      }
-      console.error(`Bootstrap Membership rechazado: ${message}`);
+    .catch(() => {
+      console.error(
+        "Bootstrap Membership rechazado por una configuración o estado no seguro",
+      );
       process.exitCode = 1;
     });
 }
