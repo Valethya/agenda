@@ -142,6 +142,7 @@ test("Pruebas de Integración - Flujo de Pago Abierto y Registro Progresivo", as
 
     // Crear shift para el trabajador en el día de la semana de la prueba
     await Shift.create({
+      business: business._id,
       worker: workerUser._id,
       dayOfWeek: tomorrow.getDay(),
       isOpen: true,
@@ -384,6 +385,7 @@ test("Pruebas de Integración - Flujo de Pago Abierto y Registro Progresivo", as
 
     // Crear bloqueo administrativo en el mismo horario
     await Block.create({
+      business: testBusinessId,
       worker: testWorkerId,
       date: new Date(tomorrowStr),
       startTime: "09:00",
