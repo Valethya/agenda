@@ -35,6 +35,7 @@ const blockSchema = new mongoose.Schema(
   {
     timestamps: true,
     versionKey: false,
+    autoIndex: false,
   }
 );
 
