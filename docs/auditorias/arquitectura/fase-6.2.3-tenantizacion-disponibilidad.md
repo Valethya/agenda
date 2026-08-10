@@ -4,132 +4,55 @@
 
 Esta fase parte de `master` en `d27a312a909e9b36c458c807ac7b7f854447639a`, merge commit del PR #22 (6.2.2-D).
 
-6.2.2-D ya estableció que `Membership` activa es la única autoridad tenant. Esta fase no reabre esa decisión: agrega ownership físico tenant a los recursos de disponibilidad que todavía estaban ligados sólo al usuario global.
+6.2.2-D ya estableció que `Membership` activa es la única autoridad tenant. 6.2.3 no reabre esa decisión: agrega ownership físico tenant a los recursos de disponibilidad que todavía estaban ligados sólo al usuario global y endurece la migración legacy necesaria para llegar a ese estado de forma reproducible.
 
-Alcance de 6.2.3:
+Alcance:
 
 - `Shift`;
 - `Block`;
 - consulta de `Appointment` usada como ocupación en disponibilidad;
-- índice de colisión de `Appointment` que todavía imponía unicidad global por worker;
-- aislamiento del room WebSocket `availability_changed`;
-- migración manual de datos heredados `Shift`/`Block` sin `business`.
+- índice de colisión de `Appointment`;
+- room WebSocket `availability_changed`;
+- migración manual plan/apply de `Shift`/`Block` heredados;
+- lifecycle tenant de Shift/Block cuando una Membership worker se elimina físicamente.
 
-No pertenece a 6.2.3:
+Fuera de alcance:
 
 - ownership general de Appointment u otros recursos (6.2.4);
 - identidad progresiva (6.2.5);
-- modelo definitivo admin + worker;
+- admin + worker simultáneo dentro del mismo negocio;
 - pagos, Webpay, refunds o SII;
 - soporte mutable 6.4;
 - microservicios, colas o responsive.
 
-## Invariantes
+## Invariantes heredados de 6.2.2-D
 
-Se mantienen las garantías de 6.2.2-D:
+- `User` es identidad global.
+- `Membership` activa es la única autoridad tenant.
+- `Business.owner`, `User.role`, `session.user.role` y `session.user.businessId` no conceden autoridad tenant.
+- `session.user.businessId` es sólo contexto seleccionado.
+- `superadmin` es privilegio global, no rol Membership.
+- Roles Membership continúan siendo `admin | worker`.
+- El índice Membership `{ user: 1, business: 1 }` unique no cambia.
 
-- la identidad de `User` es global;
-- `Membership` activa es la única autoridad tenant;
-- `Business.owner`, `User.role`, `session.user.role` y `session.user.businessId` no conceden autoridad tenant;
-- `session.user.businessId` es contexto seleccionado;
-- `superadmin` es privilegio global y no un rol Membership;
-- los roles Membership siguen siendo exclusivamente `admin | worker`;
-- el índice Membership `{ user: 1, business: 1 }` unique no cambia.
+## Invariante física de disponibilidad
 
-La nueva invariante física de disponibilidad es:
+Todo `Shift` y `Block` runtime pertenece explícitamente a `business + worker`. Las citas usadas como ocupación se consultan por `business + worker + date`.
 
-> Todo `Shift` y `Block` tenant runtime pertenece explícitamente a `business + worker`.
-
-Además, las citas usadas como ocupación deben consultarse por `business + worker + date`.
-
-## Situación previa
+## Schemas e índices objetivo
 
 ### Shift
 
-Antes:
+Campo nuevo obligatorio:
 
 ```js
-{
-  worker,
-  dayOfWeek,
-  ...
-}
+business: ObjectId<Business>
 ```
 
-Índice conceptual previo:
+Índice anterior:
 
 ```js
 { worker: 1, dayOfWeek: 1 } // unique
-```
-
-Este índice impedía que un mismo usuario global tuviera el mismo día de semana configurado en dos negocios diferentes.
-
-### Block
-
-Antes:
-
-```js
-{
-  worker,
-  date,
-  ...
-}
-```
-
-Índice de consulta previo:
-
-```js
-{ worker: 1, date: 1 }
-```
-
-Las consultas de rango y la eliminación podían comenzar desde un recurso global ligado sólo al worker.
-
-### Appointment en disponibilidad
-
-`Appointment` ya tenía `business`, pero disponibilidad consultaba por:
-
-```js
-worker + date
-```
-
-El índice de colisión también era global:
-
-```js
-{ worker: 1, date: 1, startTime: 1 }
-```
-
-Por lo tanto una Appointment en A podía ocupar B y el mismo worker no podía tener la misma hora en dos negocios diferentes.
-
-### WebSocket
-
-`calendar_update` ya se emitía al room:
-
-```text
-business:<businessId>
-```
-
-pero `availability_changed` usaba:
-
-```text
-availability:<workerId>:<date>
-```
-
-Con un mismo usuario global en A y B, ambos tenants podían compartir el mismo room de disponibilidad.
-
-## Schemas después de 6.2.3
-
-### Shift
-
-```js
-{
-  business: ObjectId<Business>, // required
-  worker: ObjectId<User>,       // required
-  dayOfWeek,
-  isOpen,
-  startTime,
-  endTime,
-  breaks
-}
 ```
 
 Índice objetivo:
@@ -138,7 +61,7 @@ Con un mismo usuario global en A y B, ambos tenants podían compartir el mismo r
 { business: 1, worker: 1, dayOfWeek: 1 } // unique
 ```
 
-Nombre declarado:
+Nombre:
 
 ```text
 shift_business_worker_day_unique
@@ -146,15 +69,16 @@ shift_business_worker_day_unique
 
 ### Block
 
+Campo nuevo obligatorio:
+
 ```js
-{
-  business: ObjectId<Business>, // required
-  worker: ObjectId<User>,       // required
-  date,
-  startTime,
-  endTime,
-  reason
-}
+business: ObjectId<Business>
+```
+
+Índice anterior:
+
+```js
+{ worker: 1, date: 1 }
 ```
 
 Índice objetivo:
@@ -163,15 +87,21 @@ shift_business_worker_day_unique
 { business: 1, worker: 1, date: 1 }
 ```
 
-Nombre declarado:
+Nombre:
 
 ```text
 block_business_worker_date
 ```
 
-### Appointment
+### Appointment usado por disponibilidad
 
-No se rediseña el ownership de Appointment. Sólo se corrige la frontera física que afecta disponibilidad.
+Appointment ya posee `business`; 6.2.3 no rediseña ownership general.
+
+Índice anterior:
+
+```js
+{ worker: 1, date: 1, startTime: 1 }
+```
 
 Índice objetivo:
 
@@ -179,7 +109,7 @@ No se rediseña el ownership de Appointment. Sólo se corrige la frontera físic
 { business: 1, worker: 1, date: 1, startTime: 1 }
 ```
 
-Unique únicamente para estados activos:
+Unique para estados activos actuales:
 
 ```js
 {
@@ -189,137 +119,60 @@ Unique únicamente para estados activos:
 }
 ```
 
-Las citas `cancelled` permanecen fuera de la colisión.
-
-Nombre declarado:
+Nombre:
 
 ```text
 appointment_business_worker_date_start_active_unique
 ```
 
+`cancelled` permanece fuera de colisión.
+
 ## Gestión explícita de índices
 
-Los schemas `Shift`, `Block` y `Appointment` sólo permiten `autoIndex` cuando `NODE_ENV === "test"`.
+`Shift`, `Block` y `Appointment` sólo permiten `autoIndex` cuando `NODE_ENV === "test"`.
 
-Motivo:
+La intención es impedir que un deploy intente construir automáticamente índices nuevos sobre datos heredados antes de la migración. La especificación deseada vive en los schemas, pero el estado físico se transforma únicamente mediante la migración 6.2.3.
 
-- la suite usa Mongo local/efímero y necesita comprobar colisiones físicas reales;
-- development/producción no deben intentar construir automáticamente los nuevos índices sobre documentos heredados antes del plan/backfill;
-- la migración 6.2.3 usa conexión con `autoIndex: false` y controla el orden de creación/eliminación.
+## Runtime tenant-scoped
 
-El schema expresa la especificación deseada, pero la migración verifica el estado físico mediante `listIndexes()` y opera sobre nombres reales encontrados.
+### Shift repository
 
-## Repositories tenant-scoped
+- `findByBusinessAndWorker(businessId, workerId)`
+- `findByBusinessWorkerAndDay(businessId, workerId, dayOfWeek)`
+- `upsertByBusinessWorkerAndDay(businessId, workerId, dayOfWeek, data)`
+- `deleteByBusinessAndWorker(businessId, workerId)`
 
-### Shift
+### Block repository
 
-APIs runtime:
-
-```text
-findByBusinessAndWorker(businessId, workerId)
-findByBusinessWorkerAndDay(businessId, workerId, dayOfWeek)
-upsertByBusinessWorkerAndDay(businessId, workerId, dayOfWeek, data)
-deleteByBusinessAndWorker(businessId, workerId)
-```
-
-Las variantes runtime globales por sólo `workerId` fueron retiradas.
-
-### Block
-
-APIs runtime:
-
-```text
-findByBusinessWorkerAndDateRange(businessId, workerId, startDate, endDate)
-findByIdAndBusiness(id, businessId)
-createForBusinessWorker(businessId, workerId, data)
-deleteByIdBusinessAndWorker(id, businessId, workerId)
-```
-
-No se conserva una API tenant de eliminación por sólo `_id` o `_id + worker`.
+- `findByBusinessWorkerAndDateRange(businessId, workerId, startDate, endDate)`
+- `findByIdAndBusiness(id, businessId)`
+- `createForBusinessWorker(businessId, workerId, data)`
+- `deleteByIdBusinessAndWorker(id, businessId, workerId)`
+- `deleteByBusinessAndWorker(businessId, workerId)` para hard delete del worker dentro de un único tenant.
 
 ### Appointment usado por disponibilidad
 
-La consulta pasa a:
+- `findByBusinessWorkerAndDate(businessId, workerId, date)`
 
-```text
-findByBusinessWorkerAndDate(businessId, workerId, date)
-```
-
-Los `findById` globales que permanecen por flujos fuera de disponibilidad no se rediseñan en este PR; pertenecen a la deuda de ownership general 6.2.4 y a dominios públicos/payment ya existentes.
-
-## Escrituras HTTP
-
-### saveShift
-
-La persistencia incluye siempre:
-
-```text
-business = req.businessId
-worker = workerId validado
-```
-
-Antes de escribir se conserva la validación 6.2.2-D:
-
-- User global activo;
-- Membership activa del mismo `req.businessId`;
-- rol Membership `worker` para el worker objetivo;
-- un actor worker sólo puede operar su propia identidad;
-- un admin sólo opera dentro de su tenant vigente.
-
-### createBlock
-
-La creación usa `req.businessId + workerId` como identidad tenant explícita.
-
-### deleteBlock
-
-La lectura inicial es:
-
-```js
-{ _id: blockId, business: req.businessId }
-```
-
-y la eliminación final usa:
-
-```js
-{ _id: blockId, business: req.businessId, worker: workerId }
-```
-
-Un ID válido de otro tenant falla cerrado como recurso inexistente.
-
-## Lectura pública y cálculo de disponibilidad
-
-`GET /availability/shifts/:workerId` mantiene la validación Membership del worker y además consulta físicamente por `business + worker`.
-
-Para `getAvailableSlots(..., businessId)` las fuentes quedan así:
-
-- Service: `serviceId + businessId`;
-- worker: User global activo + Membership `worker` activa en `businessId`;
-- Shift: `businessId + workerId + dayOfWeek`;
-- Block: `businessId + workerId + date range`;
-- Appointment: `businessId + workerId + date`;
-- BusinessConfig: `businessId`.
-
-`Holiday` continúa siendo un calendario global interno, sin endpoint tenant de mutación registrado en el router actual. No se presenta como propiedad de Business A o B. Si en el futuro se requieren cierres/feriados configurables por negocio, eso deberá modelarse explícitamente en otra fase en vez de reinterpretar silenciosamente este recurso global.
+Los accesos globales que pertenecen a otros flujos de Appointment quedan para la revisión general de ownership 6.2.4.
 
 ## WebSocket
 
-El room de disponibilidad cambia de:
-
-```text
-availability:<workerId>:<date>
-```
-
-a:
+El room de disponibilidad es:
 
 ```text
 availability:<businessId>:<workerId>:<date>
 ```
 
-La Membership sigue revalidándose antes de joins y broadcasts. `calendar_update` continúa en `business:<businessId>`.
+`calendar_update` continúa en:
 
-Así, el mismo Worker X puede estar suscrito a la misma fecha en A y B sin recibir `availability_changed` del tenant contrario.
+```text
+business:<businessId>
+```
 
-## Migración de datos heredados
+La Membership se sigue revalidando para joins/broadcasts. El mismo User worker puede pertenecer a A y B sin compartir eventos `availability_changed`.
+
+# Migración 6.2.3
 
 Script:
 
@@ -327,158 +180,282 @@ Script:
 Server/scripts/migrations/availability-tenantization.js
 ```
 
-Comando:
+Versión actual:
 
 ```text
-npm run migration:availability-tenantization -- ...
+1.1.0
 ```
 
-La migración no se ejecuta al iniciar la aplicación.
+Modos:
 
-### Restricciones operacionales
+- `plan`: read-only.
+- `apply`: mutación explícita, confirmada y protegida.
 
-Sólo acepta:
+Nunca se ejecuta en startup.
 
-- `NODE_ENV=development|test`;
-- `--environment` idéntico a `NODE_ENV`;
-- base `_dev` en development o `_test` en test;
-- MongoDB local (`127.0.0.1`, `localhost`, loopback IPv6);
-- fingerprint SHA-256 esperado explícito;
-- ausencia de indicadores de Railway, Vercel, Render, Netlify, Fly, Lambda, etc.
+## Clasificación legacy
 
-`apply` requiere confirmación literal:
+Para `Shift`/`Block` sin `business`:
+
+### deterministic
+
+Existe exactamente una Membership `worker` activa para el User. Se puede inferir el business.
+
+### ambiguous
+
+Existen dos o más Memberships `worker` activas. No se escoge ninguna automáticamente; Apply falla cerrado.
+
+### unresolved/orphan
+
+No existe Membership `worker` activa válida. Apply falla cerrado.
+
+### alreadyMigrated
+
+El documento tiene `business` y existe Membership `worker` activa para ese par.
+
+### invalidExisting
+
+El documento tiene `business`, pero el valor es inválido o no coincide con una Membership worker activa. Apply falla cerrado.
+
+## Conflictos previos
+
+El plan también bloquea:
+
+- claves Shift que colisionarían tras backfill;
+- Appointments activas duplicadas dentro de `business + worker + date + startTime`;
+- Appointments activas estructuralmente inválidas para el nuevo índice;
+- índices con la misma key tenant y opciones incompatibles.
+
+## Política de destinos
+
+La migración separa capacidad técnica de autorización operacional.
+
+### Local development/test
+
+Continúa permitiendo únicamente Mongo loopback/local y bases con sufijo seguro:
+
+- `development` -> `_dev`
+- `test` -> `_test`
+
+`NODE_ENV` debe coincidir exactamente con `--environment`.
+
+### Staging/production externo
+
+El código puede operar técnicamente sobre un target externo futuro, pero permanece deny-by-default. No existe opt-in implícito.
+
+Un target externo exige simultáneamente:
+
+- `NODE_ENV=staging|production` idéntico a `--environment`;
+- database exacta explícita;
+- fingerprint SHA-256 esperado;
+- `--allow-external-target=AUTHORIZE_EXTERNAL_AVAILABILITY_TARGET`;
+- `--expected-code-sha=<sha>`;
+- SHA efectivo resuelto desde provenance soportada, por ejemplo `AVAILABILITY_TENANTIZATION_CODE_SHA`;
+- coincidencia exacta entre SHA efectivo y SHA esperado;
+- ausencia de indicadores de Vercel/Railway/Render/Fly/Netlify/Lambda/etc.;
+- para Apply, `--maintenance-window=MAINTENANCE_WINDOW_CONFIRMED`;
+- para Apply, `--confirm=TENANTIZE_AVAILABILITY_6_2_3`.
+
+La intención es que un eventual Apply externo se ejecute desde un operador aislado y durante una ventana de mantenimiento, no desde la aplicación desplegada.
+
+**Este PR no accede a Atlas, staging real ni producción y no ejecuta Apply sobre datos reales.**
+
+## Fingerprint y provenance
+
+El fingerprint confirma host(es) + database sin depender de credenciales. El SHA efectivo de código es obligatorio para destinos externos y debe coincidir con el SHA esperado por el operador.
+
+Errores públicos se sanitizan reutilizando `sanitizeAuditErrorMessage`; no deben exponer URI Mongo cruda, username ni password.
+
+# Exclusión, lease y fencing
+
+La migración usa una colección dedicada:
 
 ```text
-TENANTIZE_AVAILABILITY_6_2_3
+availability_tenantization_locks
 ```
 
-No admite Atlas ni otro Mongo externo en esta fase.
+Lock lógico:
 
-### Clasificación Shift/Block
+```text
+availability-tenantization-6.2.3
+```
 
-Para cada documento sin `business`:
+Cada adquisición tiene:
 
-#### A — deterministic
+- `ownerId`;
+- `fencingToken` monotónico;
+- `leaseUntil`;
+- `protocolVersion`;
+- mecanismo `lease-token`.
 
-El worker posee exactamente una Membership activa con rol `worker`.
+Una ejecución activa impide que otra adquiera el lock. Un takeover sólo puede ocurrir cuando la lease anterior expiró y aumenta `fencingToken`.
 
-Se puede inferir el `business` sin ambigüedad.
+Cada etapa sensible verifica owner + token + lease vigente y renueva la lease. Un proceso antiguo que pierde ownership no puede liberar el lock del nuevo owner porque release filtra por owner y fencing token exactos.
 
-#### B — ambiguous
+Las operaciones DDL usan un `maxTimeMS` menor que la lease para reducir la posibilidad de que una operación enviada bajo una lease válida continúe más allá de la ventana de fencing.
 
-El worker posee más de una Membership activa con rol `worker`.
+El lock protege escritores de migración. Para targets externos, la confirmación de ventana de mantenimiento es adicionalmente obligatoria para evitar escrituras runtime concurrentes de una versión vieja durante el cambio físico.
 
-No se elige automáticamente un negocio. `safeToApply=false`.
+# Revalidación Membership
 
-#### C — unresolved/orphan
+El plan inicial no se considera autoridad suficiente para escribir.
 
-El worker no posee una Membership `worker` activa válida.
+Después de adquirir el lock se toma un nuevo plan. El backfill se ejecuta dentro de transacción MongoDB y cada asignación deterministic autorizada por ese plan vuelve a consultar Membership dentro de la transacción.
 
-No se inventa un negocio. `safeToApply=false`.
+Para escribir debe seguir existiendo exactamente una Membership:
 
-#### alreadyMigrated
+```text
+user = worker
+role = worker
+isActive = true
+business = inferredBusiness
+```
 
-El documento ya tiene `business` y existe Membership `worker` activa para ese par `worker + business`.
+Si Membership desaparece, se desactiva, aparece otra Membership worker activa o cambia el business inferible, la transacción aborta. La migración no adopta silenciosamente una inferencia nueva.
 
-#### invalidExisting
+Apply requiere replica set/transacciones; un Mongo standalone se rechaza antes de mutar.
 
-El documento trae `business` pero el valor es inválido o no coincide con una Membership `worker` activa.
+# Checkpoint pre-drop
 
-También bloquea Apply.
+Antes del primer `dropIndex` se vuelve a leer el estado completo y se exige:
 
-### Conflictos previos
+- lock/lease/fencing todavía vigentes;
+- `safeToApply === true`;
+- cero Shift deterministic pendientes;
+- cero Shift ambiguous/unresolved/invalidExisting;
+- cero Block deterministic pendientes;
+- cero Block ambiguous/unresolved/invalidExisting;
+- cero duplicate Shift target keys;
+- cero Appointment target duplicates/invalid active;
+- los tres índices tenant presentes;
+- cero conflictos de opciones en índices tenant.
 
-Antes de escribir se detectan:
+Se realiza un segundo checkpoint inmediatamente antes de retirar índices antiguos.
 
-- claves Shift que colisionarían después del backfill en `business + worker + dayOfWeek`;
-- Appointments activas duplicadas en `business + worker + date + startTime`;
-- índices con la misma key destino pero opciones incompatibles.
+Si aparece un documento legacy después del backfill, los índices antiguos no se eliminan.
 
-Dos Appointments con mismo worker/fecha/hora en negocios distintos no se clasifican como conflicto.
+# Orden de Apply
 
-## Orden de Apply
+1. validar argumentos, entorno, target, fingerprint y provenance;
+2. conectar con `autoIndex:false` y comprobar database real;
+3. construir plan inicial;
+4. exigir `safeToApply`;
+5. comprobar soporte de transacciones;
+6. preparar y adquirir lock con fencing;
+7. releer plan bajo lock;
+8. iniciar transacción;
+9. revalidar Membership por asignación;
+10. backfill determinístico;
+11. commit;
+12. auditoría post-backfill;
+13. crear índices tenant, verificando lock antes/después de cada DDL;
+14. auditoría completa pre-drop;
+15. segundo checkpoint pre-drop;
+16. retirar únicamente índices cuya key física coincide con la especificación legacy;
+17. auditoría final;
+18. liberar únicamente el lock propio mediante owner + fencing token.
 
-El orden implementado es:
+## Fallos parciales
 
-1. leer snapshot y `listIndexes()`;
-2. construir plan sin writes;
-3. fallar cerrado ante ambigüedad, orphan, existing inválido o colisión;
-4. backfill determinístico de Shift/Block dentro de una transacción;
-5. volver a leer y verificar invariantes;
-6. crear índices tenant nuevos por especificación si todavía no existen;
-7. verificar físicamente los índices nuevos;
-8. localizar y retirar únicamente índices globales obsoletos cuya key coincide exactamente con las especificaciones antiguas;
-9. volver a auditar y exigir índices tenant presentes + índices globales ausentes.
+- Si backfill falla, la transacción se aborta.
+- Si `createIndex` falla, no se inicia `dropIndex` y los índices legacy permanecen.
+- Si aparece estado unsafe antes del drop, se aborta conservadoramente.
+- Si se pierde el lock, la ejecución no continúa con nuevas mutaciones y no elimina el lock ajeno.
+- Si un índice tenant ya existe con especificación equivalente, se reutiliza.
+- Un segundo Apply sobre un estado migrado es idempotente.
 
-Si la creación del índice tenant falla, los índices globales antiguos no se eliminan.
+# E2E real de migración
 
-Si el proceso falla después de crear un índice nuevo pero antes de retirar el antiguo, queda en un estado conservador y reintentable: no se pierde el índice previo y la auditoría final no declara éxito.
+La CI ejecuta `runAvailabilityTenantization()` contra MongoDB 7 real configurado como replica set.
 
-## Idempotencia
+La suite construye físicamente estado legacy con:
 
-- documentos ya migrados se clasifican y no se vuelven a backfillear;
-- el backfill sólo actualiza `_id` cuya propiedad `business` sigue ausente/null;
-- una modificación concurrente hace que `modifiedCount` no coincida y aborta la transacción;
-- índices destino equivalentes por especificación se reutilizan;
-- índices obsoletos se eliminan sólo si su key real coincide exactamente con la key antigua;
-- la auditoría se repite después del Apply.
+- Membership worker;
+- Shift sin business;
+- Block sin business;
+- Appointment tenant existente;
+- índices físicos legacy.
 
-## Tests adversariales 6.2.3
+Se comprueba:
 
-La suite dedicada cubre explícitamente:
+- plan no escribe ni crea lock;
+- Apply backfillea Shift/Block al business determinístico;
+- crea físicamente los índices tenant;
+- elimina físicamente las keys legacy sólo después de checkpoints seguros;
+- preserva Appointment/datos no relacionados;
+- segundo Apply es idempotente;
+- después de migrar, el mismo worker puede tener Shift y Appointment simultáneos en A/B;
+- ambiguous produce cero writes;
+- cambio de Membership entre plan y backfill aborta sin asignar business incorrecto;
+- documento legacy aparecido antes del drop conserva índices antiguos;
+- pérdida de fencing lock aborta y no libera lock ajeno;
+- fallo simulado de `createIndex` conserva índices legacy.
+
+# Lifecycle de worker
+
+## Soft delete
+
+`deleteWorker(..., softDelete=true)`:
+
+- desactiva Membership tenant;
+- conserva Shift del tenant;
+- conserva Block del tenant.
+
+La intención es permitir una futura reactivación sin destruir configuración operativa.
+
+## Hard delete
+
+`deleteWorker(..., softDelete=false)`:
+
+- elimina Membership del tenant actual;
+- elimina Shift de `business + worker` del tenant actual;
+- elimina Block de `business + worker` del tenant actual;
+- no elimina Shift/Block del mismo User en otros businesses;
+- conserva el User global activo mientras exista otra Membership según la política existente.
+
+Appointment no se borra en esta fase; ownership/lifecycle general pertenece a 6.2.4 u otra decisión explícita.
+
+# Tests de aislamiento runtime
+
+La suite continúa cubriendo:
 
 - Business A + Business B;
 - mismo User Worker X;
-- Membership worker X→A y X→B;
-- Shift A lunes 09:00–18:00;
-- Shift B lunes 14:00–20:00;
-- coexistencia física de ambos;
-- lectura A sólo devuelve A;
-- lectura B sólo devuelve B;
-- Block A reduce A y no B;
-- Block B reduce B y no A;
-- Admin A no elimina Block B;
-- Admin B no elimina Block A;
-- Worker X en contexto A no elimina Block B;
-- Appointment A no ocupa B;
-- Appointment B no ocupa A;
-- misma hora/worker en A y B puede coexistir;
-- misma hora/worker/business activa sigue chocando;
-- repositories de Shift/Block/Appointment usados por disponibilidad no devuelven datos del otro tenant;
-- índices físicos frescos contienen las keys tenant y no las keys globales antiguas;
-- WebSocket `availability_changed` no cruza tenants para el mismo worker global.
+- Membership X->A y X->B;
+- Shift A y Shift B el mismo día con horas distintas;
+- GET shifts físicamente limitado al tenant;
+- Block A no afecta B y viceversa;
+- Admin A/B no eliminan Blocks del otro tenant;
+- Worker X en contexto A no manipula B;
+- Appointment A no ocupa B y viceversa;
+- mismo worker/date/startTime puede coexistir en A/B;
+- duplicado activo dentro del mismo tenant sigue colisionando;
+- WebSocket `availability_changed` está separado por business;
+- hard delete de A conserva Shift/Block/Membership B y el User global.
 
-La suite de migración cubre además:
+La prueba `availability-tenant-source-boundary.test.js` sigue recorriendo `Server/src` para impedir la reaparición de APIs runtime globales de disponibilidad y accesos directos Shift/Block fuera de repositories.
 
-- deterministic;
-- ambiguous;
-- unresolved;
-- alreadyMigrated;
-- invalidExisting;
-- colisiones destino Shift;
-- colisiones Appointment tenant-scoped;
-- reconocimiento físico de índices anteriores/nuevos;
-- rechazo de production, Mongo externo y plataformas de despliegue;
-- confirmación obligatoria de Apply.
+# Deuda posterior
 
-## Deuda posterior
+6.2.3 no declara resuelto:
 
-6.2.3 no declara resuelto ownership general.
+- ownership general 6.2.4;
+- identidad progresiva 6.2.5;
+- admin + worker simultáneo;
+- Payments/Webpay/refunds/SII;
+- soporte mutable 6.4;
+- microservicios/colas/responsive.
 
-Continúa para 6.2.4 la revisión sistemática de ownership y consultas por ID en recursos que no forman parte de disponibilidad, incluidos los flujos globales de Appointment que hoy existen por razones públicas/payment.
+`Holiday` permanece como calendario global interno. Una futura necesidad de feriados tenant-specific requiere modelado explícito separado.
 
-También permanece como deuda independiente el caso de una misma persona que deba ser simultáneamente admin y profesional agendable dentro del mismo negocio; no se cambió el modelo `Membership.role = admin | worker` ni su índice único.
+# Seguridad operacional
 
-## Seguridad operacional
+Durante la implementación y sus tests sólo se utiliza infraestructura local/efímera controlada. El soporte técnico para targets externos existe para evitar que el código quede sin ruta operacional futura, pero requiere autorización explícita y no implica que se haya realizado ninguna conexión externa.
 
-La implementación de esta fase no requiere ni autoriza:
+Estado del PR durante esta fase:
 
-- acceso a Atlas;
-- acceso a bases productivas;
-- creación de usuarios reales;
-- seeds remotos;
-- ejecución automática de Apply;
-- modificación de datos reales;
-- inclusión de credenciales.
-
-Las validaciones y tests están diseñados para infraestructura local/efímera/controlada.
+```text
+Draft
+No Ready
+No merge
+```
