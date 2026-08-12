@@ -24,7 +24,7 @@
     "test:flow": "node --test test/integration.test.js",
     "test:appointment-ownership": "node --test test/appointmentOwnershipEnforcement.test.js",
     "test:service-update-hardening": "node --test test/serviceUpdateHardening.test.js",
-    "test:payment": "node --test test/paymentOptIn.test.js && node --test test/auditPayment.test.js",
+    "test:payment": "node --test test/paymentOptIn.test.js && node --test test/auditPaymentOptIn.test.js",
     "test:websocket": "node --test test/unit/websocket.auth.test.js"
   },
   "dependencies": {
