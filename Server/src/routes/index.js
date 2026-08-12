@@ -9,6 +9,7 @@ import userRoutes from "./user.routes.js";
 import businessConfigRoutes from "./businessConfig.routes.js";
 import superadminRoutes from "./superadmin.routes.js";
 import { scopeBusiness } from "../middleware/business.middleware.js";
+import { paymentRoutesEnabled } from "../config/env.js";
 
 const router = Router();
 
@@ -19,7 +20,9 @@ router.use("/", authRoutes);
 router.use("/services", scopeBusiness, serviceRoutes);
 router.use("/availability", scopeBusiness, availabilityRoutes);
 router.use("/appointments", scopeBusiness, appointmentRoutes);
-router.use("/payments", paymentRoutes);
+if (paymentRoutesEnabled) {
+  router.use("/payments", paymentRoutes);
+}
 router.use("/users", scopeBusiness, userRoutes);
 router.use("/business-settings", scopeBusiness, businessConfigRoutes);
 

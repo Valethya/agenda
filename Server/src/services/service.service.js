@@ -1,4 +1,5 @@
 import * as serviceRepository from "../repositories/service.repository.js";
+import { validateProfessionalAllowlist } from "./professionalEligibility.service.js";
 import { ConflictError, NotFoundError } from "../utils/appError.js";
 
 export const getAllServices = async (businessId, onlyActive = false) => {
@@ -22,7 +23,8 @@ export const createService = async (data, businessId) => {
     throw new ConflictError("Ya existe un servicio registrado con este nombre en tu negocio");
   }
 
-  return await serviceRepository.create({ ...data, business: businessId });
+  const workers = await validateProfessionalAllowlist(data.workers ?? [], businessId);
+  return await serviceRepository.create({ ...data, workers, business: businessId });
 };
 
 export const updateService = async (id, data, businessId) => {
@@ -38,7 +40,13 @@ export const updateService = async (id, data, businessId) => {
     }
   }
 
-  const updated = await serviceRepository.updateByIdAndBusiness(id, businessId, data);
+  let safeData = data;
+  if (Object.prototype.hasOwnProperty.call(data, "workers")) {
+    const workers = await validateProfessionalAllowlist(data.workers, businessId);
+    safeData = { ...data, workers };
+  }
+
+  const updated = await serviceRepository.updateByIdAndBusiness(id, businessId, safeData);
   if (!updated) throw new NotFoundError("El servicio que intenta actualizar no existe");
   return updated;
 };

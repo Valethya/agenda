@@ -22,14 +22,26 @@ export const create = async (data) => {
   return await Appointment.create(data);
 };
 
+// Legacy Payment-only mutation. Payment/Webpay is disabled deny-by-default in the
+// MVP and its hardening remains outside 6.2.4-B.
 export const update = async (id, data) => {
   return await Appointment.findByIdAndUpdate(id, data, { new: true });
 };
 
-export const updateByIdAndBusiness = async (id, businessId, data) => {
+export const transitionStatusByBusiness = async (
+  id,
+  businessId,
+  expectedStatuses,
+  nextStatus,
+) => {
+  const allowedOrigins = Array.isArray(expectedStatuses) ? expectedStatuses : [expectedStatuses];
   return await Appointment.findOneAndUpdate(
-    { _id: id, business: businessId },
-    data,
+    {
+      _id: id,
+      business: businessId,
+      status: { $in: allowedOrigins },
+    },
+    { $set: { status: nextStatus } },
     { new: true },
   );
 };
