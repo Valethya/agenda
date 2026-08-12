@@ -91,7 +91,7 @@ export const initiatePayment = async (appointmentId, paymentType = "deposit") =>
     });
 
     // Guardamos momentáneamente el estado como "pending_payment"
-    await appointmentRepository.update(appointmentId, { status: "pending_payment" });
+    await appointmentRepository.markPendingPaymentFromLegacyPayment(appointmentId);
 
     // Registrar el pago en estado "pending" con el token de transacción para búsquedas indexadas ultra rápidas
     await paymentRepository.create({
@@ -290,12 +290,12 @@ export const confirmPayment = async (tokenWs) => {
         throw dbError;
       }
 
-      // Actualizar el estado de la cita
+      // Actualizar el estado de la cita mediante un comando purpose-specific del flujo legacy.
       try {
-        await appointmentRepository.update(appointmentId, {
-          status: "confirmed", // Pasa a confirmada tras el pago exitoso
-          paymentStatus: isDeposit ? "partially_paid" : "fully_paid",
-        });
+        await appointmentRepository.confirmFromLegacyPayment(
+          appointmentId,
+          isDeposit ? "partially_paid" : "fully_paid",
+        );
 
         await logEvent({
           appointmentId,
@@ -370,7 +370,7 @@ export const confirmPayment = async (tokenWs) => {
         await paymentRepository.updateByTransactionId(tokenWs, { status: "rejected" });
       } catch (e) {}
 
-      await appointmentRepository.update(appointmentId, { status: "cancelled" });
+      await appointmentRepository.cancelFromRejectedLegacyPayment(appointmentId);
 
       await logEvent({
         appointmentId,
