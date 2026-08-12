@@ -11,8 +11,8 @@
     "migration:membership-authority": "node scripts/migrations/membership-authority.js",
     "migration:availability-tenantization": "node scripts/migrations/availability-tenantization.js",
     "test": "npm run test:unit && npm run test:integration",
-    "test:unit": "node --test --test-concurrency=1 test/unit/auth.session.test.js test/unit/email.templates.test.js test/unit/membership-authority-audit.test.js test/unit/membership-authority-provenance.test.js test/unit/membership-baseline.test.js test/unit/membership-baseline-ui.test.js test/unit/availability-tenantization-migration.test.js test/unit/availability-cutover-gate.test.js test/unit/availability-tenant-source-boundary.test.js test/unit/validation.schemas.test.js",
-    "test:integration": "npm run test:membership-audit && npm run test:membership-baseline && npm run test:membership-runtime-authority && npm run test:tenant-resource-isolation && npm run test:availability-migration-e2e && npm run test:availability-worker-lifecycle && npm run test:availability-tenantization && npm run test:api && npm run test:flow && npm run test:payment && npm run test:websocket",
+    "test:unit": "node --test --test-concurrency=1 test/unit/auth.session.test.js test/unit/email.templates.test.js test/unit/membership-authority-audit.test.js test/unit/membership-authority-provenance.test.js test/unit/membership-baseline.test.js test/unit/membership-baseline-ui.test.js test/unit/availability-tenantization-migration.test.js test/unit/availability-cutover-gate.test.js test/unit/availability-tenant-source-boundary.test.js test/unit/validation.schemas.test.js test/unit/appointment-ownership-boundary.test.js",
+    "test:integration": "npm run test:membership-audit && npm run test:membership-baseline && npm run test:membership-runtime-authority && npm run test:tenant-resource-isolation && npm run test:availability-migration-e2e && npm run test:availability-worker-lifecycle && npm run test:availability-tenantization && npm run test:api && npm run test:flow && npm run test:appointment-ownership && npm run test:payment && npm run test:websocket",
     "test:membership-audit": "node --test test/membershipAuthorityAudit.test.js",
     "test:membership-baseline": "node --test test/membershipBaseline.test.js",
     "test:membership-runtime-authority": "node --test test/membershipRuntimeAuthority.test.js",
@@ -22,7 +22,8 @@
     "test:availability-tenantization": "node --test test/availabilityTenantization.test.js",
     "test:api": "node --test test/api.test.js",
     "test:flow": "node --test test/integration.test.js",
-    "test:payment": "node --test test/auditPayment.test.js",
+    "test:appointment-ownership": "node --test test/appointmentOwnershipEnforcement.test.js",
+    "test:payment": "node --test test/paymentOptIn.test.js",
     "test:websocket": "node --test test/unit/websocket.auth.test.js"
   },
   "dependencies": {
