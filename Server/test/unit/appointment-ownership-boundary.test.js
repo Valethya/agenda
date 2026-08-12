@@ -18,14 +18,35 @@ test("6.2.4-B source boundary neutraliza grant Client por Appointment.client", a
   assert.match(source, /Appointment\.client equality is deliberately NOT a grant/u);
 });
 
-test("6.2.4-B core usa transición purpose-specific y elimina mutador tenant genérico", async () => {
+test("6.2.4-B Appointment sólo expone mutaciones purpose-specific", async () => {
   const repository = await readSource("repositories/appointment.repository.js");
   const service = await readSource("services/appointment.service.js");
+  const payment = await readSource("services/payment.service.js");
 
+  assert.doesNotMatch(repository, /export const update\s*=/u);
   assert.doesNotMatch(repository, /export const updateByIdAndBusiness/u);
+  assert.doesNotMatch(repository, /export const \w*update\w*\s*=\s*async\s*\(\s*id\s*,\s*(?:data|updateData)\b/ui);
   assert.match(repository, /export const transitionStatusByBusiness/u);
-  assert.doesNotMatch(service, /appointmentRepository\.updateByIdAndBusiness/u);
-  assert.match(service, /appointmentRepository\.transitionStatusByBusiness/u);
+  assert.match(repository, /export const markPendingPaymentFromLegacyPayment/u);
+  assert.match(repository, /export const confirmFromLegacyPayment/u);
+  assert.match(repository, /export const cancelFromRejectedLegacyPayment/u);
+  assert.doesNotMatch(service, /appointmentRepository\.update(?:ByIdAndBusiness)?\s*\(/u);
+  assert.doesNotMatch(payment, /appointmentRepository\.update\s*\(/u);
+});
+
+test("6.2.4-B Service update no acepta passthrough abierto ni business mutable", async () => {
+  const service = await readSource("services/service.service.js");
+  const repository = await readSource("repositories/service.repository.js");
+  const validation = await readSource("validations/service.validation.js");
+
+  assert.match(service, /MUTABLE_SERVICE_FIELDS/u);
+  assert.match(service, /buildMutableServiceUpdate/u);
+  assert.doesNotMatch(service, /let safeData\s*=\s*data/u);
+  assert.doesNotMatch(service, /updateByIdAndBusiness/u);
+  assert.match(repository, /updateMutableByIdAndBusiness/u);
+  assert.doesNotMatch(repository, /export const update\s*=/u);
+  assert.match(repository, /pickMutableServiceFields/u);
+  assert.match(validation, /updateServiceSchema[\s\S]*\.strict\(\)/u);
 });
 
 test("6.2.4-B desacopla role=worker de elegibilidad profesional", async () => {
@@ -37,6 +58,7 @@ test("6.2.4-B desacopla role=worker de elegibilidad profesional", async () => {
   assert.doesNotMatch(availability, /membership\.role\s*!==\s*["']worker["']/u);
   assert.match(eligibility, /serviceIncludesProfessional/u);
   assert.match(eligibility, /TENANT_PARTICIPANT_ROLES/u);
+  assert.match(eligibility, /new mongoose\.Types\.ObjectId\(value\)\.toHexString\(\)/u);
 });
 
 test("6.2.4-B timeline usa proyección allowlist y controller no accede AuditLog directo", async () => {

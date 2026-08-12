@@ -75,21 +75,21 @@ export const validateProfessionalAllowlist = async (workerIds = [], businessId) 
     throw new ValidationError("La lista de profesionales debe ser un arreglo");
   }
 
-  const normalized = workerIds.map((workerId) => {
+  const canonicalWorkerIds = workerIds.map((workerId) => {
     const value = asId(workerId);
     if (!mongoose.isValidObjectId(value)) {
       throw new ValidationError("ID de trabajador inválido");
     }
-    return value;
+    return new mongoose.Types.ObjectId(value).toHexString();
   });
 
-  if (new Set(normalized).size !== normalized.length) {
+  if (new Set(canonicalWorkerIds).size !== canonicalWorkerIds.length) {
     throw new ValidationError("La lista de profesionales no puede contener duplicados");
   }
 
-  await Promise.all(normalized.map((userId) =>
+  await Promise.all(canonicalWorkerIds.map((userId) =>
     resolveActiveTenantParticipant(userId, businessId)
   ));
 
-  return normalized;
+  return canonicalWorkerIds;
 };

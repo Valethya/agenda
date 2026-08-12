@@ -1,5 +1,25 @@
 import Service from "../db/models/service.model.js";
 
+const MUTABLE_SERVICE_FIELDS = Object.freeze([
+  "name",
+  "description",
+  "duration",
+  "price",
+  "depositAmount",
+  "workers",
+  "isActive",
+]);
+
+const pickMutableServiceFields = (data = {}) => {
+  const update = {};
+  for (const field of MUTABLE_SERVICE_FIELDS) {
+    if (Object.prototype.hasOwnProperty.call(data, field)) {
+      update[field] = data[field];
+    }
+  }
+  return update;
+};
+
 export const findAll = async (query = {}) => {
   return await Service.find(query).populate("workers", "firstName lastName email phone");
 };
@@ -24,14 +44,11 @@ export const create = async (data) => {
   return await Service.create(data);
 };
 
-export const update = async (id, data) => {
-  return await Service.findByIdAndUpdate(id, data, { new: true, runValidators: true });
-};
-
-export const updateByIdAndBusiness = async (id, businessId, data) => {
+export const updateMutableByIdAndBusiness = async (id, businessId, data) => {
+  const mutableUpdate = pickMutableServiceFields(data);
   return await Service.findOneAndUpdate(
     { _id: id, business: businessId },
-    data,
+    { $set: mutableUpdate },
     { new: true, runValidators: true },
   );
 };
