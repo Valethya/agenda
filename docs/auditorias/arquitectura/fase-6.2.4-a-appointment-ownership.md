@@ -2,8 +2,7 @@
 
 Fecha de auditoría: 2026-08-12  
 Base exacta revisada: `master@a91dddbbc5482ee192944a05d9203de47e021dae`  
-HEAD adversarial de entrada para esta corrección: `04abed55d5795645279a1161d1df2f86e1440782`  
-Origen de la base: merge de PR #23 (`6.2.3 tenantización de disponibilidad`).  
+HEAD adversarial de entrada para esta corrección: `ccf61c8f23250dae59b474fcb4965925d86517dc`  
 Naturaleza: **arquitectónica/documental**. Este documento no autoriza cambios runtime, migraciones, seeds ni acceso a producción.
 
 ---
@@ -24,8 +23,10 @@ Las decisiones arquitectónicas vigentes continúan siendo:
 - `businessId` de sesión no es autoridad.
 - `Appointment.business` es obligatorio y expresa ownership tenant del recurso.
 - `Appointment.business` debe ser inmutable en runtime ordinario.
-- `Service.workers` será una allowlist autoritativa de elegibilidad profesional.
+- `Service.workers` es una allowlist autoritativa de elegibilidad profesional.
 - `Service.workers=[]` significa **ningún profesional elegible**.
+- autoridad tenant y elegibilidad profesional son dimensiones distintas.
+- una Membership `admin` activa puede coexistir con elegibilidad profesional expresada por `Service.workers` sin una segunda Membership.
 - Service inactivo no debe generar nueva availability ni nuevas Appointments.
 - desactivar un Service no altera automáticamente Appointments ya creadas o históricas.
 - mutaciones de Appointment deben ser purpose-specific y proteger ownership/assignments.
@@ -33,9 +34,11 @@ Las decisiones arquitectónicas vigentes continúan siendo:
 - el modelo de error de recursos protegidos es 404/403/409 según la frontera definida más adelante.
 - el timeline funcional debe usar una proyección segura allowlist.
 - Payment/Webpay es opcional y está fuera del MVP.
-- 6.2.5 (identidad progresiva del cliente) no se implementa en esta fase ni en este PR.
+- `APT-PAY-01/02/03/04` siguen siendo `BLOCKER BEFORE PAYMENT ENABLEMENT`.
+- Holiday continúa como `DEBT / CROSS-TENANT POLICY TO CLARIFY`.
+- 6.2.5, identidad progresiva del cliente, no se implementa en esta fase ni en 6.2.4-B.
 
-El objetivo de 6.2.4-A es congelar un contrato que permita implementar 6.2.4-B sin consolidar una autorización incorrecta para Client ni una equivalencia incorrecta entre `Membership.role=worker` y la capacidad de prestar servicios.
+El objetivo específico de esta última corrección es cerrar `APT-CLIENT-01` sin construir todavía la solución de identidad progresiva.
 
 Modelo conceptual:
 
@@ -56,10 +59,11 @@ Appointment
 
 ### 2.1 MVP CORE — 6.2.4
 
-El núcleo MVP de 6.2.4 debe cerrar:
+El núcleo MVP debe cerrar:
 
 - ownership tenant de Appointment;
-- separación entre relación `Appointment.client` y Client authority verificada;
+- neutralización de grants Client inseguros ya existentes;
+- separación entre `Appointment.client` y Client authority verificada;
 - capacidades independientes Client / profesional asignado / Admin / superadmin;
 - coherencia `Appointment.business` / `Service.business` / Membership;
 - elegibilidad profesional mediante `Service.workers`;
@@ -72,34 +76,36 @@ El núcleo MVP de 6.2.4 debe cerrar:
 - modelo de error fail-closed;
 - timeline/AuditLog con proyección segura.
 
-### 2.2 PAYMENT / WEBPAY — FUERA DEL MVP
+### 2.2 IDENTIDAD PROGRESIVA — 6.2.5, FUERA DE 6.2.4-B
 
-Webpay **no es requisito del MVP de Agenda**.
+6.2.4-B **no debe implementar**:
 
-Reglas de separación:
+- verificación de email o teléfono;
+- account linking;
+- identity merging;
+- client profile binding;
+- login/sesión de cliente;
+- recuperación de historial;
+- fusión/deduplicación de identidades guest;
+- ninguna otra parte del modelo de identidad progresiva de 6.2.5.
 
-- Appointment/Booking debe funcionar completamente sin Payment.
+6.2.4-B sí debe impedir que el runtime actual convierta una asociación guest no verificada en autoridad sólo por igualdad de IDs.
+
+### 2.3 PAYMENT / WEBPAY — FUERA DEL MVP
+
+Webpay no es requisito del MVP de Agenda.
+
+Reglas vigentes:
+
+- Appointment/Booking funciona sin Payment.
 - Payment es un módulo opcional.
 - Webpay es un adapter externo reemplazable de Payment.
-- Appointment no conoce `token_ws`, `buy_order`, códigos de autorización ni conceptos específicos de Transbank.
-- Payment puede referenciar Appointment, pero no sustituye su autoridad tenant.
-- un Business sin pagos debe completar Booking sin tocar Payment.
+- Appointment no conoce `token_ws`, `buy_order` ni conceptos específicos de Transbank.
+- Payment puede referenciar Appointment, pero no sustituye `Appointment.business` como autoridad tenant.
+- un Business sin pagos completa Booking sin tocar Payment.
 - fallos de Payment/Webpay no pueden corromper Appointments ajenas ni módulos no relacionados.
 
-Los hallazgos `APT-PAY-01/02/03/04` son **BLOCKER BEFORE PAYMENT ENABLEMENT**. No bloquean conceptualmente el MVP Core si Payment/Webpay está efectivamente deshabilitado.
-
-El código actual, sin embargo, monta `/api/payments` sin feature flag visible y declara públicas:
-
-```text
-POST /api/payments/initiate
-POST /api/payments/webpay-return
-GET  /api/payments/webpay-return
-```
-
-Por tanto, antes de un release MVP debe ocurrir una de estas dos cosas:
-
-1. **opción recomendada:** deshabilitar/no montar Payment/Webpay mediante configuración deny-by-default; o
-2. corregir `APT-PAY-01/02/03/04` antes de mantener esas rutas accesibles.
+El código actual monta `/api/payments` sin feature flag visible. Para un MVP sin Payment se recomienda deshabilitar/no montar Payment/Webpay deny-by-default. Si permanece accesible, `APT-PAY-01/02/03/04` deben resolverse antes del release.
 
 Esta auditoría no sondea producción.
 
@@ -131,26 +137,43 @@ Además se revisaron controllers, routes, middleware tenant, auth/sesiones, Memb
 
 Esos contactos no se verifican como condición de la reserva.
 
-ADR-001 establece explícitamente que una coincidencia de contacto no verificado:
+ADR-001 establece que una coincidencia de contacto no verificado:
 
 - no fusiona identidades;
 - no concede historial;
 - no concede gestión de citas anteriores;
 - requiere verificación antes de vincular definitivamente identidad/contacto.
 
-Además, los guest users creados durante booking no reciben una sesión autenticada. El login normal actual tampoco entrega una sesión tenant ordinaria a un User sin Membership.
+Los guest users creados durante booking tampoco reciben una sesión autenticada normal.
 
 Consecuencia: `Appointment.client` actual es una **relación persistida de dominio/contacto**, pero no una prueba completa de identidad ni de Client authority.
 
-### 3.3 Divergencia legacy de identidad detectada
+### 3.3 Grants Client existentes que 6.2.4-B debe neutralizar
 
-Durante este contraste se confirma una divergencia adicional ya perteneciente al trabajo de identidad progresiva: `getOrCreateGuestUser()` crea actualmente un password aleatorio desconocido para un guest nuevo, mientras ADR-001 prohíbe contraseñas aleatorias desconocidas por el cliente.
+El runtime actual contiene grants directos basados únicamente en la igualdad con `Appointment.client`:
 
-Se documenta como **`ID-LEGACY-01 — DEBT / 6.2.5`**.
+```text
+cancelAppointment:
+appointment.client._id.toString() === userId
 
-No se corrige en 6.2.4-A ni debe expandir 6.2.4-B hacia implementación de identidad.
+getAppointmentDetails:
+appointment.client._id.toString() === userId
 
-### 3.4 Membership y propietarios que prestan servicios
+getMyAppointments:
+query.client = userId   // rama no admin/no worker
+```
+
+Además, `getAppointmentTimeline` reutiliza `getAppointmentDetails()` como gate previo; por tanto hereda el mismo problema de Client authority cuando ese gate se satisface sólo por la igualdad de IDs.
+
+Estos usages son parte del problema actual de `APT-CLIENT-01`. 6.2.4-B no puede limitarse a evitar nuevas comparaciones: debe **eliminar o neutralizar como grant independiente las comparaciones y queries protegidas existentes** que traten `User._id === Appointment.client` como autoridad suficiente.
+
+### 3.4 Divergencia legacy de identidad
+
+`getOrCreateGuestUser()` crea actualmente un password aleatorio desconocido para un guest nuevo, mientras ADR-001 prohíbe ese patrón.
+
+Se mantiene documentado como **`ID-LEGACY-01 — DEBT / 6.2.5`**. No se corrige en 6.2.4-B.
+
+### 3.5 Membership y propietarios que prestan servicios
 
 El modelo actual impone:
 
@@ -159,35 +182,18 @@ Membership.role ∈ { admin, worker }
 unique { user, business }
 ```
 
-Por tanto una misma persona no puede mantener dos Membership separadas `admin` y `worker` para un mismo Business.
+PR #21 fijó propietarios con Membership `admin` que también prestan servicios. El contrato permanece:
 
-PR #21 fijó la baseline inicial de Atmósfera y DAM como propietarios con Membership `admin`, sin crear identidades `worker` artificiales, y dejó explícito que esas personas también prestan servicios aunque todavía no fueran profesionales agendables en 6.2.2-C.
+- Membership expresa participación/autoridad tenant;
+- `Service.workers` expresa elegibilidad profesional;
+- un User con Membership `admin` activa puede ser profesional cuando el Service lo incluye explícitamente y la Appointment lo asigna;
+- no se implementa multirrol formal.
 
-El runtime actual, en cambio, acopla profesional a `role=worker`:
+### 3.6 Holiday
 
-- booking exige `Membership.role === "worker"`;
-- availability exige `Membership.role === "worker"`;
-- `canOperateAsAssignedWorker()` exige `tenantRole === "worker"`.
+`availability.service` usa `holidayRepository.findByDate(targetDate)` y `Holiday` no contiene `business`.
 
-Ese acoplamiento no puede convertirse en el contrato futuro de 6.2.4-B.
-
-### 3.5 Holiday es una dependencia global actual
-
-`availability.service` consulta:
-
-```text
-holidayRepository.findByDate(targetDate)
-```
-
-El modelo `Holiday` no contiene `business` y su `date` es única globalmente.
-
-Por tanto, aunque Shift, Block y las consultas de Appointment estén tenant-scoped, availability todavía consume una política Holiday global cuyo significado tenant no está declarado formalmente.
-
-Se clasifica como **`HOLIDAY-POLICY-01 — DEBT / CROSS-TENANT POLICY TO CLARIFY`**.
-
-No es blocker de Appointment ownership y no se tenantiza en 6.2.4. Antes de permitir feriados específicos por negocio deberá decidirse en una fase separada si `Holiday` es deliberadamente global/plataforma o debe adquirir scope de Business.
-
-Mientras esa decisión esté pendiente, no debe describirse availability como “completamente tenantizada” en sentido absoluto; sus recursos de agenda principales están tenant-scoped, pero Holiday sigue siendo una política global compartida.
+Se conserva como **`HOLIDAY-POLICY-01 — DEBT / CROSS-TENANT POLICY TO CLARIFY`**. No es blocker de Appointment ownership y no se tenantiza en 6.2.4.
 
 ---
 
@@ -205,15 +211,15 @@ Ningún `worker`, `client`, `service`, header, query param, sesión, `User.role`
 
 ### 4.2 Las capacidades no son categorías excluyentes
 
-Un mismo `User` puede simultáneamente:
+Un mismo User puede simultáneamente:
 
 - estar relacionado como `Appointment.client`;
-- tener una Membership `admin` o `worker`;
+- tener Membership `admin` o `worker`;
 - estar incluido en `Service.workers`;
 - estar asignado como `Appointment.worker`;
 - poseer privilegio global `superadmin`.
 
-Cada operación evalúa la capacidad concreta que el actor presenta. Una capacidad no se anula por la existencia de otra.
+Cada operación evalúa la capacidad concreta que el actor presenta. Una capacidad válida no se invalida por la existencia de otra, y una relación insuficiente no se vuelve válida por coexistir con otra etiqueta.
 
 ---
 
@@ -221,19 +227,19 @@ Cada operación evalúa la capacidad concreta que el actor presenta. Una capacid
 
 ### 5.1 Problema
 
-La regla anterior:
+La igualdad:
 
 ```text
 authenticatedUser._id === Appointment.client
 ```
 
-es insuficiente como prueba completa de Client authority histórica.
+no es una prueba completa de Client authority.
 
-Debido al comportamiento actual de `getOrCreateGuestUser()`, varias reservas guest pueden quedar asociadas a un mismo `User` por coincidencias de email/teléfono que no fueron verificadas. Autenticar en el futuro ese `User` no puede legitimar retroactivamente todas las asociaciones guest históricas vinculadas a su `_id`.
+Debido al matching guest no verificado, una Appointment puede quedar asociada a un `User` por email/teléfono sin demostrar que ese contacto pertenece a la misma persona. Autenticar posteriormente ese `User` no puede legitimar retroactivamente todas las asociaciones guest históricas vinculadas a su `_id`.
 
 ### 5.2 Separación contractual
 
-Deben distinguirse dos conceptos:
+Deben distinguirse:
 
 **A. Relación persistida de dominio/contacto**
 
@@ -241,99 +247,104 @@ Deben distinguirse dos conceptos:
 Appointment.client -> User/contact record
 ```
 
-Sirve para relacionar operacionalmente la Appointment con el registro utilizado al reservar. No es por sí sola prueba de que una request posterior pertenezca a la misma persona.
+Sirve para relacionar operacionalmente la Appointment con el registro utilizado durante booking. No prueba por sí sola que una request posterior pertenezca a esa persona.
 
-**B. Client authority verificada**
+**B. Client authority válida**
 
 Conceptualmente:
 
 ```text
-verified client relationship/capability
+verified client binding
+        OR
+explicit purpose-specific capability
         ↓
-Appointment
+operación protegida sobre Appointment autorizada
 ```
 
-La prueba concreta será definida por 6.2.5 para identidad autenticada/histórica.
+La forma del binding autenticado/histórico será definida por 6.2.5.
 
-Para un cliente autenticado creado/vinculado de forma segura en el futuro, la coincidencia con la identidad global podrá formar parte de la prueba, pero sólo después de que exista un binding verificado que determine qué relaciones históricas pertenecen realmente a esa identidad.
+### 5.3 Invariante inequívoca
 
-### 5.3 Invariantes Client
+**Hasta que exista un binding Client verificado o una capability purpose-specific explícita, la igualdad entre `authenticated User._id` y `Appointment.client` NO DEBE autorizar de forma independiente ninguna operación Client protegida.**
 
-- `Appointment.client` no es por sí solo Client authority.
-- email/teléfono no verificado no es identidad.
-- `clientId` no es bearer capability.
-- autenticar un `User` no hace administrables automáticamente todas las Appointments históricas asociadas a ese `_id` por matching guest previo.
-- acceso a historial y gestión histórica requieren relación/verificación establecida por la política de identidad progresiva.
-- 6.2.4-B **no implementa 6.2.5**.
-- 6.2.4-B sí debe evitar introducir o consolidar una primitive reutilizable que autorice historial sólo por `authenticatedUser._id === Appointment.client`.
-- mientras 6.2.5 no provea el binding verificado, las operaciones Client históricas protegidas no deben obtener autoridad nueva por inferencia de contacto.
-- una capability purpose-specific puede autorizar una operación concreta sin convertirse en identidad general.
+Esta regla aplica tanto a nuevas implementaciones como a los grants existentes.
+
+En particular:
+
+- `User._id === Appointment.client` por sí solo no concede `read`;
+- por sí solo no concede `list/history`;
+- por sí solo no concede `cancel`;
+- por sí solo no concede `timeline`;
+- por sí solo no concede reschedule ni ninguna otra operación Client protegida futura.
+
+### 5.4 Obligación concreta de 6.2.4-B
+
+6.2.4-B debe **eliminar o neutralizar como grants independientes** los usages protegidos existentes basados exclusivamente en esa igualdad.
+
+Como mínimo debe revisar y corregir:
+
+- `cancelAppointment()`;
+- `getAppointmentDetails()`;
+- `getMyAppointments()`;
+- `getAppointmentTimeline()` por su dependencia de `getAppointmentDetails()`;
+- cualquier otro caller protegido que derive Client authority únicamente de `Appointment.client` / `client=userId`.
+
+No basta con documentar que no deben introducirse usos nuevos.
+
+Mientras 6.2.5 no provea un binding verificado:
+
+- una identidad autenticada **no** obtiene Client authority histórica sólo porque su `_id` coincida con `Appointment.client`;
+- si una operación Client protegida no recibe una prueba válida de Client authority, debe fallar closed;
+- admin o profesional asignado pueden seguir operando mediante sus capacidades independientes cuando éstas sean válidas;
+- una capability purpose-specific válida puede autorizar únicamente el recurso y la operación/purpose para los que fue emitida;
+- esa capability no se convierte en identidad global;
+- esa capability no concede historial general;
+- esa capability no habilita automáticamente otras operaciones sobre la misma Appointment ni sobre otras Appointments.
+
+### 5.5 Qué NO debe resolver 6.2.4-B
+
+Para cerrar este blocker, 6.2.4-B **no** implementa:
+
+- verificación de email/teléfono;
+- account linking;
+- identity merging;
+- client profile binding;
+- login de cliente;
+- recuperación de historial;
+- migración/fusión de relaciones guest;
+- ningún mecanismo general de 6.2.5.
+
+La obligación es cerrar el grant inseguro actual y dejar preparada una frontera donde 6.2.5 pueda aportar posteriormente la prueba de identidad correcta.
 
 ---
 
 ## 6. APT-WORKER-CAP-01 — BLOCKER CORE
 
-### 6.1 Problema
+Esta decisión ya se considera cerrada y no se reabre en esta corrección.
 
-`Membership.role=worker` no puede seguir siendo un requisito universal para que una persona sea profesional agendable.
-
-Con una Membership única por `{user,business}`, exigir una segunda Membership `worker` impediría que un propietario/admin pueda prestar servicios sin rediseñar Membership o duplicar identidad, contradiciendo la baseline de PR #21.
-
-### 6.2 Separación: autoridad tenant vs elegibilidad profesional
+### 6.1 Autoridad tenant vs elegibilidad profesional
 
 **Autoridad tenant** deriva de Membership.
 
-Ejemplos:
-
-- `Membership.role=admin` concede capacidades administrativas definidas para el tenant.
-- `Membership.role=worker` concede las capacidades tenant operativas asociadas a ese rol.
-- una Membership activa sigue siendo obligatoria para participar en operaciones tenant protegidas.
-
-**Elegibilidad profesional para un Service** deriva de una relación explícita distinta:
-
-```text
-User activo
-+ Membership activa en el mismo Business
-+ User ∈ Service.workers
-+ Service.business correcto
-+ invariantes Service/Business
-```
-
-`Service.workers` expresa **qué personas pueden prestar ese Service**.
-
-No concede privilegios administrativos.
-
-No sustituye Membership.
-
-No crea un rol tenant nuevo.
-
-### 6.3 Capacidad profesional asignada sobre Appointment
-
-Para operar específicamente como profesional asignado:
+**Elegibilidad profesional** deriva de:
 
 ```text
 User.isActive === true
 Membership.isActive === true
 Membership.business === Appointment.business
-User._id ∈ Appointment.service.workers
+User._id ∈ Service.workers
+Service.business === Appointment.business
+```
+
+Para operar específicamente como profesional asignado se añade:
+
+```text
 Appointment.worker === User._id
 ```
 
-El rol físico de esa Membership puede ser `worker` o `admin` bajo el esquema actual; lo relevante para esta capacidad concreta es que exista participación tenant activa y que la elegibilidad profesional esté expresada por `Service.workers` + assignment.
+El rol físico de la Membership puede ser `worker` o `admin` bajo el esquema actual. `Service.workers` no concede privilegios administrativos ni sustituye Membership.
 
-Esto permite que un propietario con Membership `admin` pueda ser profesional asignado cuando el Service lo incluya explícitamente, sin crear una segunda Membership imposible bajo el índice único.
-
-Un `admin` no incluido en `Service.workers` **no** adquiere elegibilidad profesional por ser admin, aunque pueda tener separadamente capacidades administrativas sobre Appointments según la operación.
-
-Un `worker` con Membership activa pero no incluido en `Service.workers` **no** es elegible para prestar ese Service.
-
-### 6.4 Multirol formal
-
-Un sistema formal de múltiples roles/permissions dentro de Membership sigue fuera de 6.2.4.
-
-No es necesario resolverlo para permitir que un admin preste servicios: la autoridad tenant y la elegibilidad profesional son dimensiones distintas.
-
-6.2.4-A no modifica el modelo Membership.
+Un sistema formal multirrol continúa fuera de 6.2.4.
 
 ---
 
@@ -348,17 +359,16 @@ Membership.role === 'admin'
 Membership.business === Appointment.business
 ```
 
-Además el Business debe encontrarse activo según la autoridad tenant vigente.
+Además el Business debe estar activo.
 
 No sustituyen esta prueba:
 
 - `User.role` heredado;
 - `User.business` heredado;
 - `Business.owner`;
-- `session.businessId`;
-- seleccionar un Business.
-
-La inclusión en `Service.workers` tampoco concede capacidad ADMIN.
+- session `businessId`;
+- seleccionar un Business;
+- inclusión en `Service.workers`.
 
 ---
 
@@ -366,32 +376,28 @@ La inclusión en `Service.workers` tampoco concede capacidad ADMIN.
 
 El privilegio global por sí solo:
 
-- puede autorizar inspección global read-only cuando exista una política explícita;
+- puede autorizar inspección global read-only bajo política explícita;
 - no autoriza mutación tenant;
 - seleccionar/impersonar Business no crea Membership ni capacidad admin.
 
-Si el mismo User posee una Membership activa válida en `Appointment.business`, esa Membership se evalúa independientemente. El privilegio superadmin no anula ni amplía la Membership.
+Si el mismo User posee una Membership activa válida en `Appointment.business`, esa Membership se evalúa independientemente.
 
 ---
 
-## 9. SYSTEM / INTERNAL
+## 9. SYSTEM / CAPABILITIES PURPOSE-SPECIFIC
 
-Una operación interna puede no tener `req.businessId`, pero debe demostrar provenance persistente y estado esperado.
+Una operación system/internal o una capability explícita debe demostrar provenance y scope.
+
+Una capability purpose-specific:
+
+- debe estar ligada a recurso y purpose concretos;
+- debe tener integridad/entropía/expiración adecuadas cuando corresponda;
+- no se deriva de un ObjectId público;
+- no se convierte en identidad general;
+- no concede historial general;
+- no debe reutilizarse para operaciones fuera de su scope.
 
 Un ObjectId arbitrario nunca constituye autoridad.
-
-Ejemplo válido para un módulo opcional de pagos:
-
-```text
-trusted callback token
-    ↓
-Payment persistido válido
-    ├── appointment
-    ├── business
-    └── economic intent
-    ↓
-Appointment tenant consistente
-```
 
 ---
 
@@ -404,26 +410,20 @@ Service.workers = [u1, u2]  -> sólo u1 y u2 pueden prestar ese Service
 Service.workers = []        -> ningún profesional elegible
 ```
 
-Un array vacío nunca significa “todos”.
-
 ### 10.2 Create/update Service
 
-6.2.4-B deberá aceptar en `Service.workers` únicamente Users que:
+6.2.4-B debe aceptar en `Service.workers` únicamente Users que:
 
 - existan;
-- tengan `User.isActive === true`;
-- tengan Membership activa en el mismo Business del Service;
-- satisfagan las invariantes de Business.
+- estén activos;
+- tengan Membership activa en el mismo Business;
+- satisfagan invariantes de Business.
 
-**No** debe exigir universalmente `Membership.role === "worker"`.
-
-Una Membership `admin` activa es compatible con elegibilidad profesional si el User está explícitamente incluido en `Service.workers`.
-
-La validación de forma ObjectId no es suficiente.
+No debe exigir universalmente `Membership.role === "worker"`.
 
 ### 10.3 Public booking y availability
 
-Para publicar slots o crear una Appointment nueva deben cumplirse:
+Para publicar slots o crear Appointment nueva:
 
 ```text
 Service.business === targetBusiness
@@ -434,128 +434,77 @@ Professional User._id ∈ Service.workers
 Business activo
 ```
 
-No se concede autoridad administrativa mediante esta validación.
-
 ### 10.4 Service inactivo
 
-Estado actual: booking y availability consultan Service sin `onlyActive=true`.
-
-Invariante:
-
-- un Service debe estar activo al publicar nueva disponibilidad y al crear una Appointment nueva;
-- desactivarlo posteriormente no reescribe, invalida ni elimina automáticamente Appointments existentes/históricas.
-
-### 10.5 Fixtures y datos legacy
-
-La semántica `workers=[] => ninguno` y la separación de roles puede revelar fixtures/datos legacy incompatibles.
-
-Antes de enforcement real deben auditarse:
-
-- fixtures/tests;
-- seeds de desarrollo/test;
-- datos legacy;
-- Services cuyos workers no tengan Membership activa en el mismo Business;
-- propietarios/admin que deban ser incluidos explícitamente como profesionales.
-
-6.2.4-A no ejecuta migraciones ni seeds.
+Service debe estar activo al publicar nueva availability y al crear Appointment. Desactivarlo posteriormente no reescribe ni invalida automáticamente Appointments existentes/históricas.
 
 ---
 
 ## 11. Matriz de autorización corregida
 
-Las columnas son capacidades independientes. `NO GRANT` significa que esa capacidad por sí sola no autoriza; el mismo User puede satisfacer otra capacidad válida.
+Las columnas representan capacidades independientes. `NO GRANT` significa que esa capacidad por sí sola no autoriza; el mismo User puede satisfacer otra capacidad válida.
 
-| Operación | Client verificado / capability Client | Profesional asignado | Membership Admin | Superadmin global | System / capability purpose-specific |
-|---|---|---|---|---|---|
-| Create booking público | CONDITIONAL según flujo público | NO GRANT adicional | NO GRANT adicional | NO GRANT adicional | CONDITIONAL sólo flujo interno explícito |
-| Read detail | CONDITIONAL futuro con binding verificado | CONDITIONAL | CONDITIONAL | CONDITIONAL read-only explícito | CONDITIONAL internal |
-| List | CONDITIONAL futuro, sólo recursos vinculados/verificados | CONDITIONAL, sólo asignados | CONDITIONAL tenant | CONDITIONAL read-only explícito | CONDITIONAL internal |
-| Cancel | CONDITIONAL futuro + regla negocio | CONDITIONAL | CONDITIONAL | NO GRANT | CONDITIONAL purpose-specific |
-| Confirm | NO GRANT por Client | CONDITIONAL | CONDITIONAL | NO GRANT | CONDITIONAL sólo flujo interno definido |
-| Complete | NO GRANT por Client | CONDITIONAL | CONDITIONAL | NO GRANT | DENY por defecto |
-| Reschedule | CONDITIONAL futuro si producto lo habilita | CONDITIONAL | CONDITIONAL | NO GRANT | DENY por defecto |
-| Payment initiation si se habilita | CONDITIONAL Client verificado o guest payment capability | NO GRANT adicional; puede aplicar otra capacidad Client | NO GRANT adicional; puede aplicar otra capacidad Client | NO GRANT adicional; puede aplicar otra capacidad Client | CONDITIONAL guest payment capability |
-| Payment callback si se habilita | NO GRANT directo | NO GRANT directo | NO GRANT directo | NO GRANT directo | CONDITIONAL Payment persistido + provider proof |
-| Notification read interno | NO GRANT directo | NO GRANT directo | NO GRANT directo | NO GRANT directo | CONDITIONAL provenance interno |
-| Timeline funcional | CONDITIONAL futuro tras binding/authorization | CONDITIONAL | CONDITIONAL | CONDITIONAL read-only explícito | CONDITIONAL con safe projection |
-| Global analytics | NO GRANT | NO GRANT | NO GRANT | ALLOW read-only explícito | CONDITIONAL internal |
+| Operación | Client binding verificado | Capability purpose-specific | Profesional asignado | Membership Admin | Superadmin global | System/internal |
+|---|---|---|---|---|---|---|
+| Create booking público | no requerida por flujo guest | CONDITIONAL si el flujo la define | NO GRANT adicional | NO GRANT adicional | NO GRANT adicional | CONDITIONAL explícito |
+| Read detail | CONDITIONAL cuando 6.2.5 provea binding | sólo si capability incluye `read` + recurso | CONDITIONAL | CONDITIONAL | CONDITIONAL read-only explícito | CONDITIONAL internal |
+| List / history | CONDITIONAL cuando 6.2.5 provea binding | NO GRANT salvo capability específica de lista, no generalizable | CONDITIONAL sólo asignados | CONDITIONAL tenant | CONDITIONAL read-only explícito | CONDITIONAL internal |
+| Cancel | CONDITIONAL con binding + regla negocio | sólo si capability incluye `cancel` + recurso | CONDITIONAL | CONDITIONAL | NO GRANT | CONDITIONAL explícito |
+| Confirm | NO GRANT por Client | NO GRANT salvo capability interna expresamente definida | CONDITIONAL | CONDITIONAL | NO GRANT | CONDITIONAL definido |
+| Complete | NO GRANT por Client | NO GRANT | CONDITIONAL | CONDITIONAL | NO GRANT | DENY por defecto |
+| Reschedule | CONDITIONAL futuro | sólo si capability incluye `reschedule` + recurso | CONDITIONAL | CONDITIONAL | NO GRANT | DENY por defecto |
+| Timeline | CONDITIONAL cuando exista binding | sólo si capability incluye `timeline` + recurso | CONDITIONAL | CONDITIONAL | CONDITIONAL read-only explícito | CONDITIONAL safe projection |
+| Payment initiation, si se habilita | CONDITIONAL Client verificado | CONDITIONAL guest payment capability | NO GRANT adicional | NO GRANT adicional | NO GRANT adicional | CONDITIONAL |
+| Payment callback, si se habilita | NO GRANT directo | NO GRANT directo | NO GRANT directo | NO GRANT directo | NO GRANT directo | Payment persistido + provider proof |
+| Global analytics | NO GRANT | NO GRANT | NO GRANT | NO GRANT | ALLOW read-only explícito | CONDITIONAL internal |
 
-Reglas esenciales:
-
-- las capacidades no son roles mutuamente excluyentes;
-- `Appointment.client` no crea por sí solo la columna Client;
-- `Membership.role=worker` no crea por sí solo la columna Profesional asignado;
-- `Service.workers` + assignment no crean la columna Admin.
+**Regla fail-closed Client:** mientras no exista binding Client verificado ni capability válida para la operación/recurso, la columna Client equivale a `NO GRANT` aunque `authenticatedUser._id === Appointment.client`.
 
 ---
 
 ## 12. Inventario de fronteras actualizado
 
-| Flujo | Appointment lookup/write | Prueba actual | Estado contractual |
+| Flujo | Appointment lookup/write | Prueba actual | Contrato 6.2.4-B |
 |---|---|---|---|
-| Public booking prevalidación | sin lookup Appointment | Service tenant + User activo + `Membership.role=worker` | Parcial: debe pasar a Membership activa + `Service.workers` + Service activo |
-| Public booking create | `create({business:req.businessId})` | disponibilidad + relaciones actuales | Parcial: cerrar elegibilidad profesional y Service activo |
-| Availability | `findByBusinessWorkerAndDate` | actualmente exige `Membership.role=worker` | Appointment query tenant-safe; elegibilidad debe desacoplarse del rol; Holiday sigue global |
-| Confirm | scoped read/write | Admin o `tenantRole=worker` + assignment | tenant-safe por Business, pero profesional está acoplado al rol y state es débil |
-| Complete | scoped read/write | Admin o `tenantRole=worker` + assignment | mismo problema de capacidad profesional + transición |
-| Cancel | scoped read/write | comparación Client ID o profesional/admin | tenant-safe por Business; Client ID no debe congelarse como autoridad histórica suficiente |
-| Read detail | `findByIdAndBusiness` | Client ID o profesional/admin | cross-tenant protegido; Client authority futura debe usar binding verificado |
-| My appointments | `findAll(query)` | client/worker/admin según rol | caller tenant-scoped; contrato Client/profesional debe corregirse |
-| Timeline | Appointment scoped, luego AuditLog | auth Appointment | ownership gate existe; proyección actual es insegura |
+| Public booking prevalidación | sin lookup Appointment | Service tenant + User activo + `Membership.role=worker` | Membership activa + `Service.workers` + Service activo |
+| Public booking create | `create({business:req.businessId})` | disponibilidad + relaciones actuales | cerrar elegibilidad profesional y Service activo |
+| Availability | `findByBusinessWorkerAndDate` | actualmente `Membership.role=worker` | desacoplar rol de elegibilidad; Holiday sigue global |
+| Confirm | scoped read/write | Admin o worker-role + assignment | profesional por Membership activa + Service allowlist + assignment; CAS |
+| Complete | scoped read/write | Admin o worker-role + assignment | mismo contrato profesional + transición válida |
+| Cancel | scoped read/write | **Client ID directo** o profesional/admin | eliminar Client ID como grant independiente; binding/capability o capacidad profesional/admin |
+| Read detail | `findByIdAndBusiness` | **Client ID directo** o profesional/admin | eliminar Client ID como grant independiente; binding/capability o capacidad profesional/admin |
+| My appointments | `findAll(query)` | **`client=userId`** para rama no admin/worker | no listar historial Client sin binding válido; profesional/admin conservan capacidades independientes |
+| Timeline | Appointment scoped y luego AuditLog | gate por `getAppointmentDetails` | hereda corrección Client; luego safe projection |
 | Payment initiation | global `findById` + global `update` | ObjectId + status | BLOCKER BEFORE PAYMENT ENABLEMENT |
-| Webpay callback | Payment lookup no obligatorio en práctica + Appointment global | provider/token incompleto | BLOCKER BEFORE PAYMENT ENABLEMENT |
-| Payment return transport | POST y GET; query/body token | callback público | BLOCKER BEFORE PAYMENT ENABLEMENT (`APT-PAY-04`) |
-| Notifications | 3 `findById` globales | provenance interno | lectura internal-only legítima pero boundary genérico |
-| Global metrics/analytics | 7 aggregations | superadmin read-only | válido bajo política explícita; repo global sigue siendo deuda |
+| Webpay callback | Payment no obligatorio + Appointment global | provider/token incompleto | BLOCKER BEFORE PAYMENT ENABLEMENT |
+| Payment return transport | POST/GET; query/body token | callback público | `APT-PAY-04` diferido hasta habilitación |
+| Notifications | 3 `findById` globales | provenance interno | internal/read-only explícito |
+| Global metrics/analytics | 7 aggregations | superadmin read-only | política read-only explícita |
 | WebSocket availability | no lookup Appointment | Membership revalidada | tenant-scoped para su propósito |
 | Holiday | `findByDate` global | fecha global | DEBT / política cross-tenant por aclarar |
-| Legacy migration/debug/seed | queries/writes globales | operador | fuera del runtime moderno; DEBT |
 
 ---
 
 ## 13. Repository contract y mutabilidad
 
-### 13.1 APT-REP-01 — HIGH
+### APT-REP-01 — HIGH
 
-El problema incluye ambas mutaciones:
+Tanto:
 
 ```text
 update(id, data)
 updateByIdAndBusiness(id, businessId, data)
 ```
 
-La segunda protege el recurso seleccionado por Business, pero sigue aceptando `data` arbitrario capaz de alterar ownership, assignments y status.
+son demasiado genéricos para mutaciones runtime. La segunda protege el recurso seleccionado por Business, pero no los campos mutados.
 
-### 13.2 Contrato futuro
+Contrato:
 
-6.2.4-B debe eliminar o encapsular mutaciones genéricas desde callers runtime y usar comandos purpose-specific, por ejemplo:
-
-```text
-transitionStatusByBusiness(...expectedState...)
-reassignProfessionalByBusiness(...)
-changeServiceByBusiness(...)
-rescheduleByBusiness(...)
-```
-
-Reglas:
-
-- `business`: inmutable.
-- `client`: no mutable por patch genérico.
-- `status`: sólo por transición explícita con expected-state.
-- `worker`, `service`, `date`, `startTime`, `endTime`: sólo por comandos que revaliden invariantes.
-- lecturas globales legítimas: encapsuladas como internal/read-only.
-
-### 13.3 Reassignment profesional
-
-Un cambio de `Appointment.worker` debe revalidar:
-
-- User activo;
-- Membership activa en `Appointment.business`;
-- User incluido en `Service.workers`;
-- disponibilidad;
-- restricciones de estado.
-
-No debe exigir universalmente `Membership.role=worker`.
+- `business`: inmutable;
+- `client`: no mutable por patch genérico;
+- `status`: sólo por transición purpose-specific con expected-state/CAS;
+- `worker`, `service`, `date`, `startTime`, `endTime`: sólo mediante comandos que revaliden invariantes;
+- lecturas globales legítimas: internal/read-only explícitas.
 
 ---
 
@@ -563,14 +512,12 @@ No debe exigir universalmente `Membership.role=worker`.
 
 ### APT-STATE-01 — HIGH
 
-Confirm/complete/cancel y Payment no expresan de forma uniforme estados origen ni CAS.
+Cada comando debe:
 
-Contrato:
-
-- cada comando declara estados origen permitidos;
-- la condición expected-state forma parte del filtro de persistencia cuando existe riesgo de concurrencia/replay;
-- conflicto de CAS sobre recurso autorizado produce 409;
-- un transition command no acepta fields arbitrarios.
+- declarar estados origen permitidos;
+- incluir expected-state en persistencia cuando exista riesgo de replay/carrera;
+- devolver 409 ante conflicto de CAS sobre recurso ya autorizado;
+- no aceptar fields arbitrarios.
 
 ---
 
@@ -578,174 +525,41 @@ Contrato:
 
 ### APT-AUD-01 — HIGH
 
-Actualmente Payment/Webpay puede persistir en AuditLog:
+El timeline funcional debe usar **safe projection allowlist** y nunca exponer:
 
-- tokens;
-- `token_ws`/`TBK_TOKEN`;
-- URLs de provider;
-- payloads/respuestas del provider;
 - `technicalMessage`;
-- stack traces en errores.
+- stack traces;
+- tokens/capabilities;
+- payloads crudos de providers;
+- metadata no allowlisteada.
 
-El timeline autoriza primero Appointment, pero devuelve documentos AuditLog completos.
-
-Contrato 6.2.4-B Core:
-
-- timeline funcional usa una **safe projection allowlist**;
-- no expone `technicalMessage`;
-- no expone stack traces;
-- no expone tokens/capabilities;
-- no expone payloads crudos de providers;
-- metadata visible se sanitiza/allowlistea;
-- observabilidad operacional interna se separa del timeline funcional cuando requiera más detalle.
+La observabilidad técnica interna se separa del timeline funcional cuando necesite mayor detalle.
 
 ### APT-AUD-02 — LOW
 
-AuditLog no contiene `business` propio. El gate actual deriva ownership desde Appointment antes de consultar timeline. No es blocker, pero cualquier futuro acceso directo/global a AuditLog debe preservar el tenant boundary de forma explícita.
+AuditLog no contiene `business` propio. El gate actual deriva ownership desde Appointment. Cualquier futuro acceso directo/global debe conservar ese boundary explícitamente.
 
 ---
 
 ## 16. Payment/Webpay — contrato diferido
 
-### 16.1 APT-PAY-01 — BLOCKER BEFORE PAYMENT ENABLEMENT
+No se modifica Payment en esta corrección.
 
-`POST /payments/initiate` usa un `appointmentId` público como selector de Appointment global sin Client authority verificada o guest payment capability.
+### APT-PAY-01 — BLOCKER BEFORE PAYMENT ENABLEMENT
 
-Invariante: conocer un Appointment ObjectId nunca autoriza iniciar pago.
+Appointment ObjectId no es payment capability.
 
-### 16.2 Guest payment capability
+### APT-PAY-02 — BLOCKER BEFORE PAYMENT ENABLEMENT
 
-Si Payment se habilita, continuidad guest usa capability corta purpose-specific emitida por servidor, ligada como mínimo a:
+Ningún callback muta Appointment sin Payment persistido válido previo que pruebe `transactionId/status/gateway/appointment/business/amount/type/currency`; provider `buy_order` y amount se validan contra ese Payment.
 
-- Appointment;
-- Business;
-- `purpose=payment`;
-- expiry corta;
-- integridad criptográfica o valor opaco aleatorio no derivable.
+### APT-PAY-03 — BLOCKER BEFORE PAYMENT ENABLEMENT
 
-No es:
+Máximo un Payment `pending` autoritativo por Appointment/gateway; provider calls fuera de transacción Mongo; persistencia local y callback idempotentes/CAS; `Payment.amount/type/currency` persistidos son autoridad económica del intento.
 
-- Appointment ObjectId;
-- `clientId`;
-- identidad general;
-- sesión 6.2.5.
+### APT-PAY-04 — BLOCKER BEFORE PAYMENT ENABLEMENT
 
-### 16.3 APT-PAY-02 — BLOCKER BEFORE PAYMENT ENABLEMENT
-
-`confirmPayment(tokenWs)` actualmente puede:
-
-1. intentar buscar Payment por token;
-2. ignorar errores de esa consulta;
-3. continuar sin Payment persistido;
-4. llamar al provider;
-5. reemplazar `appointmentId` por `commitResponse.buy_order`;
-6. recuperar Appointment globalmente;
-7. mutar Payment/Appointment.
-
-Invariante: ningún callback muta Appointment sin Payment persistido válido previo.
-
-Payment debe probar antes del commit:
-
-```text
-transactionId === token_ws
-status === 'pending'
-gateway === 'webpay'
-appointment
-business
-amount
-type
-currency
-```
-
-Provider debe probar:
-
-```text
-buy_order === Payment.appointment
-amount === Payment.amount
-resultado authorized/rejected compatible
-```
-
-Y antes de mutar:
-
-```text
-Appointment._id === Payment.appointment
-Appointment.business === Payment.business
-```
-
-### 16.4 APT-PAY-03 — BLOCKER BEFORE PAYMENT ENABLEMENT
-
-Problemas actuales:
-
-- initiation acepta `pending` y `pending_payment`;
-- sólo excluye Payment `approved`;
-- pueden coexistir varios attempts `pending`;
-- Appointment cambia antes de crear Payment;
-- fallo local puede dejar estado parcial;
-- callback modifica Payment y Appointment en pasos separados.
-
-Política:
-
-- máximo un Payment `pending` autoritativo por Appointment/gateway;
-- retries/supersession deben ser explícitos;
-- `Payment.amount/type/currency` persistidos son autoridad económica del intento;
-- callback no recalcula el monto usando el precio actual del Service.
-
-Initiation esperado:
-
-```text
-payment capability válida
-    ↓
-Appointment status=pending
-    ↓
-Webpay create (HTTP externo, fuera de tx Mongo)
-    ↓
-transacción Mongo local:
-    Payment pending
-    + CAS Appointment pending -> pending_payment
-```
-
-Si la persistencia local falla, el token externo queda huérfano y no puede ser aceptado posteriormente porque no existe Payment persistido autorizado.
-
-Callback esperado:
-
-```text
-Payment pending por token OBLIGATORIO
-    ↓
-provider commit (HTTP externo, fuera de tx Mongo)
-    ↓
-validar provider contra Payment
-    ↓
-Appointment por Payment.appointment + Payment.business
-    ↓
-transacción Mongo local idempotente/CAS:
-    Payment pending -> terminal
-    + Appointment expected-state -> next-state
-```
-
-### 16.5 APT-PAY-04 — callback transport/error disclosure — BLOCKER BEFORE PAYMENT ENABLEMENT
-
-Estado actual:
-
-- callback soporta POST y GET;
-- `token_ws` y `TBK_TOKEN` pueden llegar por query string;
-- ante error técnico el controller redirige al frontend incluyendo `message=error.message`.
-
-Riesgos:
-
-- tokens/secret material en URLs, histories, proxies o logs;
-- exposición pública de mensajes internos, errores del provider o detalles técnicos.
-
-Contrato futuro:
-
-- respetar el método/transport requerido por el provider;
-- no ampliar métodos de callback sin necesidad contractual;
-- evitar tokens/capabilities en query strings cuando el contrato del provider lo permita;
-- nunca incluir `error.message`, stack, provider error crudo ni detalle interno en redirects públicos;
-- redirects usan únicamente `reason/code` públicos, estables y allowlisted;
-- detalle técnico permanece en observabilidad interna sanitizada;
-- tokens/capabilities no forman parte del timeline funcional.
-
-No se implementa en 6.2.4-A.
+Callback futuro debe usar el transporte mínimo requerido por provider, evitar tokens en query cuando el contrato lo permita y nunca propagar `error.message`, stack o provider errors en redirects públicos; usar reasons/codes allowlisted y observabilidad interna sanitizada.
 
 ---
 
@@ -757,28 +571,17 @@ Respuesta uniforme para:
 
 - Appointment inexistente;
 - Appointment de otro Business;
-- relación Client no autorizada/no verificada para ese recurso;
+- Client sin binding/capability válida para ese recurso;
 - profesional intentando Appointment no asignada;
 - recurso relacionado no observable bajo la capacidad evaluada.
 
 ### 403 — autoridad tenant faltante antes de resolver recurso
 
-Usar cuando una operación tenant protegida puede determinar antes de cargar un Appointment concreto que falta:
-
-- User activo;
-- Membership activa;
-- capacidad/rol tenant necesario para entrar al flujo.
+Usar cuando una operación tenant protegida determina antes de cargar Appointment concreto que falta User/Membership/capacidad tenant necesaria.
 
 ### 409 — recurso autorizado, transición inválida/replay
 
-Usar para:
-
-- expected-state mismatch;
-- replay;
-- CAS conflict;
-- intento concurrente/duplicado autoritativo.
-
-Errores de forma permanecen 400/422 según la política vigente.
+Usar para expected-state mismatch, replay, CAS conflict o conflicto de transición sobre recurso ya autorizado.
 
 ---
 
@@ -786,77 +589,47 @@ Errores de forma permanecen 400/422 según la política vigente.
 
 ### BLOCKER CORE / BEFORE 6.2.4-B CONTRACT FREEZE
 
-#### APT-CLIENT-01 — `Appointment.client` no prueba Client authority histórica
+#### APT-CLIENT-01 — grants Client directos basados en asociación guest no verificada
 
-El guest matching actual puede reutilizar User por contactos no verificados. La futura autenticación de ese User no puede otorgar retroactivamente historial/gestión sobre todas las Appointments asociadas sólo por `_id`.
+El runtime actual contiene `cancel`, `read detail`, `my appointments` y, transitivamente, `timeline` con grants/queries Client basados en `Appointment.client === userId` o `client=userId`.
 
-#### APT-WORKER-CAP-01 — elegibilidad profesional acoplada incorrectamente a `Membership.role=worker`
+**6.2.4-B debe eliminar/neutralizar esos grants existentes.** La igualdad de IDs puede seguir existiendo como dato relacional, pero no como prueba independiente de autoridad hasta que exista binding verificado o capability explícita para la operación/recurso.
 
-El contrato debe permitir que un User con Membership `admin` activa sea profesional cuando aparece explícitamente en `Service.workers` y está asignado, sin segunda Membership ni duplicación de identidad.
+#### APT-WORKER-CAP-01 — autoridad tenant separada de elegibilidad profesional
+
+Decisión ya cerrada: Membership activa expresa participación/autoridad; `Service.workers` + assignment expresan elegibilidad profesional. Membership `admin` puede coexistir con capacidad profesional sin segunda Membership.
 
 ### BLOCKER BEFORE PAYMENT ENABLEMENT
 
-#### APT-PAY-01
-
-Initiation público usa Appointment ObjectId sin Client/guest payment capability.
-
-#### APT-PAY-02
-
-Callback puede continuar sin Payment persistido válido y dejar que provider `buy_order` seleccione Appointment global.
-
-#### APT-PAY-03
-
-Attempts múltiples/estado parcial; falta intento pendiente autoritativo e idempotencia/CAS.
-
-#### APT-PAY-04
-
-Callback amplía transporte a GET/query y redirect público puede exponer `error.message`/detalle interno.
+- `APT-PAY-01` — initiation sin Client/guest payment capability.
+- `APT-PAY-02` — callback sin Payment persistido obligatorio/provenance fuerte.
+- `APT-PAY-03` — attempts/consistencia/idempotencia incompletos.
+- `APT-PAY-04` — transport de callback y disclosure de errores.
 
 ### HIGH
 
-#### APT-SVC-01 — `Service.workers` no es enforced
-
-Booking/availability no verifican allowlist y create/update Service no valida User activo + Membership activa en el mismo Business. **La corrección no debe exigir universalmente role=worker.**
-
-#### APT-SVC-02 — Service inactivo todavía bookeable
-
-Booking/availability consultan Service sin `onlyActive=true`.
-
-#### APT-REP-01 — mutaciones genéricas
-
-`update` y `updateByIdAndBusiness` aceptan fields arbitrarios.
-
-#### APT-STATE-01 — state transitions sin CAS uniforme
-
-Faltan expected-state y protección consistente ante replay/carreras.
-
-#### APT-AUD-01 — timeline/observabilidad mezclados
-
-Material técnico/sensible puede persistirse y devolverse en timeline completo.
+- `APT-SVC-01` — `Service.workers` no enforced.
+- `APT-SVC-02` — Service inactivo todavía bookeable.
+- `APT-REP-01` — mutaciones genéricas.
+- `APT-STATE-01` — transitions sin CAS uniforme.
+- `APT-AUD-01` — timeline/observabilidad mezclados.
 
 ### MEDIUM
 
-#### APT-WORKER-01 — revocación de Membership y appointments futuras
-
-Revocar la Membership elimina capacidad tenant/profesional futura aunque el assignment histórico permanezca. Debe definirse política para citas futuras sin reescribir historia automáticamente.
-
-#### APT-READ-01 — lecturas globales internal-only no expresan intención
-
-Tres lecturas globales de notificaciones tienen provenance interno, pero el contrato del repo no lo expresa.
+- `APT-WORKER-01` — Membership revocada y citas futuras requieren política explícita sin reescribir historia.
+- `APT-READ-01` — lecturas globales internal-only de notificaciones no expresan intención en repo.
 
 ### LOW
 
-#### APT-AUD-02 — AuditLog sin Business propio
-
-Hoy el timeline queda gateado por Appointment; futuros accesos directos deben conservar boundary.
+- `APT-AUD-02` — AuditLog sin Business propio.
 
 ### DEBT / POLICIES TO CLARIFY
 
-- `appointmentRepository.aggregate(pipeline)` permanece global/genérico aunque los callers actuales sean read-only.
-- `migrate-multi-tenancy.js` contiene `Appointment.updateMany` global legacy.
-- scripts debug/seed operan fuera de boundaries runtime.
-- `HOLIDAY-POLICY-01`: Holiday es global y su política cross-tenant debe aclararse en una fase separada.
-- `ID-LEGACY-01`: guest nuevo recibe password aleatorio desconocido pese a ADR-001; deuda de 6.2.5, no de 6.2.4-B.
+- `appointmentRepository.aggregate(pipeline)` global/genérico.
+- `Appointment.updateMany` legacy en migración manual.
+- scripts debug/seed fuera de boundaries runtime.
+- `HOLIDAY-POLICY-01` — Holiday global; política cross-tenant por aclarar.
+- `ID-LEGACY-01` — password guest aleatorio desconocido; deuda 6.2.5.
 
 ---
 
@@ -867,67 +640,68 @@ Hoy el timeline queda gateado por Appointment; futuros accesos directos deben co
 1. `Appointment.business` es ownership tenant.
 2. `Appointment.business` es inmutable en runtime ordinario.
 3. `Appointment.service.business === Appointment.business`.
-4. un actor tenant de Business A nunca usa esa autoridad para operar Appointment B.
+4. autoridad de Business A nunca opera Appointment B.
 5. `Business.owner`, `User.role`, `User.business` y session `businessId` no sustituyen autoridad persistida.
 
 ### Client
 
 6. `Appointment.client` es relación de dominio/contacto, no prueba completa de identidad.
-7. Client authority requiere una relación/capability verificada para la Appointment.
-8. coincidencia guest de email/teléfono no concede historial ni gestión histórica.
-9. autenticar un User no legitima retroactivamente asociaciones guest no verificadas.
-10. 6.2.4-B no implementa identidad/login/binding 6.2.5.
-11. 6.2.4-B no debe consolidar `authenticatedUser._id === Appointment.client` como primitive suficiente para historial.
+7. email/teléfono guest no verificado no concede historial ni gestión histórica.
+8. autenticar un User no legitima retroactivamente asociaciones guest no verificadas.
+9. **Hasta que exista un binding Client verificado o una capability purpose-specific explícita, `authenticated User._id === Appointment.client` NO DEBE autorizar de forma independiente ninguna operación Client protegida.**
+10. 6.2.4-B debe neutralizar también los grants existentes basados únicamente en esa igualdad o en `client=userId`; no basta con prohibir usos nuevos.
+11. sin binding/capability válida, read/list/cancel/timeline Client fallan closed.
+12. una capability purpose-specific sólo autoriza su recurso + operación/purpose y no concede identidad ni historial general.
+13. 6.2.4-B no implementa verificación, linking, merging, client profile binding, client login ni recuperación de historial de 6.2.5.
 
 ### Tenant/Admin/profesional
 
-12. Admin requiere User activo + Membership admin activa + mismo Business.
-13. autoridad tenant deriva de Membership; elegibilidad profesional no se identifica universalmente con `role=worker`.
-14. profesional elegible requiere User activo + Membership activa mismo Business + inclusión en `Service.workers`.
-15. profesional asignado requiere además `Appointment.worker === User._id`.
-16. una Membership admin es compatible con elegibilidad profesional si `Service.workers` incluye al User.
-17. `Service.workers` no concede privilegios admin ni sustituye Membership.
-18. superadmin global no concede mutación tenant.
+14. Admin requiere User activo + Membership admin activa + mismo Business.
+15. autoridad tenant deriva de Membership; elegibilidad profesional no se identifica universalmente con `role=worker`.
+16. profesional elegible requiere User activo + Membership activa mismo Business + inclusión en `Service.workers`.
+17. profesional asignado requiere además `Appointment.worker === User._id`.
+18. una Membership admin es compatible con elegibilidad profesional si Service incluye al User.
+19. `Service.workers` no concede privilegios admin ni sustituye Membership.
+20. superadmin global no concede mutación tenant.
 
 ### Service
 
-19. `Service.workers` es allowlist autoritativa; `[] = ninguno`.
-20. Service create/update sólo incluye Users activos con Membership activa del mismo Business.
-21. Service debe estar activo para nueva availability/booking.
-22. desactivar Service no reescribe Appointments ya creadas.
+21. `Service.workers` es allowlist autoritativa; `[] = ninguno`.
+22. Service create/update sólo incluye Users activos con Membership activa del mismo Business.
+23. Service debe estar activo para nueva availability/booking.
+24. desactivar Service no reescribe Appointments ya creadas.
 
 ### Mutation/state
 
-23. `client` no cambia por patch genérico.
-24. worker/service/date/time sólo cambian mediante comandos purpose-specific.
-25. status sólo cambia mediante transición explícita/expected-state/CAS.
-26. repositorios runtime no exponen mutación genérica reutilizable que pueda cambiar ownership/assignments.
+25. `client` no cambia por patch genérico.
+26. worker/service/date/time sólo cambian mediante comandos purpose-specific.
+27. status sólo cambia mediante transición explícita/expected-state/CAS.
+28. repositorios runtime no exponen mutación genérica reutilizable capaz de cambiar ownership/assignments.
 
 ### Payment opcional
 
-27. Booking funciona sin Payment.
-28. Webpay es adapter de Payment, no parte de Appointment.
-29. Appointment ObjectId no es payment capability.
-30. guest payment usa capability corta purpose-specific.
-31. callback exige Payment persistido válido previo.
-32. Payment prueba transactionId/status/gateway/appointment/business/amount/type/currency.
-33. provider buy_order/amount se comparan contra Payment.
-34. `Appointment.business === Payment.business` antes de mutar.
-35. `Payment.amount/type/currency` persistidos son autoridad económica del intento.
-36. máximo un Payment pending autoritativo por Appointment/gateway.
-37. provider calls ocurren fuera de transacciones Mongo.
-38. callback es idempotente y coordina Payment + Appointment mediante CAS/transacción local.
-39. transport de callback se limita al requerido por provider.
-40. redirects públicos nunca contienen `error.message`, stack, provider details ni secretos.
+29. Booking funciona sin Payment.
+30. Webpay es adapter de Payment, no parte de Appointment.
+31. Appointment ObjectId no es payment capability.
+32. guest payment usa capability corta purpose-specific.
+33. callback exige Payment persistido válido previo.
+34. Payment prueba transactionId/status/gateway/appointment/business/amount/type/currency.
+35. provider buy_order/amount se comparan contra Payment.
+36. `Appointment.business === Payment.business` antes de mutar.
+37. `Payment.amount/type/currency` persistidos son autoridad económica del intento.
+38. máximo un Payment pending autoritativo por Appointment/gateway.
+39. provider calls ocurren fuera de transacciones Mongo.
+40. callback es idempotente y coordina Payment + Appointment mediante CAS/transacción local.
+41. transport se limita al requerido por provider y redirects públicos no contienen errores internos.
 
 ### Timeline/error/Holiday
 
-41. timeline usa safe projection allowlist.
-42. tokens/capabilities/provider payload/stack no se exponen.
-43. cross-resource/cross-owner/assignment no autorizado falla 404.
-44. falta de autoridad tenant previa a resolución falla 403.
-45. transición/replay/CAS conflict sobre recurso autorizado falla 409.
-46. Holiday permanece explícitamente clasificado como política global pendiente de definición; no se presenta como recurso tenantizado.
+42. timeline usa safe projection allowlist.
+43. tokens/capabilities/provider payload/stack no se exponen.
+44. cross-resource/Client-no-authority/assignment no autorizado falla 404.
+45. falta de autoridad tenant previa a resolución falla 403.
+46. transición/replay/CAS conflict sobre recurso autorizado falla 409.
+47. Holiday permanece política global pendiente de definición, no recurso tenantizado.
 
 ---
 
@@ -936,25 +710,26 @@ Hoy el timeline queda gateado por Appointment; futuros accesos directos deben co
 6.2.4-B debe:
 
 1. mantener `Appointment.business` inmutable;
-2. introducir una frontera de autorización Client que **no** conceda historial sólo por igualdad de `User._id` con `Appointment.client`;
-3. mantener sin implementar el binding/verificación de 6.2.5; hasta entonces no crear nueva Client authority histórica por inferencia;
-4. separar autoridad tenant de elegibilidad profesional;
-5. permitir elegibilidad profesional de Users con Membership activa `admin` o `worker` cuando estén explícitamente en `Service.workers`;
-6. no crear segunda Membership ni implementar multirrol formal;
-7. validar `Service.workers` contra User activo + Membership activa del mismo Business;
-8. exigir `Service.workers` en booking/availability;
-9. exigir Service activo para nueva availability/booking;
-10. conservar Appointments existentes al desactivar Service;
-11. corregir authorizers de profesional asignado para no depender de `tenantRole === worker` como requisito universal;
-12. encapsular/eliminar mutaciones genéricas Appointment desde runtime;
-13. introducir comandos purpose-specific;
-14. aplicar expected-state/CAS a transiciones;
-15. definir política de Membership revocada para citas futuras sin reescribir historia;
-16. aplicar 404/403/409 según este contrato;
-17. introducir safe projection de timeline/AuditLog;
-18. auditar/ajustar fixtures que dependan de `Service.workers=[]` o de profesional=`role=worker`;
-19. mantener Holiday fuera del scope funcional, documentando su política global pendiente;
-20. mantener identidad progresiva 6.2.5 fuera del alcance.
+2. **eliminar/neutralizar los grants Client existentes basados únicamente en `Appointment.client === authenticatedUser._id` o `client=userId`;**
+3. corregir como mínimo `cancelAppointment`, `getAppointmentDetails`, `getMyAppointments` y el gate de `getAppointmentTimeline`;
+4. hacer fail closed las operaciones Client protegidas mientras no exista binding verificado o capability válida para recurso/operación;
+5. permitir que admin/profesional sigan operando por sus capacidades independientes;
+6. permitir capabilities purpose-specific sólo con scope de recurso + operación, sin convertirlas en identidad/historial;
+7. no implementar ninguna parte de identidad progresiva 6.2.5;
+8. separar autoridad tenant de elegibilidad profesional;
+9. permitir elegibilidad profesional de Users con Membership activa `admin` o `worker` cuando estén explícitamente en `Service.workers`;
+10. no crear segunda Membership ni implementar multirrol formal;
+11. validar `Service.workers` contra User activo + Membership activa del mismo Business;
+12. exigir Service allowlist y Service activo en booking/availability;
+13. corregir authorizers de profesional asignado para no depender universalmente de `tenantRole === worker`;
+14. encapsular/eliminar mutaciones genéricas Appointment desde runtime;
+15. introducir comandos purpose-specific y expected-state/CAS;
+16. definir política de Membership revocada para citas futuras sin reescribir historia;
+17. aplicar 404/403/409 según este contrato;
+18. introducir safe projection de timeline/AuditLog;
+19. auditar/ajustar fixtures afectados por `Service.workers=[]` o profesional=`role=worker`;
+20. mantener Holiday como deuda de política fuera del alcance funcional;
+21. mantener Payment/Webpay fuera del MVP y deny-by-default salvo endurecimiento previo.
 
 ### 20.1 Gating para MVP sin Payment
 
@@ -962,49 +737,50 @@ Recomendado: deshabilitar/no montar Payment/Webpay deny-by-default antes de rele
 
 Si las rutas permanecen accesibles, `APT-PAY-01/02/03/04` deben corregirse antes del release.
 
-### 20.2 Payment diferido hasta habilitación
-
-Cuando Payment se habilite deberá incluir:
-
-- guest payment capability purpose-specific;
-- Payment persistido obligatorio antes de callback mutation;
-- provenance `Payment -> Appointment -> Business`;
-- amount/type/currency persistidos como autoridad;
-- single authoritative pending attempt;
-- initiation con provider fuera de tx y persistencia local atómica;
-- callback idempotente/CAS;
-- transport mínimo requerido por provider;
-- redirects públicos allowlisted sin mensajes internos;
-- logs/observabilidad sanitizados;
-- tests adversariales de token, amount, business, replay, transport y partial failure.
-
 ---
 
-## 21. Implicaciones de tests para 6.2.4-B
+## 21. Contrato futuro de tests para 6.2.4-B
 
-Sin modificar tests en 6.2.4-A, la implementación futura debe cubrir al menos:
+Sin modificar tests en 6.2.4-A, 6.2.4-B deberá demostrar como mínimo:
 
-- Service con User sin Membership -> reject.
-- Service con User inactivo -> reject.
-- `Service.workers=[]` -> ningún profesional elegible.
-- Membership `worker` + User incluido en Service -> elegible.
-- Membership `admin` + User incluido en Service -> elegible profesionalmente sin segunda Membership.
-- Membership `admin` + User fuera de Service -> no elegible profesionalmente.
-- inclusión en Service no concede capacidades admin.
-- worker/profesional de otro Business -> reject.
-- Service inactivo -> no nueva availability/booking.
-- desactivar Service no altera Appointment existente.
-- Membership revocada -> actor deja de ejercer capacidad tenant/profesional.
-- cross-resource -> 404 uniforme.
-- autoridad tenant ausente previa a resolución -> 403.
-- transición/replay autorizado -> 409.
-- generic mutation no puede cambiar business/client/worker/service.
-- timeline nunca expone technicalMessage/tokens/stacks.
-- una relación guest no verificada no obtiene historial únicamente por compartir `Appointment.client` con un User autenticado futuro.
+### APT-CLIENT-01
 
-Tests de binding/verificación real de identidad pertenecen a 6.2.5.
+- `Appointment.client === authenticatedUser._id` derivado de asociación guest no verificada -> **NO concede por sí solo read**.
+- la misma condición -> **NO concede por sí sola cancel**.
+- la misma condición -> **NO concede por sí sola list/history**.
+- la misma condición -> **NO concede por sí sola timeline**.
+- ausencia de binding/capability Client válida -> operación Client protegida **fail closed**.
+- admin con capacidad administrativa válida sigue pudiendo operar aunque también coincida o no coincida con `Appointment.client`.
+- profesional asignado con capacidad profesional válida sigue pudiendo operar por esa capacidad independiente.
+- capability purpose-specific válida concede únicamente la operación y recurso declarados.
+- capability de una Appointment no concede otra Appointment.
+- capability de una operación no concede otra operación.
+- capability purpose-specific no concede historial general ni identidad global.
 
-Tests Payment pertenecen a la habilitación de Payment, salvo que las rutas permanezcan públicas en el MVP.
+Los tests de verificación real de email/teléfono, linking, merging, login Client o recuperación de historial pertenecen a 6.2.5 y **no** a 6.2.4-B.
+
+### Otros contratos core ya cerrados
+
+También deberán mantenerse los tests previamente definidos para:
+
+- Service con User sin Membership -> reject;
+- Service con User inactivo -> reject;
+- `Service.workers=[]` -> ningún profesional elegible;
+- Membership worker + User incluido -> elegible;
+- Membership admin + User incluido -> elegible profesionalmente sin segunda Membership;
+- Membership admin + User fuera de Service -> no elegible profesionalmente;
+- inclusión en Service no concede capacidades admin;
+- profesional de otro Business -> reject;
+- Service inactivo -> no nueva availability/booking;
+- desactivar Service no altera Appointment existente;
+- Membership revocada -> actor deja de ejercer capacidad tenant/profesional;
+- cross-resource -> 404;
+- autoridad tenant ausente previa a resolución -> 403;
+- transición/replay autorizado -> 409;
+- generic mutation no cambia business/client/worker/service;
+- timeline no expone technicalMessage/tokens/stacks.
+
+Tests Payment permanecen diferidos hasta habilitación salvo exposición pública en MVP.
 
 ---
 
@@ -1013,8 +789,11 @@ Tests Payment pertenecen a la habilitación de Payment, salvo que las rutas perm
 No mezclar con 6.2.4:
 
 - implementación de identidad progresiva 6.2.5;
-- login/sesión/verification de clientes;
+- verificación de email/teléfono;
+- client login/session;
+- account/profile binding;
 - fusión/deduplicación de identidades guest;
+- recuperación de historial Client;
 - sistema formal multirol/permissions en Membership;
 - refunds;
 - SII;
@@ -1023,32 +802,32 @@ No mezclar con 6.2.4:
 - responsive;
 - baseline real Atmósfera/DAM;
 - migraciones de datos reales;
-- tenantización o política definitiva de Holiday;
+- tenantización/política definitiva de Holiday;
 - acceso a producción.
 
-La capacidad funcional de un `admin` para prestar servicios **no** queda fuera de alcance conceptual: queda resuelta mediante separación entre Membership y `Service.workers`, sin introducir multirrol formal.
+Cerrar los grants Client inseguros de 6.2.4 **no equivale** a implementar 6.2.5: significa dejar de aceptar una prueba insuficiente hasta que la capa de identidad aporte una prueba válida.
 
 ---
 
-## 23. Decisiones cerradas por esta revisión adversarial final
+## 23. Decisiones cerradas
 
-- `APT-CLIENT-01`: BLOCKER CORE antes de congelar 6.2.4-B.
-- `Appointment.client` es relación persistida, no prueba completa de identidad.
-- Client authority histórica futura requiere binding/verificación de 6.2.5; 6.2.4-B no la implementa.
-- `APT-WORKER-CAP-01`: BLOCKER CORE.
-- autoridad tenant deriva de Membership; elegibilidad profesional deriva además de `Service.workers`.
-- un User con Membership `admin` activa puede ser profesional si Service lo incluye y Appointment lo asigna.
-- no se requiere segunda Membership ni multirol formal.
-- Admin authority exige también `User.isActive === true`.
+- `APT-CLIENT-01` permanece BLOCKER CORE hasta que 6.2.4-B neutralice los grants Client actuales basados sólo en igualdad de IDs.
+- `Appointment.client` es relación persistida, no Client authority.
+- igualdad `User._id === Appointment.client` no autoriza por sí sola read/list/cancel/timeline ni otra operación protegida.
+- 6.2.4-B debe corregir los usages existentes, no sólo evitar nuevos usages.
+- sin binding/capability válida, Client protected operations fallan closed.
+- capability purpose-specific se limita a recurso + operación y no concede identidad/historial general.
+- 6.2.4-B no implementa 6.2.5.
+- `APT-WORKER-CAP-01` permanece cerrado: autoridad tenant y elegibilidad profesional están separadas.
+- Admin authority exige `User.isActive === true` + Membership admin activa + mismo Business.
 - `Service.workers` sigue siendo allowlist autoritativa y `[] = ninguno`.
 - Service activo sigue siendo obligatorio para nueva availability/booking.
-- `APT-PAY-01/02/03/04`: BLOCKER BEFORE PAYMENT ENABLEMENT.
+- `APT-PAY-01/02/03/04` permanecen BLOCKER BEFORE PAYMENT ENABLEMENT.
 - Payment/Webpay sigue fuera del MVP y debe deshabilitarse deny-by-default o endurecerse antes de exposición.
-- callback futuro no expone secretos en query innecesariamente ni mensajes internos en redirects.
-- Holiday permanece global y se clasifica como deuda/política cross-tenant por aclarar.
+- Holiday permanece deuda/política cross-tenant por aclarar.
 - `Appointment.business` permanece ownership tenant e inmutable.
 - mutaciones purpose-specific, CAS, 404/403/409 y safe timeline permanecen vigentes.
-- `ID-LEGACY-01` queda documentado como deuda de 6.2.5, sin cambio runtime en este PR.
+- `ID-LEGACY-01` continúa como deuda de 6.2.5 sin cambio runtime.
 
 ---
 
@@ -1060,6 +839,7 @@ Esta fase:
 - no modifica runtime;
 - no modifica modelos, repositorios, services, controllers ni routes;
 - no modifica tests de comportamiento;
+- no modifica Payment;
 - no ejecuta migraciones;
 - no ejecuta seeds;
 - no accede a producción;
