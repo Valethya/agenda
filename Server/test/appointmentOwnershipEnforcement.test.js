@@ -132,6 +132,12 @@ test("6.2.4-B Appointment ownership enforcement", async (t) => {
   });
 
   await t.test("Service.workers valida tenant participants, duplicados, [] e inactive Service", async () => {
+    const invalidReference = await request("/services", {
+      method: "POST", cookie: adminCookie,
+      body: { name: "Invalid Worker Id 624B", duration: 30, price: 1, workers: ["not-an-object-id"] },
+    });
+    assert.equal(invalidReference.status, 400);
+
     const duplicate = await request("/services", {
       method: "POST", cookie: adminCookie,
       body: { name: "Duplicate Workers 624B", duration: 30, price: 1, workers: [seed.worker._id.toString(), seed.worker._id.toString()] },
