@@ -1,5 +1,7 @@
 import Appointment from "../db/models/appointment.model.js";
 
+const PAYMENT_SETTLEMENT_STATUSES = new Set(["partially_paid", "fully_paid"]);
+
 export const findByBusinessWorkerAndDate = async (businessId, workerId, date) => {
   const startOfDay = new Date(date);
   startOfDay.setUTCHours(0, 0, 0, 0);
@@ -22,10 +24,35 @@ export const create = async (data) => {
   return await Appointment.create(data);
 };
 
-// Legacy Payment-only mutation. Payment/Webpay is disabled deny-by-default in the
-// MVP and its hardening remains outside 6.2.4-B.
-export const update = async (id, data) => {
-  return await Appointment.findByIdAndUpdate(id, data, { new: true });
+// Legacy Payment-only commands. Payment/Webpay remains deny-by-default; these
+// commands deliberately expose only the fixed fields required by the disabled
+// legacy flow and are not generic Appointment mutation APIs.
+export const markPendingPaymentFromLegacyPayment = async (id) => {
+  return await Appointment.findByIdAndUpdate(
+    id,
+    { $set: { status: "pending_payment" } },
+    { new: true, runValidators: true },
+  );
+};
+
+export const confirmFromLegacyPayment = async (id, paymentStatus) => {
+  if (!PAYMENT_SETTLEMENT_STATUSES.has(paymentStatus)) {
+    throw new TypeError("Estado de pago de Appointment inválido");
+  }
+
+  return await Appointment.findByIdAndUpdate(
+    id,
+    { $set: { status: "confirmed", paymentStatus } },
+    { new: true, runValidators: true },
+  );
+};
+
+export const cancelFromRejectedLegacyPayment = async (id) => {
+  return await Appointment.findByIdAndUpdate(
+    id,
+    { $set: { status: "cancelled" } },
+    { new: true, runValidators: true },
+  );
 };
 
 export const transitionStatusByBusiness = async (
