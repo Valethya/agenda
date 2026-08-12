@@ -2,6 +2,11 @@ import mongoose from "mongoose";
 
 const shiftSchema = new mongoose.Schema(
   {
+    business: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Business",
+      required: [true, "El negocio para el turno es obligatorio"],
+    },
     worker: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
@@ -45,11 +50,15 @@ const shiftSchema = new mongoose.Schema(
   {
     timestamps: true,
     versionKey: false,
+    autoIndex: process.env.NODE_ENV === "test",
   }
 );
 
-// Un trabajador solo puede tener una configuración por día de la semana
-shiftSchema.index({ worker: 1, dayOfWeek: 1 }, { unique: true });
+// La identidad física de un turno es tenant + worker global + día.
+shiftSchema.index(
+  { business: 1, worker: 1, dayOfWeek: 1 },
+  { unique: true, name: "shift_business_worker_day_unique" },
+);
 
 const ShiftModel = mongoose.model("Shift", shiftSchema);
 

@@ -55,15 +55,19 @@ const appointmentSchema = new mongoose.Schema(
   {
     timestamps: true,
     versionKey: false,
+    autoIndex: process.env.NODE_ENV === "test",
   }
 );
 
-// Índice compuesto parcial para acelerar búsquedas y evitar colisiones de citas activas (omite citas canceladas)
+// La colisión de una cita activa es local al tenant. Citas canceladas quedan fuera.
 appointmentSchema.index(
-  { worker: 1, date: 1, startTime: 1 },
-  { 
-    unique: true, 
-    partialFilterExpression: { status: { $ne: "cancelled" } } 
+  { business: 1, worker: 1, date: 1, startTime: 1 },
+  {
+    unique: true,
+    partialFilterExpression: {
+      status: { $in: ["pending_payment", "pending", "confirmed", "completed"] },
+    },
+    name: "appointment_business_worker_date_start_active_unique",
   }
 );
 

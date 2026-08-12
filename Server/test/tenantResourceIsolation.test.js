@@ -140,6 +140,7 @@ const appointmentACancel = await createAppointment({
 });
 
 const blockB = await Block.create({
+  business: seed.businessB._id,
   worker: seed.workerB._id,
   date: new Date("2099-04-11T00:00:00.000Z"),
   startTime: "14:00",
@@ -279,6 +280,8 @@ test("6.2.2-D adversarial tenant resource isolation", async (t) => {
       body: shiftBody(seed.worker._id),
     });
     assert.equal(sameTenant.status, 200);
+    const sameTenantBody = await sameTenant.json();
+    assert.equal(sameTenantBody.payload.business, seed.business._id.toString());
   });
 
   await t.test("Admin A no puede crear ni eliminar bloques funcionalmente pertenecientes a B", async () => {
@@ -303,6 +306,7 @@ test("6.2.2-D adversarial tenant resource isolation", async (t) => {
     });
     assert.equal(createSameTenant.status, 201);
     const created = await createSameTenant.json();
+    assert.equal(created.payload.business, seed.business._id.toString());
 
     const deleteSameTenant = await request(`/availability/blocks/${created.payload._id}`, {
       method: "DELETE",

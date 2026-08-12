@@ -195,6 +195,51 @@ describe("WebSocket Multitenant Isolation", () => {
     socketB.disconnect();
   });
 
+  it("availability_changed separa el mismo worker global por business", async () => {
+    const crossMembership = await Membership.create({
+      user: seed.worker._id,
+      business: seed.businessB._id,
+      role: "worker",
+      isActive: true,
+    });
+    const socketA = createSocketClient(adminCookie);
+    const socketB = createSocketClient(userBCookie);
+
+    try {
+      await connectSocket(socketA);
+      await connectSocket(socketB);
+
+      const date = "2026-07-24";
+      const [joinA, joinB] = await Promise.all([
+        emitAndWaitForWsError(socketA, "join_availability", {
+          workerId: seed.worker._id.toString(),
+          date,
+        }, 500),
+        emitAndWaitForWsError(socketB, "join_availability", {
+          workerId: seed.worker._id.toString(),
+          date,
+        }, 500),
+      ]);
+      assert.equal(joinA, null);
+      assert.equal(joinB, null);
+
+      let socketAReceived = false;
+      let socketBReceived = false;
+      socketA.on("availability_changed", () => { socketAReceived = true; });
+      socketB.on("availability_changed", () => { socketBReceived = true; });
+
+      emitAvailabilityChange(seed.worker._id.toString(), date, seed.business._id.toString());
+      await new Promise((resolve) => setTimeout(resolve, 900));
+
+      assert.equal(socketAReceived, true);
+      assert.equal(socketBReceived, false);
+    } finally {
+      socketA.disconnect();
+      socketB.disconnect();
+      await Membership.findByIdAndDelete(crossMembership._id);
+    }
+  });
+
   it("cambiar tenant en HTTP invalida el contexto antiguo del socket", async () => {
     const socket = createSocketClient(userBCookie);
     await connectSocket(socket);

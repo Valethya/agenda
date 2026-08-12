@@ -12,6 +12,9 @@ import { findTenantAuthority } from "../services/tenantAuthority.service.js";
 
 let io;
 
+const availabilityRoom = (businessId, workerId, date) =>
+  `availability:${businessId}:${workerId}:${date}`;
+
 const getStoredSession = (socket) => new Promise((resolve, reject) => {
   const sessionId = socket.request.sessionID;
   if (!sessionId) return resolve(null);
@@ -97,7 +100,7 @@ export const initSocket = (httpServer) => {
           return;
         }
 
-        const room = `availability:${workerId}:${date}`;
+        const room = availabilityRoom(authority.businessId.toString(), workerId, date);
         socket.join(room);
         logger.info(`Socket ${socket.id} se unió a la sala: ${room}`);
       } catch (err) {
@@ -107,7 +110,9 @@ export const initSocket = (httpServer) => {
     });
 
     socket.on("leave_availability", ({ workerId, date }) => {
-      if (workerId && date) socket.leave(`availability:${workerId}:${date}`);
+      if (workerId && date && socket.data.businessId) {
+        socket.leave(availabilityRoom(socket.data.businessId, workerId, date));
+      }
     });
 
     socket.on("disconnect", () => logger.info(`Cliente WebSocket desconectado: ${socket.id}`));
@@ -137,9 +142,9 @@ const pruneTenantSockets = async (businessId) => {
 const emitTenantAvailabilityChange = async (workerId, dateStr, businessId) => {
   await pruneTenantSockets(businessId);
 
-  const availabilityRoom = `availability:${workerId}:${dateStr}`;
-  io.to(availabilityRoom).emit("availability_changed", { workerId, date: dateStr });
-  logger.info(`WS Broadcast: Cambios de disponibilidad en la sala ${availabilityRoom}`);
+  const room = availabilityRoom(businessId, workerId, dateStr);
+  io.to(room).emit("availability_changed", { workerId, date: dateStr });
+  logger.info(`WS Broadcast: Cambios de disponibilidad en la sala ${room}`);
 
   const businessRoom = `business:${businessId}`;
   io.to(businessRoom).emit("calendar_update");

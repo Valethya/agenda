@@ -2,6 +2,11 @@ import mongoose from "mongoose";
 
 const blockSchema = new mongoose.Schema(
   {
+    business: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Business",
+      required: [true, "El negocio para el bloqueo es obligatorio"],
+    },
     worker: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
@@ -30,11 +35,15 @@ const blockSchema = new mongoose.Schema(
   {
     timestamps: true,
     versionKey: false,
+    autoIndex: process.env.NODE_ENV === "test",
   }
 );
 
-// Índice compuesto para acelerar las búsquedas por trabajador y fecha
-blockSchema.index({ worker: 1, date: 1 });
+// Las búsquedas runtime de bloqueos deben quedar físicamente acotadas al tenant.
+blockSchema.index(
+  { business: 1, worker: 1, date: 1 },
+  { name: "block_business_worker_date" },
+);
 
 const BlockModel = mongoose.model("Block", blockSchema);
 
