@@ -148,6 +148,41 @@ test("6.2.4-B Appointment ownership enforcement", async (t) => {
     });
     assert.equal(denied.status, 404);
 
+    const inactive = await User.create({
+      firstName: "Inactive", lastName: "Professional", email: ["inactive-624b@example.com"],
+      phone: ["+56981110005"], password: await createHash("inactive624b"), role: "worker", isActive: false,
+    });
+    await Membership.create({ user: inactive._id, business: seed.business._id, role: "worker", isActive: true });
+    assert.equal((await request("/services", {
+      method: "POST", cookie: adminCookie,
+      body: { name: "Inactive Worker 624B", duration: 30, price: 1, workers: [inactive._id.toString()] },
+    })).status, 404);
+
+    assert.equal((await request("/services", {
+      method: "POST", cookie: adminCookie,
+      body: { name: "Other Tenant Worker 624B", duration: 30, price: 1, workers: [seed.workerB._id.toString()] },
+    })).status, 404);
+
+    assert.equal((await request("/services", {
+      method: "POST", cookie: workerCookie,
+      body: { name: "Worker Cannot Grant Admin 624B", duration: 30, price: 1, workers: [seed.worker._id.toString()] },
+    })).status, 403);
+
+    const editable = await request("/services", {
+      method: "POST", cookie: adminCookie,
+      body: { name: "Editable Workers 624B", duration: 30, price: 1, workers: [seed.worker._id.toString()] },
+    });
+    const editableService = (await editable.json()).payload;
+    assert.equal((await request(`/services/${editableService._id}`, {
+      method: "PUT", cookie: adminCookie, body: { workers: [seed.admin._id.toString()] },
+    })).status, 200);
+    const invalidUpdate = await request(`/services/${editableService._id}`, {
+      method: "PUT", cookie: adminCookie, body: { workers: [noMembership._id.toString()] },
+    });
+    assert.equal(invalidUpdate.status, 404);
+    const persistedEditable = await Service.findById(editableService._id);
+    assert.deepEqual(persistedEditable.workers.map(String), [seed.admin._id.toString()]);
+
     const empty = await request("/services", {
       method: "POST", cookie: adminCookie,
       body: { name: "Empty Workers 624B", duration: 30, price: 1, workers: [] },
@@ -165,6 +200,13 @@ test("6.2.4-B Appointment ownership enforcement", async (t) => {
     assert.equal((await request(`/services/${activeService._id}`, { method: "PUT", cookie: adminCookie, body: { isActive: false } })).status, 200);
     assert.ok(await Appointment.findById(historical._id));
     assert.equal((await request(`/availability/slots?workerId=${seed.worker._id}&serviceId=${activeService._id}&date=2099-09-01&slug=${seed.business.slug}`)).status, 404);
+    assert.equal((await request("/appointments", {
+      method: "POST", headers: { "x-business-slug": seed.business.slug },
+      body: {
+        worker: seed.worker._id.toString(), service: activeService._id, date: "2099-09-01", startTime: "11:00", isSuggestion: true,
+        clientInfo: { firstName: "Guest", lastName: "Inactive", email: "inactive-booking-624b@example.com", phone: "+56981110006" },
+      },
+    })).status, 404);
   });
 
   await t.test("state commands usan CAS/409 y timeline expone allowlist segura", async () => {
