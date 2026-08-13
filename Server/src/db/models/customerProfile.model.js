@@ -37,11 +37,12 @@ const customerProfileSchema = new mongoose.Schema(
   },
 );
 
-// Índice tenant-first para listados operacionales previsibles.
+// Índice tenant-first declarado para el listado estable por createdAt + _id.
+// Su materialización física fuera de test requiere un paso operacional controlado posterior.
 // Deliberadamente no existen índices unique ni índices globales por contacto.
 customerProfileSchema.index(
-  { business: 1, createdAt: -1 },
-  { name: "customer_profile_business_created_at" },
+  { business: 1, createdAt: -1, _id: -1 },
+  { name: "customer_profile_business_created_at_id" },
 );
 
 const CustomerProfileModel = mongoose.model("CustomerProfile", customerProfileSchema);
