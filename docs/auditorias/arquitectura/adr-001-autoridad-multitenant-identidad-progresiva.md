@@ -1,148 +1,307 @@
 # ADR-001 — Autoridad multitenant e identidad progresiva del cliente
 
-**Estado:** Aprobado; enmienda de `superadmin` incorporada mediante el PR #16
-**Fecha original:** 21 de julio de 2026
-**Última revisión:** 27 de julio de 2026
-**Base de contraste:** `master` después del PR #16 (`5ff906b`)
-**Ámbito:** Autorización, identidad, clientes y multitenencia
+**Estado:** aprobado para autoridad multitenant; ampliación 6.2.5-A propuesta para revisión  
+**Fecha original:** 21 de julio de 2026  
+**Última revisión:** 13 de agosto de 2026  
+**Base de contraste 6.2.5-A:** `master@2d0a25d3d85d731b6b37e253f04145f658727a33`  
+**PR precedente verificado:** #25 merged/closed, HEAD `c326846d6a46c4a30dc6ad1ae05308d40b6f459a`  
+**Ámbito:** autorización, identidad, clientes y multitenencia
 
-La decisión arquitectónica continúa vigente. El estado de implementación se
-determina mediante el código de `master`, no mediante la fecha original de este
-documento. En la base contrastada, `Membership` ya participa en login, selección
-de negocio y validaciones de profesionales, pero todavía no es la única autoridad
-tenant. El corte definitivo corresponde a 6.2.2.
+Las decisiones anteriores compatibles permanecen vigentes. El código de `master` es fuente de verdad para el estado de implementación. Esta revisión aclara una distinción que debe quedar explícita antes de 6.2.5 runtime: **Membership es autoridad tenant de administradores/trabajadores; la capacidad Client es un plano independiente y nunca se deriva de Membership.**
+
+Documento detallado de auditoría: [`fase-6.2.5-a-identidad-progresiva-cliente.md`](./fase-6.2.5-a-identidad-progresiva-cliente.md).
 
 ## Contexto
 
-ATMÓSFERA Agenda admite usuarios con acceso a uno o más negocios, pero actualmente `User.role`, `User.business` y `Membership` pueden competir como fuentes de autorización. Al mismo tiempo, el flujo público necesita permitir reservas como invitado sin exigir una cuenta, una contraseña o una verificación que interrumpa la experiencia.
+Agenda debe permitir que una persona use un Business antes de crear una cuenta y, si posteriormente obtiene valor de ella, pueda vincular una identidad global sin convertir coincidencias de contacto en permisos.
 
-Una coincidencia de correo o teléfono ayuda a mantener continuidad operativa, pero no demuestra que dos reservas pertenezcan a la misma persona. Tratarla como identidad verificada podría exponer historial o permitir administrar citas ajenas.
+La baseline ya cerró las fronteras tenant de Appointment y neutralizó el grant inseguro por igualdad `User._id === Appointment.client`. Sin embargo, el booking guest actual todavía crea/reutiliza un `User` global mediante email/teléfono, y una cuenta no-superadmin sin Membership no completa una sesión normal. Ambos comportamientos son legacy que 6.2.5 deberá retirar por fases.
+
+Principio rector:
+
+> "La cuenta existe para mejorar la experiencia del cliente con el negocio, no para convertirse en una condición para usar el negocio."
 
 ## Decisión
 
-### Autoridad de acceso
+### 1. Identidad global
 
-- `Membership` activa será la única autoridad para rol y acceso dentro de un negocio.
-- `User` representará identidad global y privilegios de plataforma, como `superadmin`.
-- `User.role` y `User.business` heredados no autorizarán operaciones tenant-scoped y se retirarán mediante una migración posterior.
-- El negocio activo de una sesión autenticada deberá corresponder a una membresía activa.
-- Toda operación tenant normal, sea de lectura o escritura, requerirá una
-  `Membership` activa con el rol suficiente. Las lecturas globales excepcionales
-  del plano de plataforma se rigen por una política separada y explícita.
+`User` representa:
 
-### Tratamiento de `superadmin`
+- identidad global autenticable;
+- credenciales;
+- privilegios globales explícitos de plataforma, como `superadmin`.
 
-- `superadmin` es un privilegio de plataforma derivado exclusivamente de la
-  identidad global. No es un rol tenant y no debe almacenarse en `Membership`.
-- Una sesión global de `superadmin` autoriza rutas del plano de plataforma, como
-  `/superadmin/*`, sin requerir una membresía.
-- Toda inspección global de sólo lectura sobre datos de un tenant estará
-  denegada de forma predeterminada y sólo podrá habilitarse mediante una
-  política de plataforma explícita para esa lectura. Esa excepción no es una
-  operación tenant normal.
-- Abrir o seleccionar un negocio aporta únicamente contexto. La selección por
-  sí sola no concede ningún rol, incluido `admin`.
-- Abrir o seleccionar explícitamente un negocio no convierte al `superadmin` en
-  administrador de ese tenant ni autoriza mutaciones.
-- Para ejecutar una acción que requiera rol tenant, el actor debe utilizar:
-  - una membresía activa con el rol tenant requerido; o
-  - para la futura asistencia mutable, una sesión de soporte independiente,
-    acotada y auditable según 6.4.
-- La impersonación actual no constituye una excepción a esta regla. Mientras se
-  sustituye en 6.4, cualquier sujeto administrativo elegido para impersonación
-  deberá obtener su rol efectivo desde una membresía activa del negocio.
-- Una `Membership` existente con rol `superadmin` será tratada como conflicto de
-  datos porque `superadmin` no es un rol válido dentro de `Membership`. La
-  migración no la corregirá automáticamente.
+Una cuenta global **no requiere Membership** conceptualmente. La arquitectura objetivo admite:
 
-### Identidad del cliente
+```text
+User autenticado
+├── 0..N Memberships
+└── 0..N relaciones CustomerProfile
+```
 
-Se utilizará un modelo híbrido:
+Un User puede ser cliente de un Business, admin de otro y worker de un tercero. Esas capacidades son independientes.
 
-- una identidad global cuando exista una cuenta o un contacto verificado;
-- un perfil tenant-scoped para la relación del cliente con cada negocio;
-- un contacto probable para reservas invitadas cuyo correo o teléfono aún no haya sido verificado.
+### 2. Autoridad tenant administrativa/profesional
 
-Reservar como invitado no creará una contraseña ficticia ni exigirá login. Correo y teléfono se normalizarán para seguimiento interno, pero una coincidencia no fusionará identidades ni otorgará acceso a historial.
+`Membership` activa continúa siendo la única fuente ordinaria de participación y autoridad tenant para administradores/trabajadores.
 
-La verificación por correo será obligatoria para:
+- roles físicos actuales: `admin | worker`;
+- `User.role` y `User.business` legacy no autorizan operaciones tenant;
+- `Business.owner` expresa propiedad, no autoridad;
+- seleccionar Business aporta contexto, no rol;
+- una Membership de un Business no autoriza otro Business.
 
-- consultar historial;
-- recuperar o establecer acceso;
-- vincular definitivamente un contacto;
-- fusionar perfiles;
-- resolver contradicciones de identidad.
+**Aclaración 6.2.5:** esta regla no significa que un cliente necesite Membership. Las capacidades Client se obtienen mediante binding/capability verificados y acotados, no mediante Membership.
 
-SMS queda fuera del MVP. WhatsApp podrá añadirse más adelante como canal operativo sin cambiar el modelo de autoridad.
+### 3. `superadmin`
 
-### Continuidad en el dispositivo
+- es privilegio global derivado de User, no rol Membership;
+- puede operar el plano global conforme a políticas explícitas;
+- inspección global tenant read-only permanece deny-by-default salvo política de plataforma explícita;
+- seleccionar un Business no lo convierte en admin tenant;
+- mutaciones tenant requieren una capacidad tenant válida o el mecanismo de soporte mutable futuro definido separadamente.
 
-El sistema podrá entregar una credencial opaca, segura, revocable y de duración limitada para facilitar nuevas reservas en el mismo dispositivo. Esta credencial:
+### 4. Relación cliente–Business
 
-- no será una prueba de identidad;
-- no habilitará historial ni información sensible;
-- no autorizará operaciones tenant-scoped de administración;
-- tendrá alcance explícito y será rotada o revocada según la política definida.
+Se adopta una relación tenant-scoped, denominada **`CustomerProfile` como nombre conceptual de trabajo**.
 
-### Consentimiento
+Debe:
 
-Las comunicaciones necesarias para prestar el servicio se registrarán separadamente del consentimiento de marketing. Reservar una cita no suscribirá automáticamente al cliente a campañas comerciales.
+- pertenecer obligatoriamente a un Business;
+- poder existir con `user = null`;
+- representar continuidad operacional del cliente dentro de ese Business;
+- poder vincularse posteriormente a un User mediante proceso explícito y auditable;
+- no revelar a un Business las relaciones del mismo User con otros Businesses.
+
+No se congela todavía el nombre físico ni si los contactos tenant se almacenarán embebidos o en entidad separada.
+
+### 5. Booking guest
+
+El booking público no exige cuenta ni contraseña.
+
+El flujo objetivo continúa siendo:
+
+```text
+servicio → profesional → fecha/hora → datos → reservar
+```
+
+La UX puede ofrecer login opcional para usar datos guardados, pero debe permitir continuar como invitado y no revelar si el email introducido pertenece a una cuenta.
+
+La semántica legacy de `getOrCreateGuestUser()` —lookup global por email/teléfono, append de contactos y creación de User con password aleatorio— debe retirarse en una fase runtime posterior. No se modifica en 6.2.5-A.
+
+### 6. Contactos y verificación
+
+Nombre, email y teléfono declarados son datos de contacto, no prueba de identidad.
+
+Una coincidencia de contacto:
+
+- no crea binding;
+- no fusiona perfiles;
+- no concede historial;
+- no concede gestión de citas anteriores;
+- no autoriza otro Business.
+
+En MVP, email verification demuestra **control del canal**, no identidad legal personal.
+
+El mecanismo futuro de Verification debe ser, como mínimo:
+
+- token opaco, criptográficamente seguro y sin PII;
+- digest almacenado server-side, no token raw;
+- purpose-bound;
+- business-bound;
+- resource/profile-bound;
+- expirable;
+- single-use y replay-safe;
+- consumido atómicamente;
+- rate limited;
+- auditable sin secretos;
+- emitido mediante links con origen HTTPS confiable fijo/configurado, nunca derivado de Host/Origin controlado por request.
+
+SMS queda fuera del MVP. Proveedor de email, thresholds y canales adicionales no se congelan aquí.
+
+### 7. Binding y capacidad Client
+
+Se separan dos conceptos:
+
+**Binding User↔CustomerProfile:** relación explícita, persistida y auditable que habilita capacidades Client sobre un perfil tenant determinado.
+
+**Capability purpose-specific:** grant mínimo sobre un recurso/purpose concreto, por ejemplo una Appointment guest verificada.
+
+Una capability no se convierte en identidad global ni en historial general.
+
+### 8. APT-CLIENT-01
+
+Continúa vigente sin relajación:
+
+```text
+Appointment.client === authenticated User._id
+```
+
+no concede por sí solo:
+
+- read;
+- history/list;
+- cancel;
+- reschedule;
+- timeline;
+- ninguna otra capacidad Client.
+
+El `Appointment.client` legacy es relación persistida histórica/operacional, **no prueba de ownership histórico verificado**.
+
+### 9. Historial y claim
+
+Queda prohibido:
+
+```text
+User.email === CustomerProfile.email -> historial
+Appointment.client === User._id -> historial
+```
+
+El camino autorizado es:
+
+```text
+User autenticado
++ proof vigente/aceptada
++ claim explícito
++ binding User ↔ CustomerProfile
+= historial autorizado de ese CustomerProfile
+```
+
+Antes de proof aceptada no se revela existencia del perfil, número de citas, fechas, servicios, profesionales ni historial sensible.
+
+Si existe ambigüedad —canal compartido, múltiples perfiles candidatos o perfil vinculado a otro User— el sistema falla cerrado o exige una política de resolución adicional. Nunca auto-mergea.
+
+### 10. Guest verificado sobre una Appointment
+
+Un guest puede adquirir, según política futura, una capability sobre **una Appointment concreta** sin crear cuenta.
+
+La capability puede incluir sólo purposes explícitos, por ejemplo read/cancel/reschedule si la fase runtime los aprueba. No concede otras Appointments, perfiles, Businesses ni historial general.
+
+### 11. Login durante booking
+
+Si el actor inicia login en medio de una reserva, deben preservarse servicio, profesional, fecha, hora y notas/contexto relevante. Tras volver al flujo se revalida disponibilidad e invariantes antes de persistir.
+
+Login cambia identidad/capacidad; **no congela un slot** y no auto-vincula historial guest.
+
+### 12. `bookedBy` y `customer`
+
+Se congela la distinción:
+
+```text
+bookedBy = actor que realiza la reserva
+customer = persona que recibe el servicio
+```
+
+Normalmente coinciden, pero deben soportarse reservas para hijos, pareja, terceros/asistentes y regalos.
+
+Crear o pagar una Appointment para otra persona no concede historial del receptor. Puede existir una capability acotada a esa Appointment para bookedBy. El contacto del booker no identifica al customer.
+
+Para regalos debe poder diferirse la notificación al destinatario; la UX final queda pendiente.
+
+### 13. Cambio de contacto
+
+Cambiar `User.email` o teléfono no mueve CustomerProfiles ni historial automáticamente. Un nuevo canal verificado requiere proof y auditabilidad propias.
+
+La pérdida del canal antiguo requiere una política de recuperación separada; coincidencias débiles no bastan para entregar historial.
+
+### 14. Consentimiento
+
+Las comunicaciones necesarias para prestar el servicio se separan de:
+
+- marketing/promociones;
+- fidelización;
+- otras comunicaciones comerciales.
+
+Crear una Appointment no concede consentimiento de marketing.
+
+### 15. Extensibilidad
+
+CustomerProfile es la relación tenant que futuros módulos pueden referenciar, pero no debe convertirse en god object.
+
+Preferir módulos/entidades separados para:
+
+- Loyalty;
+- Subscription;
+- analytics projections/segments;
+- otras capacidades CRM.
+
+No almacenar indiscriminadamente métricas derivadas o estados financieros en CustomerProfile.
+
+Payment permanece separado. Precio de Service/Appointment no equivale a dinero pagado.
 
 ## Invariantes de seguridad
 
-1. Toda autorización tenant-scoped deriva de una membresía activa y del negocio solicitado.
-2. Un slug, ID o contacto inexistente no selecciona implícitamente otro negocio o identidad.
-3. Una coincidencia de contacto no verificado nunca permite consultar historial ni gestionar citas anteriores.
-4. Un perfil de un negocio no puede leerse o modificarse desde otro negocio.
-5. La fusión de identidades requiere posesión verificada del contacto y deja evidencia de auditoría.
-6. Las contraseñas aleatorias desconocidas por el cliente quedan prohibidas.
-7. El privilegio global `superadmin` no concede por sí solo un rol tenant.
+1. La autoridad tenant administrativa/profesional deriva de Membership activa y Business correcto.
+2. Customer/client authority **no** deriva de Membership ni de Business.owner.
+3. Un User puede autenticarse conceptualmente sin Membership.
+4. `CustomerProfile` es siempre tenant-scoped y puede existir sin User.
+5. Contact match no concede autorización, binding ni merge.
+6. `APT-CLIENT-01` permanece fail-closed hasta binding/capability verificable.
+7. Historial requiere claim explícito y binding válido.
+8. No hay auto-merge de identidad por nombre/email/teléfono.
+9. Verification/capability es purpose-, Business- y resource/profile-scoped.
+10. Un Business no descubre relaciones CustomerProfile del mismo User en otros Businesses.
+11. `bookedBy` y `customer` son responsabilidades distintas.
+12. Cambiar contacto no reasigna historial automáticamente.
+13. Login durante booking no reserva el slot.
+14. Crear Appointment no implica marketing consent.
+15. Secretos de Verification/capabilities no deben registrarse en logs/timeline.
 
 ## Consecuencias
 
 ### Positivas
 
-- La reserva invitada mantiene un recorrido breve.
-- Los permisos dejan de depender de campos globales ambiguos.
-- Un cliente puede relacionarse con distintos negocios sin compartir datos tenant-scoped indebidamente.
-- La verificación se solicita sólo cuando aporta seguridad real.
+- la primera reserva sigue siendo de baja fricción;
+- identidad global y relación comercial tenant dejan de competir;
+- una cuenta puede aportar continuidad sin ser requisito de uso;
+- perfiles de distintos negocios quedan aislados;
+- historial se recupera mediante prueba y claim, no por coincidencias;
+- reservas para terceros dejan de forzar una identidad falsa;
+- Loyalty/Subscription/CRM pueden crecer sin contaminar autoridad.
 
 ### Costes y riesgos
 
-- Se requiere migrar campos heredados y revisar todos los puntos de autorización.
-- La normalización, deduplicación y fusión necesitan reglas explícitas y pruebas.
-- Deben definirse retención, eliminación y tratamiento de contactos probables.
-- Las consultas deberán distinguir identidad global, perfil del negocio y contacto verificado.
+- se necesita retirar gradualmente la semántica guest basada en User;
+- sesiones Client y workspace admin deberán desacoplarse;
+- legacy `Appointment.client` requiere transición/claim explícito;
+- shared contacts, merge/split y recovery requieren políticas humanas antes de automatizar;
+- la auditoría de identidad debe evitar PII y secretos.
 
-## Fuera de alcance del MVP
+## Decisiones explícitamente pendientes
 
-- Verificación mediante SMS.
-- Verificación o automatización mediante WhatsApp.
-- Un portal global con historial transversal de todos los negocios.
-- Fusión automática basada sólo en coincidencias de correo o teléfono.
+- nombres físicos definitivos de CustomerProfile/Verification/binding/capability;
+- contactos embebidos versus entidad tenant separada;
+- retención de guest/contactos;
+- prueba adicional para canales compartidos/ambiguos;
+- recovery sin canal previamente verificado;
+- política y permisos de merge/split;
+- forma física de `bookedBy/customer` y snapshots históricos;
+- operations y TTL de capabilities guest;
+- thresholds/rate limits y proveedor de email;
+- umbral de sugerencia de cuenta recurrente;
+- dominios/cookies/return-to del login Client;
+- estrategia concreta de migración de `Appointment.client` legacy;
+- evolución de AuditLog/identity audit;
+- política legal de consentimientos comerciales;
+- Loyalty, Subscription, analytics, SMS, WhatsApp y Payment.
 
-## Verificación requerida
+## Verificación requerida para fases runtime
 
-- Usuario con membresía activa accede únicamente al negocio correspondiente.
-- Desactivar la membresía revoca el acceso sin modificar la identidad global.
-- Un `User.role` heredado no concede acceso tenant cuando falta una membresía activa.
-- Una membresía activa determina el rol tenant aunque el rol heredado del usuario sea distinto.
-- Un `superadmin` global no adquiere permisos administrativos tenant por seleccionar un negocio.
-- Contacto probable puede reservar, pero no consultar historial.
-- Verificar el contacto habilita únicamente los recursos autorizados para esa identidad.
-- Negocio A no consulta ni modifica el perfil tenant-scoped del negocio B.
-- Intentos de fusión contradictorios se rechazan y quedan auditados.
+Como mínimo:
 
-## Decisiones pendientes relacionadas
+- guest reserva sin cuenta/User ficticio;
+- no account/profile enumeration;
+- User con cero Memberships establece sesión Client global;
+- Membership revocada no elimina identidad global;
+- login mid-booking conserva intención y revalida slot;
+- verification rechaza purpose/Business/resource mismatch, expiry, replay y doble consumo;
+- concurrencia de verification/claim es atómica;
+- capability guest no escala a historial/otro Business;
+- contacto igual y `Appointment.client` no conceden historial;
+- claim válido crea sólo binding autorizado;
+- perfiles ya ligados/ambiguos fallan cerrado;
+- bookedBy distinto no accede al historial del customer;
+- CustomerProfile cross-tenant es inaccesible;
+- tokens/capabilities/digests no aparecen en logs/timeline.
 
-- Esquema definitivo y nombres de los modelos persistidos.
-- Política de retención de contactos probables.
-- Ejecución y verificación productiva de la migración de `User.role` y
-  `User.business`, cuya estrategia está definida en
-  [`fase-6.2.2-migracion-autoridad-membership.md`](./fase-6.2.2-migracion-autoridad-membership.md).
-  El auditor read-only del PR #17 aún no se ha ejecutado contra producción.
-  Su futura ejecución exige credencial estrictamente read-only, fingerprint
-  aprobado, topología con snapshot temporal y política de conservación del
-  informe; el fallback de doble lectura es sólo diagnóstico.
-- Estrategia separada de migración de turnos y bloqueos para 6.2.3.
-- Arquitectura de dominios y cookies para frontend y backend.
+`APT-CLIENT-01` debe conservarse como test de regresión durante toda 6.2.5.
