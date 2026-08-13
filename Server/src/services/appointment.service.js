@@ -27,6 +27,19 @@ const asId = (value) => {
 
 const sameId = (left, right) => asId(left) === asId(right);
 
+const assertAppointmentTenantCoherence = (appointment, businessId) => {
+  if (
+    !appointment
+    || !sameId(appointment.business, businessId)
+    || !appointment.service
+    || !sameId(appointment.service.business, businessId)
+  ) {
+    throw new NotFoundError("La cita especificada no existe");
+  }
+
+  return appointment;
+};
+
 export const validateBookingTenantScope = async ({ worker, service, businessId }) => {
   if (!businessId) throw new ValidationError("El contexto de negocio es obligatorio para reservar");
 
@@ -142,8 +155,7 @@ export const bookAppointment = async (appointmentData) => {
 const findTenantAppointment = async (appointmentId, businessId) => {
   if (!businessId) throw new NotFoundError("La cita especificada no existe");
   const appointment = await appointmentRepository.findByIdAndBusiness(appointmentId, businessId);
-  if (!appointment) throw new NotFoundError("La cita especificada no existe");
-  return appointment;
+  return assertAppointmentTenantCoherence(appointment, businessId);
 };
 
 const resolveActorTenantAuthority = async (userId, businessId, preloadedAuthority = null) => {
@@ -365,7 +377,7 @@ export const getMyAppointments = async (userId, tenantAuthority, businessId) => 
   }
 
   if (authority.role === "admin") {
-    return await appointmentRepository.findAll({ business: businessId });
+    return await appointmentRepository.findCoherentAllByBusiness(businessId);
   }
 
   const eligibleServices = await serviceRepository.findAll({
@@ -376,8 +388,7 @@ export const getMyAppointments = async (userId, tenantAuthority, businessId) => 
 
   if (eligibleServiceIds.length === 0) return [];
 
-  return await appointmentRepository.findAll({
-    business: businessId,
+  return await appointmentRepository.findCoherentAllByBusiness(businessId, {
     worker: userId,
     service: { $in: eligibleServiceIds },
   });
