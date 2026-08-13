@@ -49,6 +49,32 @@ test("6.2.5-B tenant-scoped CustomerProfile persistence", async (t) => {
     );
   });
 
+  await t.test("createForBusiness fails closed for a syntactically valid missing Business", async () => {
+    const missingBusinessId = new mongoose.Types.ObjectId();
+    const before = await CustomerProfile.countDocuments({ business: missingBusinessId });
+
+    await assert.rejects(
+      createForBusiness(missingBusinessId, {
+        firstName: "No",
+        lastName: "Tenant",
+        email: `missing-${suffix}@example.com`,
+      }),
+      /Business existente/u,
+    );
+
+    assert.equal(await CustomerProfile.countDocuments({ business: missingBusinessId }), before);
+
+    // Read operations guarantee syntactic scope + tenant filtering, not Business existence.
+    assert.equal(
+      await findByIdAndBusiness(new mongoose.Types.ObjectId(), missingBusinessId),
+      null,
+    );
+    assert.deepEqual(
+      await findAllByBusiness(missingBusinessId, { limit: 10, skip: 0 }),
+      [],
+    );
+  });
+
   await t.test("CustomerProfile can exist without User and create is business-scoped", async () => {
     profileA = await createForBusiness(businessA._id, {
       firstName: "Alex",
@@ -101,6 +127,10 @@ test("6.2.5-B tenant-scoped CustomerProfile persistence", async (t) => {
       phone: "+56911112222",
     });
     assert.equal(sameContactA, 2);
+
+    const pagedA = await findAllByBusiness(businessA._id, { limit: 1, skip: 1 });
+    assert.equal(pagedA.length, 1);
+    assert.equal(pagedA[0].business.toString(), businessA._id.toString());
   });
 
   await t.test("creating profiles has no User or Membership side effects", async () => {
