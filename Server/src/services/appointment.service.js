@@ -1,34 +1,61 @@
 import * as appointmentRepository from "../repositories/appointment.repository.js";
 import * as serviceRepository from "../repositories/service.repository.js";
 import * as availabilityService from "./availability.service.js";
-import { ConflictError, NotFoundError, UnauthorizedError, ValidationError } from "../utils/appError.js";
+import * as auditLogRepository from "../repositories/auditLog.repository.js";
+import * as businessConfigRepository from "../repositories/businessConfig.repository.js";
+import {
+  assertProfessionalEligibleForService,
+  serviceIncludesProfessional,
+} from "./professionalEligibility.service.js";
+import { findTenantAuthority } from "./tenantAuthority.service.js";
+import { ConflictError, ForbiddenError, NotFoundError, ValidationError } from "../utils/appError.js";
 import { emitAvailabilityChange } from "../config/socket.js";
 import { notifyBookingCreated, notifyAppointmentConfirmed, notifyAppointmentCancelled } from "./appointment.notifications.js";
 import { logEvent } from "../utils/auditLogger.js";
-import * as auditLogRepository from "../repositories/auditLog.repository.js";
-import * as businessConfigRepository from "../repositories/businessConfig.repository.js";
-import * as membershipRepository from "../repositories/membership.repository.js";
-import * as userRepository from "../repositories/user.repository.js";
 import { addMinutesToTime } from "../utils/time.js";
+
+const STATUS_TRANSITIONS = Object.freeze({
+  confirm: Object.freeze({ from: Object.freeze(["pending"]), to: "confirmed" }),
+  complete: Object.freeze({ from: Object.freeze(["pending", "confirmed"]), to: "completed" }),
+  cancel: Object.freeze({ from: Object.freeze(["pending", "pending_payment", "confirmed"]), to: "cancelled" }),
+});
+
+const asId = (value) => {
+  const candidate = value?._id ?? value;
+  return candidate?.toString?.() || "";
+};
+
+const sameId = (left, right) => asId(left) === asId(right);
+
+const assertAppointmentTenantCoherence = (appointment, businessId) => {
+  if (
+    !appointment
+    || !sameId(appointment.business, businessId)
+    || !appointment.service
+    || !sameId(appointment.service.business, businessId)
+  ) {
+    throw new NotFoundError("La cita especificada no existe");
+  }
+
+  return appointment;
+};
 
 export const validateBookingTenantScope = async ({ worker, service, businessId }) => {
   if (!businessId) throw new ValidationError("El contexto de negocio es obligatorio para reservar");
 
-  const [serviceDetail, workerDetail, workerMembership] = await Promise.all([
-    serviceRepository.findByIdAndBusiness(service, businessId),
-    userRepository.findById(worker),
-    membershipRepository.findActiveByUserAndBusiness(worker, businessId),
-  ]);
-
+  const serviceDetail = await serviceRepository.findByIdAndBusiness(
+    service,
+    businessId,
+    { onlyActive: true },
+  );
   if (!serviceDetail) throw new NotFoundError("El servicio solicitado no está disponible");
-  if (
-    !workerDetail ||
-    workerDetail.isActive !== true ||
-    !workerMembership ||
-    workerMembership.role !== "worker"
-  ) {
-    throw new NotFoundError("El profesional especificado no está disponible");
-  }
+
+  const { user: workerDetail } = await assertProfessionalEligibleForService({
+    userId: worker,
+    businessId,
+    service: serviceDetail,
+    requireActiveService: true,
+  });
 
   return { serviceDetail, workerDetail };
 };
@@ -125,41 +152,125 @@ export const bookAppointment = async (appointmentData) => {
   return newAppointment;
 };
 
-const canOperateAsAssignedWorker = (appointment, userId, tenantRole) =>
-  tenantRole === "worker" && appointment.worker._id.toString() === userId;
-
 const findTenantAppointment = async (appointmentId, businessId) => {
   if (!businessId) throw new NotFoundError("La cita especificada no existe");
   const appointment = await appointmentRepository.findByIdAndBusiness(appointmentId, businessId);
-  if (!appointment) throw new NotFoundError("La cita especificada no existe");
-  return appointment;
+  return assertAppointmentTenantCoherence(appointment, businessId);
 };
 
-export const confirmAppointment = async (appointmentId, userId, tenantRole, businessId) => {
-  const appointment = await findTenantAppointment(appointmentId, businessId);
+const resolveActorTenantAuthority = async (userId, businessId, preloadedAuthority = null) => {
+  if (
+    preloadedAuthority
+    && typeof preloadedAuthority === "object"
+    && sameId(preloadedAuthority.userId, userId)
+    && sameId(preloadedAuthority.businessId, businessId)
+  ) {
+    return preloadedAuthority;
+  }
 
-  const isAdmin = tenantRole === "admin";
-  const isWorker = canOperateAsAssignedWorker(appointment, userId, tenantRole);
-  if (!isAdmin && !isWorker) throw new UnauthorizedError("No tiene permisos para confirmar esta cita");
-  if (appointment.status === "cancelled") throw new ValidationError("No se puede confirmar una cita que ha sido cancelada");
+  return await findTenantAuthority(userId, businessId);
+};
+
+const resolveAppointmentCapabilities = async ({
+  appointment,
+  userId,
+  businessId,
+  tenantAuthority,
+}) => {
+  const authority = await resolveActorTenantAuthority(userId, businessId, tenantAuthority);
+  const isAdmin = Boolean(authority && authority.role === "admin");
+
+  let isProfessional = false;
+  if (authority && sameId(appointment.worker, userId)) {
+    const serviceId = appointment.service?._id ?? appointment.service;
+    const service = serviceId
+      ? await serviceRepository.findByIdAndBusiness(serviceId, businessId)
+      : null;
+
+    isProfessional = Boolean(
+      service
+      && serviceIncludesProfessional(service, userId),
+    );
+  }
+
+  return {
+    authority,
+    isAdmin,
+    isProfessional,
+    actorCapability: isAdmin ? "admin" : isProfessional ? "professional" : null,
+  };
+};
+
+const authorizeProtectedAppointment = async ({
+  appointment,
+  userId,
+  businessId,
+  tenantAuthority,
+}) => {
+  const capabilities = await resolveAppointmentCapabilities({
+    appointment,
+    userId,
+    businessId,
+    tenantAuthority,
+  });
+
+  if (!capabilities.isAdmin && !capabilities.isProfessional) {
+    // APT-CLIENT-01: Appointment.client equality is deliberately NOT a grant.
+    throw new NotFoundError("La cita especificada no existe");
+  }
+
+  return capabilities;
+};
+
+const transitionAppointmentStatus = async ({
+  appointment,
+  businessId,
+  transition,
+}) => {
+  if (!transition.from.includes(appointment.status)) {
+    throw new ConflictError("La cita ya no se encuentra en un estado compatible con esta operación");
+  }
+
+  const updated = await appointmentRepository.transitionStatusByBusiness(
+    appointment._id,
+    businessId,
+    transition.from,
+    transition.to,
+  );
+
+  if (!updated) {
+    throw new ConflictError("La cita cambió de estado antes de completar la operación");
+  }
+
+  return updated;
+};
+
+export const confirmAppointment = async (appointmentId, userId, tenantAuthority, businessId) => {
+  const appointment = await findTenantAppointment(appointmentId, businessId);
+  const { actorCapability } = await authorizeProtectedAppointment({
+    appointment,
+    userId,
+    businessId,
+    tenantAuthority,
+  });
 
   let updatedAppointment;
   try {
-    updatedAppointment = await appointmentRepository.updateByIdAndBusiness(
-      appointmentId,
+    updatedAppointment = await transitionAppointmentStatus({
+      appointment,
       businessId,
-      { status: "confirmed" },
-    );
-    if (!updatedAppointment) throw new NotFoundError("La cita especificada no existe");
+      transition: STATUS_TRANSITIONS.confirm,
+    });
     await logEvent({
       appointmentId,
       userId,
       event: "APPOINTMENT_CONFIRMED",
       level: "SUCCESS",
       message: "Reserva confirmada exitosamente.",
-      metadata: { confirmedBy: userId, tenantRole, businessId },
+      metadata: { confirmedBy: userId, actorCapability, businessId },
     });
   } catch (dbError) {
+    if (dbError instanceof ConflictError) throw dbError;
     await logEvent({
       appointmentId,
       userId,
@@ -176,31 +287,32 @@ export const confirmAppointment = async (appointmentId, userId, tenantRole, busi
   return updatedAppointment;
 };
 
-export const completeAppointment = async (appointmentId, userId, tenantRole, businessId) => {
+export const completeAppointment = async (appointmentId, userId, tenantAuthority, businessId) => {
   const appointment = await findTenantAppointment(appointmentId, businessId);
-
-  const isAdmin = tenantRole === "admin";
-  const isWorker = canOperateAsAssignedWorker(appointment, userId, tenantRole);
-  if (!isAdmin && !isWorker) throw new UnauthorizedError("No tiene permisos para completar esta cita");
-  if (appointment.status === "cancelled") throw new ValidationError("No se puede completar una cita que ha sido cancelada");
+  const { actorCapability } = await authorizeProtectedAppointment({
+    appointment,
+    userId,
+    businessId,
+    tenantAuthority,
+  });
 
   let updatedAppointment;
   try {
-    updatedAppointment = await appointmentRepository.updateByIdAndBusiness(
-      appointmentId,
+    updatedAppointment = await transitionAppointmentStatus({
+      appointment,
       businessId,
-      { status: "completed" },
-    );
-    if (!updatedAppointment) throw new NotFoundError("La cita especificada no existe");
+      transition: STATUS_TRANSITIONS.complete,
+    });
     await logEvent({
       appointmentId,
       userId,
       event: "APPOINTMENT_COMPLETED",
       level: "SUCCESS",
       message: "Reserva marcada como completada exitosamente.",
-      metadata: { completedBy: userId, tenantRole, businessId },
+      metadata: { completedBy: userId, actorCapability, businessId },
     });
   } catch (dbError) {
+    if (dbError instanceof ConflictError) throw dbError;
     await logEvent({
       appointmentId,
       userId,
@@ -215,39 +327,20 @@ export const completeAppointment = async (appointmentId, userId, tenantRole, bus
   return updatedAppointment;
 };
 
-export const cancelAppointment = async (appointmentId, userId, tenantRole, businessId) => {
+export const cancelAppointment = async (appointmentId, userId, tenantAuthority, businessId) => {
   const appointment = await findTenantAppointment(appointmentId, businessId);
-
-  const isClient = appointment.client._id.toString() === userId;
-  const isWorker = canOperateAsAssignedWorker(appointment, userId, tenantRole);
-  const isAdmin = tenantRole === "admin";
-  if (!isClient && !isWorker && !isAdmin) throw new UnauthorizedError("No tiene permisos para cancelar esta cita");
-
-  if (isClient && appointment.status !== "cancelled") {
-    const now = new Date();
-    const appointmentDate = new Date(appointment.date);
-    const [hours, minutes] = appointment.startTime.split(":").map(Number);
-    appointmentDate.setHours(hours, minutes, 0, 0);
-    const differenceInHours = (appointmentDate - now) / (1000 * 60 * 60);
-    if (differenceInHours < 2) {
-      await logEvent({
-        appointmentId,
-        userId,
-        event: "APPOINTMENT_CANCELLED_FAILED",
-        level: "WARN",
-        message: "Intento de cancelación de reserva fallido: Fuera del plazo permitido de 2 horas de anticipación.",
-        metadata: { differenceInHours, userId, businessId },
-      });
-      throw new ValidationError("Las citas solo pueden cancelarse con un mínimo de 2 horas de anticipación");
-    }
-  }
-
-  const updatedAppointment = await appointmentRepository.updateByIdAndBusiness(
-    appointmentId,
+  const { actorCapability } = await authorizeProtectedAppointment({
+    appointment,
+    userId,
     businessId,
-    { status: "cancelled" },
-  );
-  if (!updatedAppointment) throw new NotFoundError("La cita especificada no existe");
+    tenantAuthority,
+  });
+
+  const updatedAppointment = await transitionAppointmentStatus({
+    appointment,
+    businessId,
+    transition: STATUS_TRANSITIONS.cancel,
+  });
 
   await logEvent({
     appointmentId,
@@ -255,7 +348,7 @@ export const cancelAppointment = async (appointmentId, userId, tenantRole, busin
     event: "APPOINTMENT_CANCELLED",
     level: "INFO",
     message: "Reserva cancelada exitosamente.",
-    metadata: { cancelledBy: userId, tenantRole, businessId },
+    metadata: { cancelledBy: userId, actorCapability, businessId },
   });
 
   const dateStr = new Date(appointment.date).toISOString().split("T")[0];
@@ -264,27 +357,44 @@ export const cancelAppointment = async (appointmentId, userId, tenantRole, busin
   return updatedAppointment;
 };
 
-export const getAppointmentDetails = async (appointmentId, userId, tenantRole, businessId) => {
+export const getAppointmentDetails = async (appointmentId, userId, tenantAuthority, businessId) => {
   const appointment = await findTenantAppointment(appointmentId, businessId);
 
-  const isClient = appointment.client._id.toString() === userId;
-  const isWorker = canOperateAsAssignedWorker(appointment, userId, tenantRole);
-  const isAdmin = tenantRole === "admin";
-  if (!isClient && !isWorker && !isAdmin) {
-    throw new UnauthorizedError("No autorizado para ver los detalles de esta cita");
-  }
+  await authorizeProtectedAppointment({
+    appointment,
+    userId,
+    businessId,
+    tenantAuthority,
+  });
+
   return appointment;
 };
 
-export const getMyAppointments = async (userId, tenantRole, businessId) => {
-  const query = {};
-  if (businessId) query.business = businessId;
-
-  if (tenantRole === "worker") {
-    query.worker = userId;
-  } else if (tenantRole !== "admin") {
-    query.client = userId;
+export const getMyAppointments = async (userId, tenantAuthority, businessId) => {
+  const authority = await resolveActorTenantAuthority(userId, businessId, tenantAuthority);
+  if (!authority) {
+    throw new ForbiddenError("No tienes una membresía activa con permisos para este negocio");
   }
 
-  return await appointmentRepository.findAll(query);
+  if (authority.role === "admin") {
+    return await appointmentRepository.findCoherentAllByBusiness(businessId);
+  }
+
+  const eligibleServices = await serviceRepository.findAll({
+    business: businessId,
+    workers: userId,
+  });
+  const eligibleServiceIds = eligibleServices.map((service) => service._id);
+
+  if (eligibleServiceIds.length === 0) return [];
+
+  return await appointmentRepository.findCoherentAllByBusiness(businessId, {
+    worker: userId,
+    service: { $in: eligibleServiceIds },
+  });
+};
+
+export const getAppointmentTimeline = async (appointmentId, userId, tenantAuthority, businessId) => {
+  await getAppointmentDetails(appointmentId, userId, tenantAuthority, businessId);
+  return await auditLogRepository.findFunctionalTimelineByAppointment(appointmentId);
 };

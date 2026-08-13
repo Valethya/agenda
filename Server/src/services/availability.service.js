@@ -3,31 +3,16 @@ import * as blockRepository from "../repositories/block.repository.js";
 import * as appointmentRepository from "../repositories/appointment.repository.js";
 import * as serviceRepository from "../repositories/service.repository.js";
 import * as businessConfigRepository from "../repositories/businessConfig.repository.js";
-import * as userRepository from "../repositories/user.repository.js";
 import * as holidayRepository from "../repositories/holiday.repository.js";
-import * as membershipRepository from "../repositories/membership.repository.js";
+import {
+  assertProfessionalEligibleForService,
+  resolveActiveTenantParticipant,
+} from "./professionalEligibility.service.js";
 import { NotFoundError, ValidationError } from "../utils/appError.js";
 import { timeToMinutes, minutesToTime, checkOverlap } from "../utils/time.js";
 
-export const resolveActiveWorkerInTenant = async (workerId, businessId) => {
-  const [worker, membership] = await Promise.all([
-    userRepository.findById(workerId),
-    membershipRepository.findActiveByUserAndBusiness(workerId, businessId),
-  ]);
-
-  if (
-    !worker ||
-    worker.isActive !== true ||
-    !membership ||
-    membership.role !== "worker" ||
-    !membership.business ||
-    membership.business.isActive !== true
-  ) {
-    throw new NotFoundError("El profesional especificado no está disponible");
-  }
-
-  return { worker, membership };
-};
+export const resolveActiveWorkerInTenant = async (workerId, businessId) =>
+  resolveActiveTenantParticipant(workerId, businessId);
 
 export const getAvailableSlots = async (workerId, dateStr, serviceId, businessId, excludeAppointmentId = null) => {
   if (!businessId) throw new ValidationError("El contexto de negocio es obligatorio para consultar disponibilidad");
@@ -36,28 +21,27 @@ export const getAvailableSlots = async (workerId, dateStr, serviceId, businessId
   const targetDate = new Date(Date.UTC(dateParts[0], dateParts[1] - 1, dateParts[2]));
   const dayOfWeek = targetDate.getUTCDay();
 
-  const [service, worker, workerMembership, shift, holiday, appointments, blocks, businessConfig] = await Promise.all([
-    serviceRepository.findByIdAndBusiness(serviceId, businessId),
-    userRepository.findById(workerId),
-    membershipRepository.findActiveByUserAndBusiness(workerId, businessId),
+  const service = await serviceRepository.findByIdAndBusiness(
+    serviceId,
+    businessId,
+    { onlyActive: true },
+  );
+  if (!service) throw new NotFoundError("El servicio especificado no está disponible");
+
+  await assertProfessionalEligibleForService({
+    userId: workerId,
+    businessId,
+    service,
+    requireActiveService: true,
+  });
+
+  const [shift, holiday, appointments, blocks, businessConfig] = await Promise.all([
     shiftRepository.findByBusinessWorkerAndDay(businessId, workerId, dayOfWeek),
     holidayRepository.findByDate(targetDate),
     appointmentRepository.findByBusinessWorkerAndDate(businessId, workerId, targetDate),
     blockRepository.findByBusinessWorkerAndDateRange(businessId, workerId, targetDate, targetDate),
     businessConfigRepository.getConfig(businessId),
   ]);
-
-  if (!service) throw new NotFoundError("El servicio especificado no está disponible");
-  if (
-    !worker ||
-    worker.isActive !== true ||
-    !workerMembership ||
-    workerMembership.role !== "worker" ||
-    !workerMembership.business ||
-    workerMembership.business.isActive !== true
-  ) {
-    throw new NotFoundError("El profesional especificado no está disponible");
-  }
 
   const serviceDuration = service.duration;
   let shiftStart = timeToMinutes("09:00");

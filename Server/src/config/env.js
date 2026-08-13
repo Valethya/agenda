@@ -23,3 +23,9 @@ export const googleClientSecret = process.env.GOOGLE_CLIENT_SECRET;
 // ─── CORS ───
 // Comma-separated list of allowed origins, e.g. "http://localhost:4321,https://app.miagenda.cl"
 export const corsOrigins = process.env.CORS_ORIGINS || process.env.FRONTEND_URL || "http://localhost:4321";
+
+// ─── Optional modules ───
+// Payment/Webpay stays disabled unless a process explicitly opts in with the
+// exact value "true". Missing, empty, mixed-case, or unexpected values remain
+// deny-by-default.
+export const paymentRoutesEnabled = process.env.ENABLE_PAYMENTS === "true";

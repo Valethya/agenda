@@ -55,5 +55,5 @@ export const updateServiceSchema = z.object({
       .array(z.string().regex(/^[0-9a-fA-F]{24}$/, "ID de trabajador inválido"))
       .optional(),
     isActive: z.boolean().optional(),
-  }),
+  }).strict(),
 });

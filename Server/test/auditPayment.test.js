@@ -1,7 +1,8 @@
 import './setup.js';
+process.env.ENABLE_PAYMENTS = "true";
+
 import test from "node:test";
 import assert from "node:assert";
-import app, { sessionStore } from "../src/app.js";
 import { connectDB } from "../src/db/db.js";
 import User from "../src/db/models/user.model.js";
 import Service from "../src/db/models/service.model.js";
@@ -55,6 +56,11 @@ WebpayPlus.Transaction.prototype.commit = async function (token) {
     authorization_code: mockPaymentState.authorizationCode,
   };
 };
+
+// Payment/Webpay queda deny-by-default en runtime. Esta suite legacy hace opt-in
+// únicamente dentro de su propio proceso para conservar la cobertura existente
+// sin habilitar el módulo para el MVP.
+const { default: app, sessionStore } = await import("../src/app.js");
 
 // Conectar a la base de datos
 await connectDB();
@@ -119,7 +125,7 @@ test("Pruebas de Integración - Flujo de Pago Abierto y Registro Progresivo", as
     });
     workerCookie = logRes.headers.get("set-cookie");
 
-    // Crear servicio
+    // Crear servicio. 6.2.4-B exige allowlist profesional explícita.
     const service = await Service.create({
       name: "Servicio Auditoría",
       description: "Servicio de prueba para auditoría",
@@ -127,6 +133,7 @@ test("Pruebas de Integración - Flujo de Pago Abierto y Registro Progresivo", as
       price: 10000,
       depositAmount: 3000,
       business: business._id,
+      workers: [workerUser._id],
       isActive: true,
     });
     testServiceId = service._id.toString();
@@ -310,7 +317,7 @@ test("Pruebas de Integración - Flujo de Pago Abierto y Registro Progresivo", as
     assert.ok(updatedClient.email.includes("progressive-2@example.com"));
     assert.strictEqual(updatedClient.firstName, "Progresivo"); // No sobrescrito
     assert.strictEqual(updatedClient.lastName, "Uno"); // No sobrescrito
-    
+
     // Comprobar que la cita se asignó a este cliente
     assert.strictEqual(bookData2.payload.client, updatedClient._id.toString());
 

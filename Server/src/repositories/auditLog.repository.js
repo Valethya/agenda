@@ -8,6 +8,13 @@ export const findByAppointment = async (appointmentId) => {
   return await AuditLog.find({ appointmentId }).sort({ createdAt: 1 });
 };
 
+export const findFunctionalTimelineByAppointment = async (appointmentId) => {
+  return await AuditLog.find({ appointmentId })
+    .select("event level message createdAt -_id")
+    .sort({ createdAt: 1 })
+    .lean();
+};
+
 export const updateMany = async (filter, updateData) => {
   return await AuditLog.updateMany(filter, updateData);
 };
