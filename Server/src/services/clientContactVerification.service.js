@@ -70,22 +70,26 @@ const requireChannel = (channel) => {
   return channel;
 };
 
-const normalizeEmail = (destination) => {
+const normalizeEmailDestination = (destination) => {
   if (typeof destination !== "string") {
     throw invalidInput("Contacto no válido");
   }
 
-  const normalized = destination.trim().toLowerCase();
+  const trimmed = destination.trim();
 
   if (
-    normalized.length === 0
-    || normalized.length > 320
-    || !EMAIL_PATTERN.test(normalized)
+    trimmed.length === 0
+    || trimmed.length > 320
+    || !EMAIL_PATTERN.test(trimmed)
   ) {
     throw invalidInput("Contacto no válido");
   }
 
-  return normalized;
+  const separatorIndex = trimmed.lastIndexOf("@");
+  const localPart = trimmed.slice(0, separatorIndex);
+  const domainPart = trimmed.slice(separatorIndex + 1).toLowerCase();
+
+  return `${localPart}@${domainPart}`;
 };
 
 const requireTtlMs = (ttlMs) => {
@@ -131,6 +135,13 @@ const safeVerificationProjection = (verification) => ({
   revokedAt: verification.revokedAt,
 });
 
+/**
+ * ISSUE crea únicamente un challenge pendiente.
+ *
+ * El `secret` raw retornado es material exclusivo para una futura trusted
+ * delivery/orchestration layer. Un controller HTTP de emisión no debe devolverlo
+ * directamente al claimant. Issue por sí mismo NO demuestra control del canal.
+ */
 export const issueVerificationForBusiness = async ({
   businessId,
   channel = "email",
@@ -143,7 +154,7 @@ export const issueVerificationForBusiness = async ({
   const scopedPurpose = requirePurpose(purpose);
   const scopedTtlMs = requireTtlMs(ttlMs);
 
-  const normalizedDestination = normalizeEmail(destination);
+  const normalizedDestination = normalizeEmailDestination(destination);
   const secret = crypto.randomBytes(SECRET_BYTES).toString("base64url");
   const secretHash = deriveSecretHash({
     businessId: scopedBusinessId,
@@ -169,6 +180,11 @@ export const issueVerificationForBusiness = async ({
   };
 };
 
+/**
+ * CONSUME demuestra posesión del bearer bajo Business + purpose.
+ * Sólo puede interpretarse como control actual del canal si una trusted delivery
+ * layer entregó ese bearer exclusivamente mediante el channel/destination persistido.
+ */
 export const consumeVerificationForBusiness = async ({
   businessId,
   purpose,
