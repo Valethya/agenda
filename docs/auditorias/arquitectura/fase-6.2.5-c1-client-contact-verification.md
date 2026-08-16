@@ -1,13 +1,14 @@
 # Fase 6.2.5-C1 — Verification tenant-scoped de contacto Client
 
-**Estado:** runtime inicial para revisión adversarial  
+**Estado:** runtime inicial corregido tras revisión adversarial  
 **Fecha:** 2026-08-16  
 **Baseline exacta:** `master@a642d119ea98f3fd7658ef876792ee5287a770f6`  
+**HEAD adversarial de entrada:** `e61a84007ed7eed7e7b25655786c920d3ef27f5a`  
 **PR precedente:** #27 merged/closed (`feat(6.2.5-B): add tenant-scoped customer profile persistence`)
 
 ## Objetivo
 
-6.2.5-C1 introduce exclusivamente una primitiva de `Verification`/proof para demostrar control actual de un canal de contacto de cliente dentro de un `Business` y para un `purpose` exacto.
+6.2.5-C1 introduce exclusivamente una primitiva tenant-scoped de `Verification` para emitir y consumir challenges de control actual de un canal de contacto dentro de un `Business` y para un `purpose` exacto.
 
 > **Verification demuestra control actual de un canal para un propósito y tenant determinados. No demuestra identidad histórica, ownership de CustomerProfile, ownership de Appointment ni Client authority general.**
 
@@ -17,11 +18,39 @@ La regla arquitectónica continúa siendo:
 current channel control != historical subject continuity
 ```
 
-No se implementan consumidores de esta proof en booking, auth, Client session, claim, binding, historial ni Appointment capabilities.
+C1 no implementa delivery real, Client session, binding, claim, historial, booking changes ni Appointment capabilities.
+
+## Frontera challenge → delivery → consume
+
+La semántica de seguridad queda congelada así:
+
+```text
+ISSUE -> crea un challenge pending
+DELIVERY -> una trusted delivery/orchestration layer futura entrega el bearer
+            exclusivamente mediante el channel/destination persistido
+CONSUME -> demuestra posesión del bearer bajo Business + purpose
+```
+
+**Una Verification pending es un challenge, no prueba de control.**
+
+**Un consume exitoso demuestra posesión del bearer. Sólo puede interpretarse como control del canal cuando el bearer fue entregado exclusivamente mediante el channel/destination persistido por una trusted delivery layer.**
+
+**El raw bearer devuelto al issuer nunca debe enviarse directamente al claimant mediante la respuesta de emisión.**
+
+Consecuencias obligatorias:
+
+- `issueVerificationForBusiness()` por sí mismo no verifica un email;
+- el `secret` raw retornado por issue existe sólo para trusted delivery/orchestration;
+- un futuro controller HTTP de emisión no puede devolver ese bearer directamente al requester/claimant;
+- un caller nunca puede inferir `email control = true` sólo porque recibió el resultado de issue;
+- C2 debe implementar delivery/orquestación antes de usar consume como proof de control del canal para habilitar cualquier paso posterior;
+- C1 no entrega capability ni autoridad después de consume.
+
+No se implementa email real en este PR.
 
 ## Modelo físico
 
-Se introduce `ClientContactVerification` con:
+`ClientContactVerification` contiene:
 
 - `business: ObjectId -> Business`, requerido;
 - `channel: "email"`, requerido;
@@ -32,104 +61,87 @@ Se introduce `ClientContactVerification` con:
 - `expiresAt`, requerido;
 - `consumedAt`, nullable;
 - `revokedAt`, nullable;
-- `createdAt` / `updatedAt` mediante `timestamps`;
-- sin `User`;
-- sin `Membership`;
-- sin `CustomerProfile`;
-- sin `Appointment`;
-- sin `binding`, `claim` o Client authority.
+- timestamps;
+- sin User, Membership, CustomerProfile, Appointment, binding, claim ni Client authority.
 
-`destination` es una identidad **operacional del canal**, no identidad personal ni clave de autorización.
+`destination` representa el mailbox operacional al que deberá dirigirse el challenge. No es identidad personal, no es autoridad y no es clave de binding.
 
-## Canal y normalización
+## Canal y normalización del mailbox
 
-C1 implementa únicamente el canal real `email`.
+C1 soporta únicamente `email`.
 
-La normalización operacional es exactamente:
+La normalización operacional final es exactamente:
+
+1. eliminar whitespace externo mediante `trim()`;
+2. preservar exactamente el **local-part** en case/contenido;
+3. convertir a lowercase únicamente el **domain-part**.
+
+Ejemplos:
 
 ```text
-trim()
-+
-toLowerCase()
+"  Alice@Example.COM  " -> "Alice@example.com"
+"alice@example.com"    -> "alice@example.com"
 ```
 
-No se realiza auto-binding, merge, historial, lookup global de User ni correlación cross-tenant a partir del email normalizado. La normalización no cambia el significado de seguridad del dato: sigue siendo contacto declarado.
+Por tanto:
 
-SMS/teléfono queda fuera de C1. El enum de canal puede ampliarse posteriormente sin reescribir el lifecycle de Verification.
+```text
+Alice@example.com != alice@example.com
+```
+
+a nivel de representación operacional de C1.
+
+C1 no asume que el local-part sea case-insensitive y no transforma `Alice` en `alice`. La canonicalización del dominio sólo refleja que el domain-part del mailbox es case-insensitive; no convierte el contacto en identidad.
+
+No se introduce parsing RFC completo, librería nueva, lookup global, deduplicación, merge, auto-binding, historial ni correlación cross-tenant.
 
 ## Purpose binding
 
-Purposes permitidos en C1:
+Purposes permitidos:
 
 - `contact-control`;
 - `appointment-read-bootstrap`;
 - `appointment-cancel-bootstrap`;
 - `appointment-reschedule-bootstrap`.
 
-Los tres purposes `appointment-*-bootstrap` **no implementan ni conceden** todavía una Appointment capability. Sólo reservan scopes explícitos para demostrar que una proof emitida para una intención no es aceptable para otra.
+Los purposes `appointment-*-bootstrap` no implementan ni conceden Appointment capabilities. Sólo mantienen scopes separados para impedir purpose escalation.
 
-El hash derivado y el lookup de consumo incorporan `Business + purpose`, por lo que el mismo bearer no es portable entre tenants ni entre purposes.
-
-No existe `emailVerified: true` global o reusable.
+No existe un `emailVerified: true` global o reusable.
 
 ## Secreto y hashing
 
-Al emitir una Verification:
+Durante issue:
 
-1. se generan 32 bytes mediante `crypto.randomBytes()`;
+1. se generan 32 bytes con `crypto.randomBytes()`;
 2. se codifican como `base64url`;
-3. el bearer raw se devuelve únicamente al caller inmediato;
-4. nunca se persiste raw;
-5. se persiste únicamente SHA-256 hexadecimal derivado de:
+3. el raw bearer se devuelve únicamente al issuer/trusted orchestration caller;
+4. el raw bearer nunca se persiste;
+5. se persiste SHA-256 hexadecimal derivado de:
 
 ```text
 businessId + NUL + purpose + NUL + bearerSecret
 ```
 
-El bearer contiene 256 bits de entropía previa a encoding. No se usa `Math.random()`, timestamp, email, ObjectId ni dato determinista como secreto.
+No se usa `Math.random()`, UUID, timestamp, email, ObjectId ni dato determinista como secreto.
 
-SHA-256 es apropiado aquí porque el input secreto posee alta entropía criptográfica. El contexto `Business + purpose` se incorpora además a la derivación para impedir equivalencia accidental del material persistido entre scopes.
-
-No existe logging del bearer ni del hash en esta capa.
+El bearer raw no debe aparecer en logs, errores, documentación de ejemplo, snapshots ni MongoDB.
 
 ## Tenant scope
 
-Toda Verification pertenece exactamente a un `Business`.
+Toda Verification pertenece exactamente a un Business.
 
-Todas las operaciones requieren `businessId` explícito:
+Issue, consume y revoke requieren `businessId` explícito. El hash y el lookup de consumo están ligados efectivamente a `Business + purpose`, por lo que un bearer de Business A no funciona en B y uno de purpose X no funciona para Y.
 
-- emisión;
-- consumo;
-- revocación.
-
-La creación valida:
-
-1. ObjectId estricto;
-2. existencia real del Business;
-3. sólo después persiste la Verification.
-
-Un `businessId` sintácticamente válido pero inexistente falla cerrado y no crea documentos huérfanos.
-
-Esta comprobación es integridad referencial, no autorización tenant. C1 no introduce `Membership`, `Business.owner`, `superadmin` ni `Business.isActive` como fuentes de Client authority.
+La creación valida ObjectId estricto y existencia real del Business antes de persistir. Esto es integridad referencial, no tenant authorization.
 
 ## ObjectId strictness
 
-Los IDs externos aceptados son exclusivamente:
+IDs externos aceptados:
 
-- instancia real `mongoose.Types.ObjectId`; o
+- `mongoose.Types.ObjectId` real;
 - string hexadecimal canónico de 24 caracteres.
 
-Se rechazan antes de query:
-
-- números;
-- strings de 12 caracteres;
-- documentos Mongoose usados como ID;
-- objetos;
-- arrays;
-- malformed strings;
-- vacío;
-- `null`;
-- `undefined`.
+Se rechazan antes de query números, strings de 12 caracteres, documentos Mongoose, objetos, arrays, malformed strings, vacío, `null` y `undefined`.
 
 No se usa `mongoose.isValidObjectId()` como frontera externa.
 
@@ -137,113 +149,54 @@ No se usa `mongoose.isValidObjectId()` como frontera externa.
 
 ### pending
 
-Estado inicial después de issue.
+Estado inicial de un challenge emitido.
 
-Puede transicionar exactamente una vez a:
-
-- `consumed`; o
-- `revoked`.
-
-También se vuelve inválida de inmediato si:
+**pending no es proof.** Puede transicionar una sola vez a `consumed` o `revoked`, y deja de ser válido inmediatamente cuando:
 
 ```text
 expiresAt <= now
 ```
 
-La expiración no requiere cambiar físicamente `status` a `expired`.
-
 ### consumed
 
-Representa una proof consumida con éxito. `consumedAt` se fija en la misma operación atómica.
+Indica que el bearer correcto fue presentado bajo el Business y purpose correctos mientras el challenge seguía pending y vigente.
 
-Una Verification consumed no puede volver a consumirse ni revocarse.
+Por sí mismo significa posesión del bearer. Sólo equivale a control actual del canal si el bearer fue entregado previamente y de forma exclusiva mediante el channel/destination persistido por trusted delivery.
+
+No concede identidad histórica, CustomerProfile, Appointment ownership, Client session ni capability.
 
 ### revoked
 
-Representa invalidación explícita antes de expiración. `revokedAt` se fija atómicamente.
-
-Una Verification revoked no puede consumirse ni reactivarse.
+Transición terminal de invalidación explícita antes de expiración. Una Verification revoked no puede consumirse ni reactivarse.
 
 ### expired
 
-Es un estado lógico derivado de `expiresAt`, no un valor persistido de `status`.
-
-No existe tolerancia implícita:
+Estado lógico derivado de `expiresAt`; no se persiste como status. No existe tolerancia implícita:
 
 ```text
 expiresAt <= now => invalid
 ```
 
-Esto se verifica en runtime aunque el documento continúe físicamente en MongoDB.
+La expiración se valida en runtime y no depende de TTL cleanup.
 
-El reloj de seguridad se obtiene dentro del service mediante `new Date()`. Los callers de `issue/consume/revoke` no pueden suministrar un `now` alternativo para revivir proofs expirados. El repository recibe el instante ya resuelto por la capa de dominio y conserva la comparación exacta `$gt`.
+## Consumo, replay y revocación
 
-## Consumo y replay prevention
+Consume usa un único `findOneAndUpdate()` con Business, purpose, secretHash, `status: pending` y `expiresAt > now`.
 
-El consumo usa una única operación `findOneAndUpdate()` con filtro:
+La transición es atómica a `consumed`. Dos consumos concurrentes sólo pueden producir un éxito.
 
-- `business` correcto;
-- `purpose` correcto;
-- `secretHash` correcto;
-- `status: pending`;
-- `expiresAt > now`.
-
-Y transición atómica:
-
-```text
-pending -> consumed
-consumedAt = now
-```
-
-No existe secuencia vulnerable `read -> comprobar -> save`.
-
-Por diseño, dos consumos concurrentes del mismo proof sólo pueden hacer match con `pending` una vez. El test de integración exige exactamente:
-
-```text
-1 fulfilled
-1 rejected
-```
-
-## Revocación
-
-`revokeVerificationForBusiness()` exige:
-
-- `verificationId`;
-- `businessId`;
-- `purpose`.
-
-La transición también es atómica y sólo acepta `pending` no expirado. No existe endpoint ni administración compleja en C1.
-
-Una revocación no crea User, binding, claim, sesión ni capability.
+Revoke usa una transición atómica equivalente sobre `pending` no expirado. No existe `read -> check -> save`.
 
 ## Errores
 
-La capa de service usa códigos estables:
+Service mantiene códigos estables:
 
 - `CLIENT_CONTACT_VERIFICATION_INVALID_INPUT`;
 - `CLIENT_CONTACT_VERIFICATION_INVALID_PROOF`.
 
-La invalidación de bearer devuelve el mensaje estable:
-
-```text
-Verification no válida
-```
-
-No incorpora:
-
-- bearer secret;
-- hash;
-- email;
-- valor normalizado;
-- Mongo URI;
-- credenciales;
-- stack sensible.
-
-C1 no crea endpoint público, por lo que la política HTTP final queda para el consumer futuro. La superficie queda preparada para mapear errores sin construir un oracle de clientes.
+La invalidación de bearer produce el mensaje estable `Verification no válida` y no incluye bearer, hash, email completo, valor normalizado, URI, credenciales ni stack sensible.
 
 ## Índice declarado
-
-El schema declara únicamente el índice funcional nuevo:
 
 ```text
 {
@@ -256,25 +209,9 @@ El schema declara únicamente el índice funcional nuevo:
 name: client_verification_business_purpose_secret_status_expiry
 ```
 
-Soporta la consulta real de consumo atómico.
+Es tenant-first, no unique y no indexa destination/email/phone.
 
-Propiedades:
-
-- tenant-first;
-- no `unique`;
-- no indexa `destination`;
-- no indexa email/teléfono;
-- no crea índice global de contacto.
-
-Como el modelo usa:
-
-```text
-autoIndex: process.env.NODE_ENV === "test"
-```
-
-la declaración del schema **no afirma materialización física en producción**. C1 no añade DDL ni migración productiva. La materialización controlada será una precondición operacional antes de un futuro cutover que dependa del índice.
-
-No se declara TTL index. La seguridad de expiración depende de la comparación runtime exacta, no de eliminación eventual de MongoDB.
+`autoIndex` continúa habilitado sólo en test. C1 no afirma materialización física productiva y no añade DDL ni migración.
 
 ## Superficie introducida
 
@@ -286,125 +223,74 @@ Repository:
 
 Service:
 
-- `issueVerificationForBusiness(...)`;
-- `consumeVerificationForBusiness(...)`;
+- `issueVerificationForBusiness(...)` — **challenge issuance only**;
+- `consumeVerificationForBusiness(...)` — bearer possession under tenant + purpose;
 - `revokeVerificationForBusiness(...)`.
 
-No existen:
+El nombre existente `issueVerificationForBusiness` se conserva para evitar churn innecesario dentro del mismo Draft, pero su contrato queda explícitamente restringido a emisión de challenge. No debe interpretarse como `verify`.
 
-- lookup global por email;
-- lookup global por bearer;
-- `verifyCustomer()`;
-- `claimProfile()`;
-- `getClientHistory()`;
-- binding;
-- Appointment capability.
+No existen lookup global por email/bearer, `verifyCustomer`, claim, history, binding ni Appointment capability.
 
 ## Tests
 
-Unit tests cubren:
+Unit tests cubren, además de las garantías previas:
 
-- schema requerido;
-- enums limitados;
-- ausencia de relaciones de autoridad;
-- definición exacta del índice;
-- ausencia de unique/global contact index;
-- frontera ObjectId estricta antes de query;
-- purpose inválido antes de query;
-- bearer malformado antes de query;
-- generación criptográfica y forma del bearer;
-- normalización operacional exacta;
-- persistencia sólo de hash.
+- `Alice@example.com` conserva `Alice`;
+- `Alice@example.com` y `alice@example.com` no se conflan;
+- whitespace externo se elimina;
+- `Alice@Example.COM` se representa como `Alice@example.com`;
+- raw bearer no se persiste;
+- challenge emitido permanece `pending`.
 
-Integration tests cubren:
+Integration tests existentes continúan cubriendo:
 
-- Business obligatorio;
-- Business inexistente fail-closed;
-- mismo contacto con proofs independientes A/B;
-- bearer A inválido en B;
-- purpose X inválido para Y;
-- bearer inválido;
-- raw secret ausente de MongoDB;
-- hash distinto del raw secret;
-- expiración exacta `expiresAt <= now`;
-- single-use;
-- revocación;
-- carrera concurrente con exactamente un consumo exitoso;
+- Business obligatorio e inexistente fail-closed;
+- mismo contacto con Verification independiente en A/B;
+- bearer de A inválido en B;
+- purpose X inválido en Y;
+- raw secret ausente de MongoDB y hash distinto del raw;
+- expiración exacta;
+- consumed single-use;
+- revoked inválido;
+- consumo concurrente con exactamente un éxito;
 - ausencia de side effects sobre User/Membership/CustomerProfile/Appointment;
 - User existente con mismo email sin modificación;
 - CustomerProfile existente con mismo email sin modificación.
 
-La suite backend conserva y ejecuta `appointment-ownership-boundary.test.js`; APT-CLIENT-01 no se modifica.
+La suite backend continúa ejecutando `appointment-ownership-boundary.test.js`; APT-CLIENT-01 no se modifica.
 
 ## Decisiones congeladas preservadas
 
-- `User` = identidad global autenticable.
-- `Membership` = única autoridad tenant ordinaria admin/worker.
-- Client no es Membership.
-- `Business.owner` no concede Client authority.
-- `superadmin` no concede Client authority.
-- CustomerProfile pertenece a un Business y puede existir sin User.
-- CustomerProfile/contact no concede autoridad por sí mismo.
-- Contact match no es proof/binding/claim/ownership/history.
+- User = identidad global autenticable.
+- Membership = única autoridad tenant ordinaria admin/worker.
+- Client no es rol Membership.
+- Business.owner y superadmin no conceden Client authority.
+- CustomerProfile puede existir sin User y no concede authority por sí mismo.
+- Contact match no es proof, binding, claim, ownership ni history.
 - current channel control != historical subject continuity.
-- Verification no crea/modifica User.
-- Verification no crea Membership.
-- Verification no crea binding.
-- Verification no fusiona CustomerProfiles.
-- Verification no reclama Appointments.
-- Verification no concede Client session.
-- Verification no concede otra capability.
+- Verification no crea/modifica User ni Membership.
+- Verification no crea binding ni fusiona CustomerProfiles.
+- Verification no reclama Appointment ni transfiere history.
+- Verification no concede Client session ni capability general.
 - APT-CLIENT-01 permanece fail-closed.
-- bookedBy y customer permanecen conceptos distintos.
+- bookedBy y customer siguen siendo conceptos distintos.
 
-## Fuera de alcance de C1
+## Fuera de alcance
 
-No se modifica:
+No se modifica Appointment runtime, booking, auth, User, Membership, CustomerProfile lifecycle, `getOrCreateGuestUser()`, password recovery, Payment/Webpay, Holiday, frontend, websocket, migrations ni datos productivos.
 
-- `appointment.controller.js`;
-- `appointment.service.js`;
-- `appointment.model.js`;
-- `auth.service.js`;
-- `auth.controller.js`;
-- User model;
-- Membership model;
-- `getOrCreateGuestUser()`;
-- password recovery;
-- booking;
-- Payment/Webpay;
-- Holiday;
-- frontend/UI;
-- websocket;
-- seeds;
-- migraciones existentes;
-- datos productivos.
-
-Tampoco se implementan:
-
-- Client session;
-- login Client;
-- binding `User ↔ CustomerProfile`;
-- claim;
-- historial Client;
-- guest Appointment capabilities;
-- bearer capability read/cancel/reschedule;
-- migración `Appointment.client`;
-- `bookedBy/customer` físico;
-- deduplicación/merge/split de CustomerProfile;
-- recuperación de historial;
-- delivery real de email/SMS.
+No se implementa email delivery real, Client session, binding, claim, history, Appointment bearer capability, read/cancel/reschedule ni C2.
 
 ## Deuda deliberadamente pendiente para 6.2.5-C2
 
-C1 entrega sólo la proof primitive. C2 deberá decidir e implementar, sin asumir que Verification ya concede autoridad:
+C2 deberá implementar/decidir antes de usar consume como proof de control del canal:
 
-- consumer concreto de la proof;
-- delivery/orquestación si corresponde;
-- rate limiting y anti-abuse en el entrypoint real;
-- política HTTP estable y anti-enumeration;
-- cómo una proof aceptada habilita exactamente el siguiente paso sin escalar purpose;
-- cualquier capability ADR-002 por Appointment + Business + una acción;
-- rotación/reemisión y cleanup operacional;
-- materialización física controlada de índices cuando sea requerida.
+- trusted delivery/orchestration real;
+- separación segura entre respuesta de issue al requester y material de delivery;
+- anti-enumeration y rate limiting del entrypoint público;
+- política de reemisión/rotación/cleanup;
+- consumidores concretos de la proof;
+- cualquier capability ADR-002 específica a Appointment + Business + una acción;
+- materialización física controlada de índices cuando corresponda.
 
-C1 no adelanta ninguna de esas decisiones.
+C1 no adelanta esas decisiones.
