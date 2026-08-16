@@ -202,14 +202,14 @@ test("6.2.5-C1 invalid purpose and malformed secret fail before consume query", 
   }
 });
 
-test("6.2.5-C1 issue uses cryptographic secret and normalizes email only operationally", async () => {
+test("6.2.5-C1 issue creates a challenge and preserves mailbox local-part case", async () => {
   const originalExists = Business.exists;
   const originalCreate = ClientContactVerification.create;
-  let persistedPayload = null;
+  const persistedPayloads = [];
 
   Business.exists = () => Promise.resolve({ _id: new mongoose.Types.ObjectId() });
   ClientContactVerification.create = async (payload) => {
-    persistedPayload = payload;
+    persistedPayloads.push(payload);
     return {
       _id: new mongoose.Types.ObjectId(),
       ...payload,
@@ -222,22 +222,33 @@ test("6.2.5-C1 issue uses cryptographic secret and normalizes email only operati
   try {
     const businessId = new mongoose.Types.ObjectId();
     const before = Date.now();
-    const issued = await issueVerificationForBusiness({
+    const upperLocal = await issueVerificationForBusiness({
       businessId,
-      destination: "  CLIENT@Example.COM  ",
+      destination: "  Alice@Example.COM  ",
+      purpose: "contact-control",
+      ttlMs: 60_000,
+    });
+    const lowerLocal = await issueVerificationForBusiness({
+      businessId,
+      destination: "alice@example.com",
       purpose: "contact-control",
       ttlMs: 60_000,
     });
     const after = Date.now();
 
-    assert.match(issued.secret, /^[A-Za-z0-9_-]{43}$/u);
-    assert.equal(issued.destination, "client@example.com");
-    assert.equal(persistedPayload.destination, "client@example.com");
-    assert.equal(persistedPayload.secret, undefined);
-    assert.notEqual(persistedPayload.secretHash, issued.secret);
-    assert.match(persistedPayload.secretHash, /^[0-9a-f]{64}$/u);
-    assert.ok(issued.expiresAt.getTime() >= before + 60_000);
-    assert.ok(issued.expiresAt.getTime() <= after + 60_000);
+    assert.equal(upperLocal.destination, "Alice@example.com");
+    assert.equal(lowerLocal.destination, "alice@example.com");
+    assert.notEqual(upperLocal.destination, lowerLocal.destination);
+    assert.equal(persistedPayloads[0].destination, "Alice@example.com");
+    assert.equal(persistedPayloads[1].destination, "alice@example.com");
+
+    assert.match(upperLocal.secret, /^[A-Za-z0-9_-]{43}$/u);
+    assert.equal(persistedPayloads[0].secret, undefined);
+    assert.notEqual(persistedPayloads[0].secretHash, upperLocal.secret);
+    assert.match(persistedPayloads[0].secretHash, /^[0-9a-f]{64}$/u);
+    assert.ok(upperLocal.expiresAt.getTime() >= before + 60_000);
+    assert.ok(upperLocal.expiresAt.getTime() <= after + 60_000);
+    assert.equal(upperLocal.status, "pending");
   } finally {
     Business.exists = originalExists;
     ClientContactVerification.create = originalCreate;
