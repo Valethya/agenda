@@ -34,6 +34,39 @@ const title = "Acceso a tu cita";
     </main>
 
     <script>
+      interface GuestProof {
+        businessId: string;
+        appointmentId: string;
+        verificationId: string;
+        challenge: string;
+      }
+
+      interface GuestCapability {
+        businessId: string;
+        appointmentId: string;
+        action: string;
+        bearer: string;
+        expiresAt: string;
+      }
+
+      interface VerificationResponse {
+        capability?: GuestCapability;
+      }
+
+      interface GuestAppointment {
+        business?: { name?: string };
+        service?: { name?: string };
+        professional?: { firstName?: string; lastName?: string };
+        date?: string;
+        startTime?: string;
+        endTime?: string;
+        status?: string;
+      }
+
+      interface AppointmentResponse {
+        appointment?: GuestAppointment;
+      }
+
       const apiBase = import.meta.env.PUBLIC_API_URL?.replace(/\/+$/u, "");
       const statusElement = document.querySelector("#status");
       const appointmentElement = document.querySelector("#appointment");
@@ -47,12 +80,12 @@ const title = "Acceso a tu cita";
         "challenge",
       ]);
 
-      const fail = () => {
+      const fail = (): void => {
         if (statusElement) statusElement.textContent = "Este enlace no es válido o ya fue utilizado.";
         if (appointmentElement instanceof HTMLElement) appointmentElement.hidden = true;
       };
 
-      const parseFragment = () => {
+      const parseFragment = (): GuestProof | null => {
         const fragment = window.location.hash.startsWith("#")
           ? window.location.hash.slice(1)
           : "";
@@ -63,7 +96,7 @@ const title = "Acceso a tu cita";
         window.history.replaceState(null, "", `${window.location.pathname}${window.location.search}`);
 
         const params = new URLSearchParams(fragment);
-        const seen = new Set();
+        const seen = new Set<string>();
         for (const [key] of params.entries()) {
           if (!expectedKeys.has(key) || seen.has(key)) return null;
           seen.add(key);
@@ -87,7 +120,8 @@ const title = "Acceso a tu cita";
         return { businessId, appointmentId, verificationId, challenge };
       };
 
-      const postJson = async (path, body) => {
+      const postJson = async <T>(path: string, body: Record<string, string>): Promise<T> => {
+        if (!apiBase) throw new Error("GUEST_ACCESS_FAILED");
         const response = await fetch(`${apiBase}${path}`, {
           method: "POST",
           credentials: "omit",
@@ -101,11 +135,11 @@ const title = "Acceso a tu cita";
         });
 
         if (!response.ok) throw new Error("GUEST_ACCESS_FAILED");
-        return response.json();
+        return response.json() as Promise<T>;
       };
 
-      const renderAppointment = (appointment) => {
-        const setField = (name, value) => {
+      const renderAppointment = (appointment?: GuestAppointment): void => {
+        const setField = (name: string, value?: string): void => {
           const element = document.querySelector(`[data-field="${name}"]`);
           if (element) element.textContent = value || "—";
         };
@@ -115,7 +149,7 @@ const title = "Acceso a tu cita";
         setField(
           "professional",
           [appointment?.professional?.firstName, appointment?.professional?.lastName]
-            .filter(Boolean)
+            .filter((value): value is string => Boolean(value))
             .join(" "),
         );
         setField(
@@ -136,13 +170,13 @@ const title = "Acceso a tu cita";
         if (appointmentElement instanceof HTMLElement) appointmentElement.hidden = false;
       };
 
-      const run = async () => {
+      const run = async (): Promise<void> => {
         if (!apiBase) return fail();
         const proof = parseFragment();
         if (!proof) return fail();
 
         try {
-          const verification = await postJson("/guest-appointments/read/verify", {
+          const verification = await postJson<VerificationResponse>("/guest-appointments/read/verify", {
             businessId: proof.businessId,
             appointmentId: proof.appointmentId,
             verificationId: proof.verificationId,
@@ -152,21 +186,21 @@ const title = "Acceso a tu cita";
           // Drop the challenge reference before using the capability bearer.
           proof.challenge = "";
 
-          const capability = verification?.capability;
+          const capability = verification.capability;
           if (
             capability?.action !== "read"
-            || capability?.businessId !== proof.businessId
-            || capability?.appointmentId !== proof.appointmentId
-            || !bearerPattern.test(capability?.bearer || "")
+            || capability.businessId !== proof.businessId
+            || capability.appointmentId !== proof.appointmentId
+            || !bearerPattern.test(capability.bearer || "")
           ) throw new Error("GUEST_ACCESS_FAILED");
 
-          const result = await postJson("/guest-appointments/read", {
+          const result = await postJson<AppointmentResponse>("/guest-appointments/read", {
             businessId: proof.businessId,
             appointmentId: proof.appointmentId,
             bearer: capability.bearer,
           });
           capability.bearer = "";
-          renderAppointment(result?.appointment);
+          renderAppointment(result.appointment);
         } catch {
           fail();
         }
