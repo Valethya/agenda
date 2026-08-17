@@ -98,6 +98,20 @@ export const findByIdAndBusiness = async (id, businessId) => {
   );
 };
 
+// Dedicated C2 projection: tenant-scoped and deliberately excludes client/contact
+// data, notes, User authority fields, history and audit timeline.
+export const findGuestReadableByIdAndBusiness = async (id, businessId) => {
+  return await Appointment.findOne({ _id: id, business: businessId })
+    .select("business worker service date startTime endTime status paymentStatus")
+    .populate("worker", "firstName lastName")
+    .populate({
+      path: "service",
+      match: { business: businessId },
+      select: "name duration business",
+    })
+    .populate("business", "name slug");
+};
+
 export const findCoherentAllByBusiness = async (businessId, query = {}) => {
   const appointments = await populateProtectedTenantRelations(
     Appointment.find({ ...query, business: businessId }),
