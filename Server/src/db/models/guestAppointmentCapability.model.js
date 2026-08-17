@@ -61,6 +61,14 @@ const guestAppointmentCapabilitySchema = new mongoose.Schema(
   },
 );
 
+// One consumed C1 proof can mint at most one C2 capability. Any retry after a
+// successful mint must obtain a fresh verification challenge rather than
+// multiplying bearer authority from the same channel-control proof.
+guestAppointmentCapabilitySchema.index(
+  { verification: 1 },
+  { unique: true, name: "guest_appointment_capability_verification_unique" },
+);
+
 guestAppointmentCapabilitySchema.index(
   {
     business: 1,
