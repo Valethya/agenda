@@ -4,7 +4,10 @@ import ClientContactVerification, {
   CLIENT_CONTACT_VERIFICATION_PURPOSES,
 } from "../db/models/clientContactVerification.model.js";
 import GuestAppointmentVerificationDelivery from "../db/models/guestAppointmentVerificationDelivery.model.js";
-import { GUEST_APPOINTMENT_ACTIONS } from "../security/guestAppointmentCapability.constants.js";
+import {
+  GUEST_APPOINTMENT_ACTIONS,
+  GUEST_APPOINTMENT_IMPLEMENTED_PURPOSE_TO_ACTION,
+} from "../security/guestAppointmentCapability.constants.js";
 
 const OBJECT_ID_HEX_PATTERN = /^[0-9a-fA-F]{24}$/u;
 
@@ -30,6 +33,12 @@ const requireAction = (action) => {
   return action;
 };
 
+const requireImplementedMapping = (purpose, action) => {
+  if (GUEST_APPOINTMENT_IMPLEMENTED_PURPOSE_TO_ACTION[purpose] !== action) {
+    throw new TypeError("purpose/action no implementado");
+  }
+};
+
 const requireDate = (value, fieldName) => {
   if (!(value instanceof Date) || Number.isNaN(value.getTime())) {
     throw new TypeError(`${fieldName} inválido`);
@@ -37,13 +46,18 @@ const requireDate = (value, fieldName) => {
   return value;
 };
 
-const scope = ({ verificationId, businessId, appointmentId, purpose, action }) => ({
-  verification: requireStrictObjectId(verificationId, "verificationId"),
-  business: requireStrictObjectId(businessId, "businessId"),
-  appointment: requireStrictObjectId(appointmentId, "appointmentId"),
-  purpose: requirePurpose(purpose),
-  action: requireAction(action),
-});
+const scope = ({ verificationId, businessId, appointmentId, purpose, action }) => {
+  const scopedPurpose = requirePurpose(purpose);
+  const scopedAction = requireAction(action);
+  requireImplementedMapping(scopedPurpose, scopedAction);
+  return {
+    verification: requireStrictObjectId(verificationId, "verificationId"),
+    business: requireStrictObjectId(businessId, "businessId"),
+    appointment: requireStrictObjectId(appointmentId, "appointmentId"),
+    purpose: scopedPurpose,
+    action: scopedAction,
+  };
+};
 
 export const createPending = async ({ verificationId, businessId, appointmentId, purpose, action }) => {
   const scoped = scope({ verificationId, businessId, appointmentId, purpose, action });
