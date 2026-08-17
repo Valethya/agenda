@@ -11,6 +11,7 @@ import ClientContactVerification from "../src/db/models/clientContactVerificatio
 import GuestAppointmentVerificationDelivery from "../src/db/models/guestAppointmentVerificationDelivery.model.js";
 import GuestAppointmentCapability from "../src/db/models/guestAppointmentCapability.model.js";
 import * as deliveryRepository from "../src/repositories/guestAppointmentVerificationDelivery.repository.js";
+import * as capabilityRepository from "../src/repositories/guestAppointmentCapability.repository.js";
 import {
   consumeGuestAppointmentReadCapability,
   exchangeGuestAppointmentReadChallenge,
@@ -135,6 +136,19 @@ const deliveredFromRequest = async (appointmentId = appointmentA._id) => {
   return { deliveryPayload, fragment };
 };
 
+const exchangedFromDeliveredRequest = async () => {
+  const { fragment } = await deliveredFromRequest();
+  const verificationId = fragment.get("verificationId");
+  const challengeSecret = fragment.get("challenge");
+  const capability = await exchangeGuestAppointmentReadChallenge({
+    businessId: businessA._id,
+    appointmentId: appointmentA._id,
+    verificationId,
+    challengeSecret,
+  });
+  return { capability, verificationId, challengeSecret };
+};
+
 test("6.2.5-C2 verified guest Appointment READ capability", async (t) => {
   await t.test("trusted delivery uses persisted destination and issue response exposes no bearer", async () => {
     const { deliveryPayload, fragment } = await deliveredFromRequest();
@@ -155,6 +169,32 @@ test("6.2.5-C2 verified guest Appointment READ capability", async (t) => {
     assert.equal(delivery.status, "delivered");
     assert.equal(delivery.appointment.toString(), appointmentA._id.toString());
     assert.equal(JSON.stringify(persisted).includes(challenge), false);
+  });
+
+  await t.test("unconfirmed trusted delivery cannot become proof or capability", async () => {
+    let fragment;
+    const result = await requestGuestAppointmentReadChallenge({
+      businessId: businessA._id,
+      appointmentId: appointmentA._id,
+      deliverVerification: async ({ accessUrl }) => {
+        fragment = new URLSearchParams(new URL(accessUrl).hash.slice(1));
+        return false;
+      },
+    });
+    assert.deepEqual(result, { accepted: true });
+    assert.ok(fragment);
+
+    const verificationId = fragment.get("verificationId");
+    const challengeSecret = fragment.get("challenge");
+    const delivery = await GuestAppointmentVerificationDelivery.findOne({ verification: verificationId }).lean();
+    assert.equal(delivery.status, "failed");
+
+    await expectInvalid(exchangeGuestAppointmentReadChallenge({
+      businessId: businessA._id,
+      appointmentId: appointmentA._id,
+      verificationId,
+      challengeSecret,
+    }));
   });
 
   await t.test("direct C1 issue without trusted delivery cannot mint C2 capability", async () => {
@@ -253,6 +293,54 @@ test("6.2.5-C2 verified guest Appointment READ capability", async (t) => {
     const consumed = await GuestAppointmentCapability.findById(capability.capabilityId).lean();
     assert.equal(consumed.status, "consumed");
     assert.ok(consumed.consumedAt);
+  });
+
+  await t.test("expiresAt <= now fails closed while the active document still exists", async () => {
+    const { capability } = await exchangedFromDeliveredRequest();
+    const exactExpiry = new Date();
+    await GuestAppointmentCapability.updateOne(
+      { _id: capability.capabilityId },
+      { $set: { expiresAt: exactExpiry } },
+    );
+
+    await expectInvalid(consumeGuestAppointmentReadCapability({
+      businessId: businessA._id,
+      appointmentId: appointmentA._id,
+      bearer: capability.bearer,
+    }));
+
+    const stored = await GuestAppointmentCapability.findById(capability.capabilityId).lean();
+    assert.equal(stored.status, "active");
+    assert.equal(stored.expiresAt.getTime(), exactExpiry.getTime());
+  });
+
+  await t.test("revoked capability cannot be consumed or reactivated", async () => {
+    const { capability } = await exchangedFromDeliveredRequest();
+    const revoked = await capabilityRepository.revokeForScope({
+      capabilityId: capability.capabilityId,
+      businessId: businessA._id,
+      appointmentId: appointmentA._id,
+      action: "read",
+      now: new Date(),
+    });
+    assert.equal(revoked.status, "revoked");
+    assert.ok(revoked.revokedAt);
+
+    await expectInvalid(consumeGuestAppointmentReadCapability({
+      businessId: businessA._id,
+      appointmentId: appointmentA._id,
+      bearer: capability.bearer,
+    }));
+    assert.equal(
+      await capabilityRepository.revokeForScope({
+        capabilityId: capability.capabilityId,
+        businessId: businessA._id,
+        appointmentId: appointmentA._id,
+        action: "read",
+        now: new Date(),
+      }),
+      null,
+    );
   });
 
   await t.test("ambiguous legacy User email set is not used for authority delivery", async () => {
