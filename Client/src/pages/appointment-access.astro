@@ -1,0 +1,238 @@
+---
+const title = "Acceso a tu cita";
+---
+
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width" />
+    <meta name="referrer" content="no-referrer" />
+    <meta http-equiv="Cache-Control" content="no-store" />
+    <title>{title}</title>
+  </head>
+  <body>
+    <main class="access-shell" aria-live="polite">
+      <section class="access-card">
+        <p class="eyebrow">Agenda</p>
+        <h1>{title}</h1>
+        <p id="status" class="status">Verificando el enlace…</p>
+
+        <dl id="appointment" class="appointment" hidden>
+          <div><dt>Negocio</dt><dd data-field="business"></dd></div>
+          <div><dt>Servicio</dt><dd data-field="service"></dd></div>
+          <div><dt>Profesional</dt><dd data-field="professional"></dd></div>
+          <div><dt>Fecha</dt><dd data-field="date"></dd></div>
+          <div><dt>Hora</dt><dd data-field="time"></dd></div>
+          <div><dt>Estado</dt><dd data-field="status"></dd></div>
+        </dl>
+
+        <p class="boundary">
+          Este acceso permite consultar únicamente esta cita. No crea una cuenta ni habilita historial u otras acciones.
+        </p>
+      </section>
+    </main>
+
+    <script>
+      const apiBase = import.meta.env.PUBLIC_API_URL?.replace(/\/+$/u, "");
+      const statusElement = document.querySelector("#status");
+      const appointmentElement = document.querySelector("#appointment");
+      const idPattern = /^[0-9a-fA-F]{24}$/u;
+      const bearerPattern = /^[A-Za-z0-9_-]{43}$/u;
+      const expectedKeys = new Set([
+        "businessId",
+        "appointmentId",
+        "verificationId",
+        "purpose",
+        "challenge",
+      ]);
+
+      const fail = () => {
+        if (statusElement) statusElement.textContent = "Este enlace no es válido o ya fue utilizado.";
+        if (appointmentElement instanceof HTMLElement) appointmentElement.hidden = true;
+      };
+
+      const parseFragment = () => {
+        const fragment = window.location.hash.startsWith("#")
+          ? window.location.hash.slice(1)
+          : "";
+
+        // Remove bearer material from the visible URL synchronously before any
+        // verification request. The fragment was never sent in the initial HTTP
+        // request or Referer, and this page loads no third-party resources.
+        window.history.replaceState(null, "", `${window.location.pathname}${window.location.search}`);
+
+        const params = new URLSearchParams(fragment);
+        const seen = new Set();
+        for (const [key] of params.entries()) {
+          if (!expectedKeys.has(key) || seen.has(key)) return null;
+          seen.add(key);
+        }
+        if (seen.size !== expectedKeys.size) return null;
+
+        const businessId = params.get("businessId") || "";
+        const appointmentId = params.get("appointmentId") || "";
+        const verificationId = params.get("verificationId") || "";
+        const purpose = params.get("purpose") || "";
+        const challenge = params.get("challenge") || "";
+
+        if (
+          !idPattern.test(businessId)
+          || !idPattern.test(appointmentId)
+          || !idPattern.test(verificationId)
+          || purpose !== "appointment-read-bootstrap"
+          || !bearerPattern.test(challenge)
+        ) return null;
+
+        return { businessId, appointmentId, verificationId, challenge };
+      };
+
+      const postJson = async (path, body) => {
+        const response = await fetch(`${apiBase}${path}`, {
+          method: "POST",
+          credentials: "omit",
+          cache: "no-store",
+          referrerPolicy: "no-referrer",
+          headers: {
+            "Content-Type": "application/json",
+            "Cache-Control": "no-store",
+          },
+          body: JSON.stringify(body),
+        });
+
+        if (!response.ok) throw new Error("GUEST_ACCESS_FAILED");
+        return response.json();
+      };
+
+      const renderAppointment = (appointment) => {
+        const setField = (name, value) => {
+          const element = document.querySelector(`[data-field="${name}"]`);
+          if (element) element.textContent = value || "—";
+        };
+
+        setField("business", appointment?.business?.name);
+        setField("service", appointment?.service?.name);
+        setField(
+          "professional",
+          [appointment?.professional?.firstName, appointment?.professional?.lastName]
+            .filter(Boolean)
+            .join(" "),
+        );
+        setField(
+          "date",
+          appointment?.date
+            ? new Intl.DateTimeFormat("es-CL", { dateStyle: "long" }).format(new Date(appointment.date))
+            : "",
+        );
+        setField(
+          "time",
+          appointment?.startTime && appointment?.endTime
+            ? `${appointment.startTime}–${appointment.endTime}`
+            : appointment?.startTime,
+        );
+        setField("status", appointment?.status);
+
+        if (statusElement) statusElement.textContent = "Acceso verificado.";
+        if (appointmentElement instanceof HTMLElement) appointmentElement.hidden = false;
+      };
+
+      const run = async () => {
+        if (!apiBase) return fail();
+        const proof = parseFragment();
+        if (!proof) return fail();
+
+        try {
+          const verification = await postJson("/guest-appointments/read/verify", {
+            businessId: proof.businessId,
+            appointmentId: proof.appointmentId,
+            verificationId: proof.verificationId,
+            challengeSecret: proof.challenge,
+          });
+
+          // Drop the challenge reference before using the capability bearer.
+          proof.challenge = "";
+
+          const capability = verification?.capability;
+          if (
+            capability?.action !== "read"
+            || capability?.businessId !== proof.businessId
+            || capability?.appointmentId !== proof.appointmentId
+            || !bearerPattern.test(capability?.bearer || "")
+          ) throw new Error("GUEST_ACCESS_FAILED");
+
+          const result = await postJson("/guest-appointments/read", {
+            businessId: proof.businessId,
+            appointmentId: proof.appointmentId,
+            bearer: capability.bearer,
+          });
+          capability.bearer = "";
+          renderAppointment(result?.appointment);
+        } catch {
+          fail();
+        }
+      };
+
+      void run();
+    </script>
+  </body>
+</html>
+
+<style>
+  :global(*) { box-sizing: border-box; }
+  :global(body) {
+    margin: 0;
+    min-height: 100vh;
+    background: #f5f5f2;
+    color: #151515;
+    font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  }
+  .access-shell {
+    min-height: 100vh;
+    display: grid;
+    place-items: center;
+    padding: 24px;
+  }
+  .access-card {
+    width: min(100%, 560px);
+    padding: clamp(28px, 5vw, 48px);
+    background: #fff;
+    border: 1px solid #deded8;
+    border-radius: 18px;
+  }
+  .eyebrow {
+    margin: 0 0 14px;
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: .14em;
+    text-transform: uppercase;
+  }
+  h1 {
+    margin: 0;
+    font-size: clamp(32px, 7vw, 52px);
+    line-height: 1;
+    letter-spacing: -.04em;
+  }
+  .status {
+    margin: 20px 0 0;
+    color: #555;
+  }
+  .appointment {
+    margin: 32px 0 0;
+    border-top: 1px solid #deded8;
+  }
+  .appointment div {
+    display: grid;
+    grid-template-columns: minmax(100px, .7fr) 1.3fr;
+    gap: 16px;
+    padding: 14px 0;
+    border-bottom: 1px solid #ecece7;
+  }
+  dt { color: #666; }
+  dd { margin: 0; font-weight: 600; }
+  .boundary {
+    margin: 28px 0 0;
+    font-size: 13px;
+    line-height: 1.5;
+    color: #777;
+  }
+</style>
