@@ -6,7 +6,7 @@ let transporter;
 
 /**
  * Obtener o inicializar el transportador SMTP.
- * Soporta 3 modos: Resend API (HTTPS), SMTP de producción, y Ethereal (desarrollo).
+ * Soporta SMTP de producción y Ethereal (desarrollo).
  */
 const getTransporter = async () => {
   if (transporter) return transporter;
@@ -18,14 +18,11 @@ const getTransporter = async () => {
   const smtpSecure = process.env.SMTP_SECURE || process.env["SMTP-SECURE"];
 
   const hasSmtpConfig = smtpHost && smtpPort && smtpUser && smtpPass;
-
-  const smtpKeys = Object.keys(process.env).filter(k => k.toUpperCase().includes("SMTP"));
+  const smtpKeys = Object.keys(process.env).filter((key) => key.toUpperCase().includes("SMTP"));
   logger.info(`Mailer: Llaves SMTP encontradas en process.env: ${JSON.stringify(smtpKeys)}`);
 
   if (hasSmtpConfig) {
-    const isSecure = smtpSecure === 'true' || 
-                     smtpSecure === '1' || 
-                     Number(smtpPort) === 465;
+    const isSecure = smtpSecure === "true" || smtpSecure === "1" || Number(smtpPort) === 465;
     logger.info(`Mailer: Configurando transportador SMTP de producción (host=${smtpHost}, port=${smtpPort}, secure=${isSecure}, user=${smtpUser})...`);
     transporter = nodemailer.createTransport({
       host: smtpHost,
@@ -56,19 +53,28 @@ const getTransporter = async () => {
   return transporter;
 };
 
-/**
- * Envía un correo usando Resend API (HTTPS) o SMTP/Ethereal.
- * No lanza excepciones para evitar interrumpir el flujo principal.
- */
-export const sendMail = async ({ to, subject, html, fromName = "Agenda App", replyTo = null, bccEmail = null }) => {
+const deliverMail = async ({
+  to,
+  subject,
+  html,
+  fromName = "Agenda App",
+  replyTo = null,
+  bccEmail = null,
+}, { sensitive = false } = {}) => {
   const recipient = Array.isArray(to) ? to[0] : to;
-  try {
-    const fromEmail = process.env.SMTP_FROM_EMAIL || process.env["SMTP-FROM-EMAIL"] || process.env.SMTP_USER || process.env["SMTP-USER"] || "noreply@atmosferastudio.cl";
 
-    // Si hay una API Key de Resend configurada, enviamos por API REST (HTTPS)
+  try {
+    const fromEmail = process.env.SMTP_FROM_EMAIL
+      || process.env["SMTP-FROM-EMAIL"]
+      || process.env.SMTP_USER
+      || process.env["SMTP-USER"]
+      || "noreply@atmosferastudio.cl";
+
     if (process.env.RESEND_API_KEY) {
-      logger.info(`Mailer: Enviando email a ${recipient} usando la API de Resend (HTTPS)...`);
-      
+      if (!sensitive) {
+        logger.info(`Mailer: Enviando email a ${recipient} usando la API de Resend (HTTPS)...`);
+      }
+
       const payload = {
         from: `"${fromName}" <${fromEmail}>`,
         to: [recipient],
@@ -83,23 +89,32 @@ export const sendMail = async ({ to, subject, html, fromName = "Agenda App", rep
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "Authorization": `Bearer ${process.env.RESEND_API_KEY}`,
+          Authorization: `Bearer ${process.env.RESEND_API_KEY}`,
         },
         body: JSON.stringify(payload),
       });
 
-      const resData = await response.json();
+      let resData = {};
+      try {
+        resData = await response.json();
+      } catch {
+        resData = {};
+      }
+
       if (!response.ok) {
+        if (sensitive) throw new Error("SENSITIVE_MAIL_DELIVERY_FAILED");
         throw new Error(resData.message || JSON.stringify(resData));
       }
 
-      logger.info(`Email enviado con éxito a ${recipient} vía Resend. ID: ${resData.id}`);
+      if (sensitive) {
+        logger.info("Mailer: Email sensible entregado al proveedor configurado.");
+      } else {
+        logger.info(`Email enviado con éxito a ${recipient} vía Resend. ID: ${resData.id}`);
+      }
       return resData;
     }
 
-    // Comportamiento tradicional por SMTP o Ethereal
     const activeTransporter = await getTransporter();
-
     const mailOptions = {
       from: `"${fromName}" <${fromEmail}>`,
       to: recipient,
@@ -111,21 +126,45 @@ export const sendMail = async ({ to, subject, html, fromName = "Agenda App", rep
     if (bccEmail && bccEmail !== recipient) mailOptions.bcc = bccEmail;
 
     const info = await activeTransporter.sendMail(mailOptions);
-    logger.info(`Email enviado con éxito a ${recipient}. MessageId: ${info.messageId}`);
 
-    if (activeTransporter.options.host === "smtp.ethereal.email") {
-      console.log(`\n=================== EMAIL ENVIADO (PRUEBAS) ===================`);
-      console.log(`De: "${fromName}" <${fromEmail}>`);
-      console.log(`Para: ${recipient}`);
-      if (mailOptions.bcc) console.log(`Copia Oculta (BCC): ${mailOptions.bcc}`);
-      if (replyTo) console.log(`Responder a (Reply-To): ${replyTo}`);
-      console.log(`Asunto: ${subject}`);
-      console.log(`Previsualizar correo en tu navegador: ${nodemailer.getTestMessageUrl(info)}`);
-      console.log(`================================================================\n`);
+    if (sensitive) {
+      logger.info("Mailer: Email sensible entregado al transportador configurado.");
+    } else {
+      logger.info(`Email enviado con éxito a ${recipient}. MessageId: ${info.messageId}`);
+
+      if (activeTransporter.options.host === "smtp.ethereal.email") {
+        console.log("\n=================== EMAIL ENVIADO (PRUEBAS) ===================");
+        console.log(`De: "${fromName}" <${fromEmail}>`);
+        console.log(`Para: ${recipient}`);
+        if (mailOptions.bcc) console.log(`Copia Oculta (BCC): ${mailOptions.bcc}`);
+        if (replyTo) console.log(`Responder a (Reply-To): ${replyTo}`);
+        console.log(`Asunto: ${subject}`);
+        console.log(`Previsualizar correo en tu navegador: ${nodemailer.getTestMessageUrl(info)}`);
+        console.log("================================================================\n");
+      }
     }
 
     return info;
   } catch (error) {
+    if (sensitive) {
+      // Never include recipient, provider payload, bearer URL, HTML or provider
+      // error text in logs for bearer-bearing messages.
+      logger.error("Mailer: Error al entregar email sensible.");
+      return undefined;
+    }
+
     logger.error(`Error enviando email a ${recipient}: ${error.message}`);
+    return undefined;
   }
 };
+
+/**
+ * Compatibilidad para correos operacionales existentes.
+ */
+export const sendMail = async (options) => deliverMail(options, { sensitive: false });
+
+/**
+ * Transporte para mensajes que contienen bearer material. No registra destino,
+ * contenido, URL, error del proveedor ni preview URL.
+ */
+export const sendSensitiveMail = async (options) => deliverMail(options, { sensitive: true });
