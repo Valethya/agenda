@@ -120,7 +120,7 @@ const title = "Acceso a tu cita";
         return { businessId, appointmentId, verificationId, challenge };
       };
 
-      const postJson = async <T>(path: string, body: Record<string, string>): Promise<T> => {
+      const postJson = async <T,>(path: string, body: Record<string, string>): Promise<T> => {
         if (!apiBase) throw new Error("GUEST_ACCESS_FAILED");
         const response = await fetch(`${apiBase}${path}`, {
           method: "POST",
