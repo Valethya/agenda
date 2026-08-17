@@ -6,13 +6,13 @@
 import logger from "../../config/logger.js";
 import * as businessConfigRepository from "../../repositories/businessConfig.repository.js";
 import * as businessRepository from "../../repositories/business.repository.js";
-import { sendMail } from "./transporter.js";
+import { sendMail, sendSensitiveMail } from "./transporter.js";
 import * as templates from "./templates.js";
+import { guestAppointmentVerificationTemplate } from "./guestAppointmentVerification.template.js";
 import { frontendUrl } from "../../config/env.js";
 
-// --- Caché de branding ---
 const brandingCache = new Map();
-const CACHE_TTL = 15 * 60 * 1000; // 15 minutos
+const CACHE_TTL = 15 * 60 * 1000;
 
 const getBrandingSettings = async (businessId) => {
   const settings = {
@@ -27,9 +27,7 @@ const getBrandingSettings = async (businessId) => {
 
   const cacheKey = businessId.toString();
   const cached = brandingCache.get(cacheKey);
-  if (cached && (Date.now() - cached.timestamp < CACHE_TTL)) {
-    return cached.data;
-  }
+  if (cached && (Date.now() - cached.timestamp < CACHE_TTL)) return cached.data;
 
   try {
     const config = await businessConfigRepository.getConfig(businessId);
@@ -57,13 +55,10 @@ const getBrandingSettings = async (businessId) => {
   return settings;
 };
 
-// Helper: construir fromName y replyTo desde branding
 const getMailMeta = (branding) => ({
   fromName: branding.businessName || process.env.SMTP_FROM_NAME || process.env["SMTP-FROM-NAME"] || "Agenda App",
   replyTo: branding.contactEmail || null,
 });
-
-// --- API Pública (mismas firmas que el mailer.js original) ---
 
 export const sendResetPasswordEmail = async (email, token) => {
   const resetUrl = `${frontendUrl}/reset-password?token=${token}`;
@@ -103,5 +98,30 @@ export const sendWorkerPendingApprovalEmail = async (workerEmail, appointmentDet
   await sendMail({ to: workerEmail, ...template, ...meta, businessId });
 };
 
-// Re-export sendMail for direct usage (e.g. auth.service.js reset password)
-export { sendMail } from "./transporter.js";
+/**
+ * Trusted C2 delivery. The caller must pass the destination persisted by C1;
+ * this function has no request object and therefore cannot trust Host/Origin/
+ * Referer/X-Forwarded-* headers. Success means the configured transport/provider
+ * accepted the message. Sensitive transport suppresses recipient, body, URL,
+ * provider errors and preview links from logs.
+ */
+export const sendGuestAppointmentVerificationEmail = async ({
+  destination,
+  businessId,
+  accessUrl,
+}) => {
+  const branding = await getBrandingSettings(businessId);
+  const template = guestAppointmentVerificationTemplate({
+    accessUrl,
+    businessName: branding.businessName,
+  });
+  const meta = getMailMeta(branding);
+  const result = await sendSensitiveMail({
+    to: destination,
+    ...template,
+    ...meta,
+  });
+  return Boolean(result);
+};
+
+export { sendMail, sendSensitiveMail } from "./transporter.js";
