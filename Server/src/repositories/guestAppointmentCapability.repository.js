@@ -5,7 +5,10 @@ import ClientContactVerification, {
 } from "../db/models/clientContactVerification.model.js";
 import GuestAppointmentVerificationDelivery from "../db/models/guestAppointmentVerificationDelivery.model.js";
 import GuestAppointmentCapability from "../db/models/guestAppointmentCapability.model.js";
-import { GUEST_APPOINTMENT_ACTIONS } from "../security/guestAppointmentCapability.constants.js";
+import {
+  GUEST_APPOINTMENT_ACTIONS,
+  GUEST_APPOINTMENT_IMPLEMENTED_PURPOSE_TO_ACTION,
+} from "../security/guestAppointmentCapability.constants.js";
 
 const OBJECT_ID_HEX_PATTERN = /^[0-9a-fA-F]{24}$/u;
 const SECRET_HASH_PATTERN = /^[0-9a-f]{64}$/u;
@@ -26,6 +29,12 @@ const requirePurpose = (purpose) => {
   return purpose;
 };
 
+const requireImplementedMapping = (purpose, action) => {
+  if (GUEST_APPOINTMENT_IMPLEMENTED_PURPOSE_TO_ACTION[purpose] !== action) {
+    throw new TypeError("purpose/action no implementado");
+  }
+};
+
 const requireSecretHash = (secretHash) => {
   if (typeof secretHash !== "string" || !SECRET_HASH_PATTERN.test(secretHash)) throw new TypeError("secretHash inválido");
   return secretHash;
@@ -42,6 +51,7 @@ export const createActiveForScope = async ({ businessId, appointmentId, verifica
   const verification = requireStrictObjectId(verificationId, "verificationId");
   const purpose = requirePurpose(verificationPurpose);
   const scopedAction = requireAction(action);
+  requireImplementedMapping(purpose, scopedAction);
   const hash = requireSecretHash(secretHash);
   const expiry = requireDate(expiresAt, "expiresAt");
 
@@ -78,6 +88,9 @@ export const consumeForScope = async ({ businessId, appointmentId, action, secre
   const business = requireStrictObjectId(businessId, "businessId");
   const appointment = requireStrictObjectId(appointmentId, "appointmentId");
   const scopedAction = requireAction(action);
+  if (!Object.values(GUEST_APPOINTMENT_IMPLEMENTED_PURPOSE_TO_ACTION).includes(scopedAction)) {
+    throw new TypeError("action no implementada");
+  }
   const hash = requireSecretHash(secretHash);
   const scopedNow = requireDate(now, "now");
   return GuestAppointmentCapability.findOneAndUpdate(
@@ -92,6 +105,9 @@ export const revokeForScope = async ({ capabilityId, businessId, appointmentId, 
   const business = requireStrictObjectId(businessId, "businessId");
   const appointment = requireStrictObjectId(appointmentId, "appointmentId");
   const scopedAction = requireAction(action);
+  if (!Object.values(GUEST_APPOINTMENT_IMPLEMENTED_PURPOSE_TO_ACTION).includes(scopedAction)) {
+    throw new TypeError("action no implementada");
+  }
   const scopedNow = requireDate(now, "now");
   return GuestAppointmentCapability.findOneAndUpdate(
     { _id: capability, business, appointment, action: scopedAction, status: "active", expiresAt: { $gt: scopedNow } },
