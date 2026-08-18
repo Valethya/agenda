@@ -1,4 +1,10 @@
 import { z } from "zod";
+import { isStrictISODate } from "../utils/date.js";
+
+const isoDateSchema = (requiredMessage, formatMessage) => z
+  .string({ required_error: requiredMessage })
+  .regex(/^\d{4}-\d{2}-\d{2}$/, formatMessage)
+  .refine(isStrictISODate, "La fecha debe ser una fecha Gregoriana válida");
 
 // Validación de creación de citas
 export const createAppointmentSchema = z.object({
@@ -9,9 +15,7 @@ export const createAppointmentSchema = z.object({
     service: z
       .string({ required_error: "El ID del servicio es obligatorio" })
       .regex(/^[0-9a-fA-F]{24}$/, "ID de servicio inválido"),
-    date: z
-      .string({ required_error: "La fecha es obligatoria" })
-      .regex(/^\d{4}-\d{2}-\d{2}$/, "La fecha debe estar en formato YYYY-MM-DD"),
+    date: isoDateSchema("La fecha es obligatoria", "La fecha debe estar en formato YYYY-MM-DD"),
     startTime: z
       .string({ required_error: "La hora de inicio es obligatoria" })
       .regex(/^([01]\d|2[0-3]):[0-5]\d$/, "Formato de hora de inicio inválido (HH:MM)"),
@@ -41,9 +45,7 @@ export const availabilityQuerySchema = z.object({
     serviceId: z
       .string({ required_error: "El parámetro serviceId es obligatorio" })
       .regex(/^[0-9a-fA-F]{24}$/, "ID de servicio inválido"),
-    date: z
-      .string({ required_error: "El parámetro date es obligatorio" })
-      .regex(/^\d{4}-\d{2}-\d{2}$/, "El formato de fecha debe ser YYYY-MM-DD"),
+    date: isoDateSchema("El parámetro date es obligatorio", "El formato de fecha debe ser YYYY-MM-DD"),
   }),
 });
 
@@ -53,9 +55,7 @@ export const createBlockSchema = z.object({
     workerId: z
       .string({ required_error: "El ID del trabajador es obligatorio" })
       .regex(/^[0-9a-fA-F]{24}$/, "ID de trabajador inválido"),
-    date: z
-      .string({ required_error: "La fecha del bloqueo es obligatoria" })
-      .regex(/^\d{4}-\d{2}-\d{2}$/, "El formato de fecha debe ser YYYY-MM-DD"),
+    date: isoDateSchema("La fecha del bloqueo es obligatoria", "El formato de fecha debe ser YYYY-MM-DD"),
     startTime: z
       .string({ required_error: "La hora de inicio es obligatoria" })
       .regex(/^([01]\d|2[0-3]):[0-5]\d$/, "Formato de hora inválido (HH:MM)"),
