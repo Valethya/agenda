@@ -68,6 +68,8 @@ const globalLimiter = rateLimit({
   limit: 200, // Límite de 200 peticiones por ventana
   message: {
     status: "fail",
+    statusCode: 429,
+    code: "RATE_LIMITED",
     message: "Demasiadas peticiones desde esta dirección IP. Por favor, intente más tarde.",
   },
   standardHeaders: true,
