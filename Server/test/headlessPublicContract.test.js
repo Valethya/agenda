@@ -118,22 +118,24 @@ test("6.2.6-A headless public booking contract", async (t) => {
     assert.strictEqual(await Appointment.countDocuments({}), before);
   });
 
-  await t.test("booking guest no requiere login y conserva contact provenance sin exponerla", async () => {
+  await t.test("booking guest no requiere login, oculta authority interna y retry no duplica cita activa", async () => {
+    const bookingBody = {
+      worker: seed.worker._id.toString(),
+      service: seed.service._id.toString(),
+      date: "2099-01-05",
+      startTime: "09:00",
+      clientInfo: {
+        firstName: "Guest",
+        lastName: "Headless",
+        email: "headless-guest@example.com",
+        phone: "+56970000002",
+      },
+    };
+
     const response = await fetch(`${baseUrl}/appointments?businessId=${seed.business._id}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        worker: seed.worker._id.toString(),
-        service: seed.service._id.toString(),
-        date: "2099-01-05",
-        startTime: "09:00",
-        clientInfo: {
-          firstName: "Guest",
-          lastName: "Headless",
-          email: "headless-guest@example.com",
-          phone: "+56970000002",
-        },
-      }),
+      body: JSON.stringify(bookingBody),
     });
 
     assert.strictEqual(response.status, 201);
@@ -151,6 +153,23 @@ test("6.2.6-A headless public booking contract", async (t) => {
     assert.strictEqual(stored.business.toString(), seed.business._id.toString());
     assert.strictEqual(stored.guestContact?.destination, "headless-guest@example.com");
     assert.strictEqual(stored.guestContact?.provenance, "guest-booking-input-v1");
+
+    const retry = await fetch(`${baseUrl}/appointments?businessId=${seed.business._id}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(bookingBody),
+    });
+    assert.strictEqual(retry.status, 409);
+    assert.strictEqual(
+      await Appointment.countDocuments({
+        business: seed.business._id,
+        worker: seed.worker._id,
+        date: new Date("2099-01-05T00:00:00.000Z"),
+        startTime: "09:00",
+        status: { $in: ["pending_payment", "pending", "confirmed", "completed"] },
+      }),
+      1,
+    );
   });
 
   await t.test("Appointment ID por sí solo no concede detalle ni acciones", async () => {
