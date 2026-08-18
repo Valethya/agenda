@@ -1,18 +1,25 @@
 import * as serviceService from "../services/service.service.js";
+import { projectPublicService } from "../services/publicBookingContract.service.js";
+
+const isPublicBookingRead = (req) => !req.tenantAuthority;
 
 export const getServices = async (req, res, next) => {
   try {
-    const onlyActive = req.tenantAuthority?.role !== "admin";
+    const publicRead = isPublicBookingRead(req);
+    const onlyActive = publicRead || req.tenantAuthority?.role !== "admin";
     const services = await serviceService.getAllServices(req.businessId, onlyActive);
-    res.status(200).json({ status: "success", results: services.length, payload: services });
+    const payload = publicRead ? services.map(projectPublicService) : services;
+    res.status(200).json({ status: "success", results: payload.length, payload });
   } catch (error) { next(error); }
 };
 
 export const getService = async (req, res, next) => {
   try {
-    const onlyActive = req.tenantAuthority?.role !== "admin";
+    const publicRead = isPublicBookingRead(req);
+    const onlyActive = publicRead || req.tenantAuthority?.role !== "admin";
     const service = await serviceService.getServiceById(req.params.id, req.businessId, onlyActive);
-    res.status(200).json({ status: "success", payload: service });
+    const payload = publicRead ? projectPublicService(service) : service;
+    res.status(200).json({ status: "success", payload });
   } catch (error) { next(error); }
 };
 
