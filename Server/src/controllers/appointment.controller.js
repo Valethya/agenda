@@ -60,7 +60,7 @@ export const createAppointment = async (req, res, next) => {
 
     const payload = publicBooking
       ? projectPublicAppointmentCreated(appointment)
-      : appointment;
+      : projectInternalAppointment(appointment);
 
     res.status(201).json({ status: "success", message: "Cita reservada exitosamente", payload });
   } catch (error) { next(error); }
