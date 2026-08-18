@@ -1,6 +1,6 @@
 # Fase 6.2.6-A — Contrato headless público mínimo
 
-**Estado:** hardening de segunda revisión implementado; cierre sujeto a CI final y nueva revisión adversarial  
+**Estado:** hardening de segunda revisión implementado; CI verde, pendiente nueva revisión adversarial  
 **Fecha:** 18 de agosto de 2026  
 **Baseline verificada:** `master@3f2ab734d412828f5a77ec72b778a8d575a14cd4`  
 **Precedente:** PR #29 / 6.2.5-C2 merged en esa baseline  
@@ -430,17 +430,18 @@ El callback se resuelve fail-closed en este orden:
 ```text
 token_ws
 -> Payment existente con status=pending
--> Payment.appointment
--> Payment.business
+-> Payment.appointment + Payment.business fijan el scope local
+-> Appointment debe existir
+-> Appointment.business debe coincidir con Payment.business
+-> Appointment debe estar pending_payment
+-> Business y Service asociados deben existir
 -> commit Transbank
 -> buy_order debe coincidir exactamente con Payment.appointment
--> Appointment debe existir y pertenecer a Payment.business
--> Appointment debe estar pending_payment
 -> monto/status Transbank válido
 -> transición aprobada o rechazada
 ```
 
-Un `Payment` de Business B no puede transicionar una Appointment de A. Un `buy_order` distinto al Appointment fijado por el Payment pending falla sin transición.
+Un `Payment` de Business B no puede transicionar una Appointment de A y esa incoherencia local falla **antes** de invocar `commit` al proveedor. Un `buy_order` distinto al Appointment fijado por el Payment pending sólo puede detectarse después del `commit`, pero falla sin transición local.
 
 El gate oficial prepara fixtures directamente en estado `Payment pending + Appointment pending_payment`; no reabre `/payments/initiate` para fabricar fixtures.
 
