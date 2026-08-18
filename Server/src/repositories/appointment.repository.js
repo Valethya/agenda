@@ -3,6 +3,9 @@ import Appointment from "../db/models/appointment.model.js";
 const PAYMENT_SETTLEMENT_STATUSES = new Set(["partially_paid", "fully_paid"]);
 
 const populateProtectedTenantRelations = (query, businessId) => query
+  // Sólo las lecturas internas protegidas necesitan guestContact para construir
+  // el DTO operacional. Nunca se serializa este subdocumento raw.
+  .select("+guestContact")
   .populate("client", "firstName lastName email phone")
   .populate("worker", "firstName lastName email phone")
   .populate({
