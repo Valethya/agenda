@@ -16,6 +16,16 @@ await connectDB();
 // Sembrar dos negocios para comprobar resolución explícita y aislamiento.
 await cleanTestData();
 const seed = await seedTestData();
+const publicServiceB = await Service.create({
+  name: "Servicio público de Negocio B",
+  description: "Servicio para comprobar tenant explícito con sesión ambiente",
+  duration: 30,
+  price: 12000,
+  depositAmount: 0,
+  business: seed.businessB._id,
+  workers: [seed.workerB._id],
+  isActive: true,
+});
 
 // Creamos un servidor de pruebas en un puerto dinámico efímero (evita colisiones de puerto)
 const server = app.listen(0);
@@ -30,6 +40,17 @@ const loginAs = async (email, password) => {
   });
   assert.ok(response.status === 200 || response.status === 201);
   return response.headers.get("set-cookie");
+};
+
+const assertPublicServiceProjection = (service, businessId) => {
+  assert.deepStrictEqual(
+    Object.keys(service).sort(),
+    ["business", "depositAmount", "description", "duration", "id", "name", "price"],
+  );
+  assert.strictEqual(service.business, businessId.toString());
+  for (const forbidden of ["workers", "isActive", "createdAt", "updatedAt"]) {
+    assert.ok(!(forbidden in service));
+  }
 };
 
 test("Servidor Express - Endpoints Básicos", async (t) => {
@@ -115,26 +136,28 @@ test("Servidor Express - Endpoints Básicos", async (t) => {
     assert.strictEqual(data.error, "Route not found");
   });
 
-  await t.test("Admin autenticado no debería cambiar de tenant mediante query", async () => {
+  await t.test("Admin autenticado de A + tenant B explícito usa contrato público de B", async () => {
     const cookie = await loginAs("test-admin@example.com", "passwordAdmin");
     const response = await fetch(`${baseUrl}/services?slug=${seed.businessB.slug}`, {
       headers: { Cookie: cookie },
     });
     assert.strictEqual(response.status, 200);
     const data = await response.json();
-    assert.ok(data.payload.length > 0);
-    assert.ok(data.payload.every((service) => service.business === seed.business._id.toString()));
+    assert.ok(data.payload.some((service) => service.id === publicServiceB._id.toString()));
+    assert.ok(data.payload.every((service) => service.business === seed.businessB._id.toString()));
+    data.payload.forEach((service) => assertPublicServiceProjection(service, seed.businessB._id));
   });
 
-  await t.test("Worker autenticado no debería cambiar de tenant mediante header", async () => {
+  await t.test("Worker autenticado de A + header B explícito usa contrato público de B", async () => {
     const cookie = await loginAs("test-worker@example.com", "passwordWorker");
     const response = await fetch(`${baseUrl}/services`, {
       headers: { Cookie: cookie, "x-business-slug": seed.businessB.slug },
     });
     assert.strictEqual(response.status, 200);
     const data = await response.json();
-    assert.ok(data.payload.length > 0);
-    assert.ok(data.payload.every((service) => service.business === seed.business._id.toString()));
+    assert.ok(data.payload.some((service) => service.id === publicServiceB._id.toString()));
+    assert.ok(data.payload.every((service) => service.business === seed.businessB._id.toString()));
+    data.payload.forEach((service) => assertPublicServiceProjection(service, seed.businessB._id));
   });
 
   await t.test("Miembro autenticado de un negocio inactivo debería recibir 403", async () => {
