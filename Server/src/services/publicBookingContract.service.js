@@ -68,13 +68,21 @@ export const getPublicProfessionalsForService = async ({ businessId, serviceId }
   if (!service) throw new NotFoundError(PUBLIC_RESOURCE_NOT_AVAILABLE);
 
   const workerIds = Array.isArray(service.workers) ? service.workers : [];
-  const participants = await Promise.allSettled(
-    workerIds.map((workerId) => resolveActiveTenantParticipant(workerId, businessId, {
-      notFoundMessage: PUBLIC_RESOURCE_NOT_AVAILABLE,
-    })),
-  );
+  const participants = await Promise.all(workerIds.map(async (workerId) => {
+    try {
+      return await resolveActiveTenantParticipant(workerId, businessId, {
+        notFoundMessage: PUBLIC_RESOURCE_NOT_AVAILABLE,
+      });
+    } catch (error) {
+      // Un profesional revocado/inactivo deja de ser elegible y se omite. Los
+      // errores de infraestructura o programación deben propagarse; nunca se
+      // degradan silenciosamente a un array parcial con 200.
+      if (error instanceof NotFoundError) return null;
+      throw error;
+    }
+  }));
 
   return participants
-    .filter((result) => result.status === "fulfilled")
-    .map((result) => projectPublicProfessional(result.value.user));
+    .filter(Boolean)
+    .map((participant) => projectPublicProfessional(participant.user));
 };
