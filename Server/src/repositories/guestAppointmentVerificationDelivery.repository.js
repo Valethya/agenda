@@ -4,6 +4,7 @@ import ClientContactVerification, {
   CLIENT_CONTACT_VERIFICATION_PURPOSES,
 } from "../db/models/clientContactVerification.model.js";
 import GuestAppointmentVerificationDelivery from "../db/models/guestAppointmentVerificationDelivery.model.js";
+import GuestAppointmentVerificationJob from "../db/models/guestAppointmentVerificationJob.model.js";
 import {
   GUEST_APPOINTMENT_ACTIONS,
   GUEST_APPOINTMENT_IMPLEMENTED_PURPOSE_TO_ACTION,
@@ -46,12 +47,19 @@ const requireDate = (value, fieldName) => {
   return value;
 };
 
-const scope = ({ verificationId, businessId, appointmentId, purpose, action }) => {
+const requireGeneration = (value) => {
+  if (!Number.isInteger(value) || value < 1) throw new TypeError("jobGeneration inválido");
+  return value;
+};
+
+const scope = ({ verificationId, jobId, jobGeneration, businessId, appointmentId, purpose, action }) => {
   const scopedPurpose = requirePurpose(purpose);
   const scopedAction = requireAction(action);
   requireImplementedMapping(scopedPurpose, scopedAction);
   return {
     verification: requireStrictObjectId(verificationId, "verificationId"),
+    job: requireStrictObjectId(jobId, "jobId"),
+    jobGeneration: requireGeneration(jobGeneration),
     business: requireStrictObjectId(businessId, "businessId"),
     appointment: requireStrictObjectId(appointmentId, "appointmentId"),
     purpose: scopedPurpose,
@@ -59,9 +67,9 @@ const scope = ({ verificationId, businessId, appointmentId, purpose, action }) =
   };
 };
 
-export const createPending = async ({ verificationId, businessId, appointmentId, purpose, action }) => {
-  const scoped = scope({ verificationId, businessId, appointmentId, purpose, action });
-  const [appointmentExists, verificationExists] = await Promise.all([
+export const createPending = async ({ verificationId, jobId, jobGeneration, businessId, appointmentId, purpose, action }) => {
+  const scoped = scope({ verificationId, jobId, jobGeneration, businessId, appointmentId, purpose, action });
+  const [appointmentExists, verificationExists, jobExists] = await Promise.all([
     Appointment.exists({ _id: scoped.appointment, business: scoped.business }),
     ClientContactVerification.exists({
       _id: scoped.verification,
@@ -69,8 +77,18 @@ export const createPending = async ({ verificationId, businessId, appointmentId,
       purpose: scoped.purpose,
       status: "pending",
     }),
+    GuestAppointmentVerificationJob.exists({
+      _id: scoped.job,
+      generation: scoped.jobGeneration,
+      business: scoped.business,
+      appointment: scoped.appointment,
+      purpose: scoped.purpose,
+      action: scoped.action,
+      status: "processing",
+      verification: scoped.verification,
+    }),
   ]);
-  if (!appointmentExists || !verificationExists) throw new ReferenceError("Delivery scope no disponible");
+  if (!appointmentExists || !verificationExists || !jobExists) throw new ReferenceError("Delivery scope no disponible");
   return GuestAppointmentVerificationDelivery.create({
     ...scoped,
     status: "pending",
@@ -79,9 +97,9 @@ export const createPending = async ({ verificationId, businessId, appointmentId,
   });
 };
 
-const transition = async ({ deliveryId, verificationId, businessId, appointmentId, purpose, action, now, nextStatus }) => {
+const transition = async ({ deliveryId, verificationId, jobId, jobGeneration, businessId, appointmentId, purpose, action, now, nextStatus }) => {
   const scopedDeliveryId = requireStrictObjectId(deliveryId, "deliveryId");
-  const scoped = scope({ verificationId, businessId, appointmentId, purpose, action });
+  const scoped = scope({ verificationId, jobId, jobGeneration, businessId, appointmentId, purpose, action });
   const scopedNow = requireDate(now, "now");
   const timestampField = nextStatus === "delivered" ? "deliveredAt" : "failedAt";
   return GuestAppointmentVerificationDelivery.findOneAndUpdate(
@@ -95,9 +113,15 @@ export const markDelivered = async (args) => transition({ ...args, nextStatus: "
 export const markFailed = async (args) => transition({ ...args, nextStatus: "failed" });
 
 export const findDeliveredByScope = async ({ verificationId, businessId, appointmentId, purpose, action }) => {
-  const scoped = scope({ verificationId, businessId, appointmentId, purpose, action });
+  const scopedPurpose = requirePurpose(purpose);
+  const scopedAction = requireAction(action);
+  requireImplementedMapping(scopedPurpose, scopedAction);
   return GuestAppointmentVerificationDelivery.findOne({
-    ...scoped,
+    verification: requireStrictObjectId(verificationId, "verificationId"),
+    business: requireStrictObjectId(businessId, "businessId"),
+    appointment: requireStrictObjectId(appointmentId, "appointmentId"),
+    purpose: scopedPurpose,
+    action: scopedAction,
     status: "delivered",
     deliveredAt: { $ne: null },
   });

@@ -15,6 +15,16 @@ const guestAppointmentVerificationDeliverySchema = new mongoose.Schema(
       ref: "ClientContactVerification",
       required: true,
     },
+    job: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "GuestAppointmentVerificationJob",
+      required: true,
+    },
+    jobGeneration: {
+      type: Number,
+      min: 1,
+      required: true,
+    },
     business: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Business",

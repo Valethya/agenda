@@ -1,13 +1,14 @@
 import crypto from "node:crypto";
 import mongoose from "mongoose";
-import logger from "../config/logger.js";
 import * as appointmentRepository from "../repositories/appointment.repository.js";
 import * as deliveryRepository from "../repositories/guestAppointmentVerificationDelivery.repository.js";
 import * as capabilityRepository from "../repositories/guestAppointmentCapability.repository.js";
-import { consumeVerificationForBusiness, issueVerificationForBusiness, revokeVerificationForBusiness } from "./clientContactVerification.service.js";
-import { sendGuestAppointmentVerificationEmail } from "./email/emailService.js";
-import { buildGuestAppointmentVerificationUrl } from "../security/guestAppointmentAccessUrl.js";
-import { GUEST_APPOINTMENT_IMPLEMENTED_PURPOSE_TO_ACTION, GUEST_APPOINTMENT_PURPOSES } from "../security/guestAppointmentCapability.constants.js";
+import * as jobRepository from "../repositories/guestAppointmentVerificationJob.repository.js";
+import { consumeExactVerificationForBusiness } from "./clientContactVerification.service.js";
+import {
+  GUEST_APPOINTMENT_IMPLEMENTED_PURPOSE_TO_ACTION,
+  GUEST_APPOINTMENT_PURPOSES,
+} from "../security/guestAppointmentCapability.constants.js";
 
 const ID_RE = /^[0-9a-fA-F]{24}$/u;
 const BEARER_RE = /^[A-Za-z0-9_-]{43}$/u;
@@ -41,14 +42,6 @@ const coherent = (appointment, businessId) => Boolean(
   appointment && id(appointment.business) === id(businessId)
   && appointment.service && id(appointment.service.business) === id(businessId),
 );
-const operationalEmail = (appointment) => {
-  const emails = Array.isArray(appointment?.client?.email)
-    ? appointment.client.email.filter((value) => typeof value === "string" && value.trim())
-    : [];
-  // Legacy Users can aggregate emails from multiple bookings. Without an
-  // Appointment contact snapshot, multiple candidates are ambiguous.
-  return emails.length === 1 ? emails[0] : null;
-};
 const hashCapability = ({ businessId, appointmentId, secret }) => crypto
   .createHash("sha256")
   .update(businessId.toHexString(), "utf8").update("\0", "utf8")
@@ -58,72 +51,25 @@ const hashCapability = ({ businessId, appointmentId, secret }) => crypto
 
 const ACCEPTED = Object.freeze({ accepted: true });
 
-export const requestGuestAppointmentReadChallenge = async ({
-  businessId,
-  appointmentId,
-  deliverVerification = sendGuestAppointmentVerificationEmail,
-}) => {
+/**
+ * Public acceptance boundary. This path never resolves Appointment, User,
+ * CustomerProfile or email and never waits for external delivery. It persists
+ * one durable, cooldown-protected intent for the exact resource/action scope.
+ */
+export const requestGuestAppointmentReadChallenge = async ({ businessId, appointmentId }) => {
   const business = objectId(businessId);
-  const appointmentIdScoped = objectId(appointmentId);
-  let appointment;
+  const appointment = objectId(appointmentId);
   try {
-    appointment = await appointmentRepository.findByIdAndBusiness(appointmentIdScoped, business);
-  } catch {
-    return ACCEPTED;
-  }
-  const destination = coherent(appointment, business) ? operationalEmail(appointment) : null;
-  if (!destination) return ACCEPTED;
-
-  let issued;
-  let delivery;
-  try {
-    issued = await issueVerificationForBusiness({ businessId: business, channel: "email", destination, purpose: PURPOSE });
-    delivery = await deliveryRepository.createPending({
-      verificationId: issued.verificationId,
+    await jobRepository.enqueueForScope({
       businessId: business,
-      appointmentId: appointmentIdScoped,
-      purpose: PURPOSE,
-      action: ACTION,
-    });
-    const accessUrl = buildGuestAppointmentVerificationUrl({
-      businessId: business,
-      appointmentId: appointmentIdScoped,
-      verificationId: issued.verificationId,
-      purpose: PURPOSE,
-      challengeSecret: issued.secret,
-    });
-    const delivered = await deliverVerification({ destination: issued.destination, businessId: business, accessUrl });
-    if (!delivered) throw new Error("DELIVERY_FAILED");
-    const marked = await deliveryRepository.markDelivered({
-      deliveryId: delivery._id,
-      verificationId: issued.verificationId,
-      businessId: business,
-      appointmentId: appointmentIdScoped,
+      appointmentId: appointment,
       purpose: PURPOSE,
       action: ACTION,
       now: new Date(),
     });
-    if (!marked) throw new Error("DELIVERY_STATE_FAILED");
   } catch {
-    logger.warn("Guest appointment verification delivery was not completed.");
-    if (delivery && issued) {
-      try {
-        await deliveryRepository.markFailed({
-          deliveryId: delivery._id,
-          verificationId: issued.verificationId,
-          businessId: business,
-          appointmentId: appointmentIdScoped,
-          purpose: PURPOSE,
-          action: ACTION,
-          now: new Date(),
-        });
-      } catch {}
-    }
-    if (issued) {
-      try {
-        await revokeVerificationForBusiness({ verificationId: issued.verificationId, businessId: business, purpose: PURPOSE });
-      } catch {}
-    }
+    // The external contract intentionally remains uniform. A storage failure
+    // must not fall back to synchronous delivery or resource probing.
   }
   return ACCEPTED;
 };
@@ -148,13 +94,28 @@ export const exchangeGuestAppointmentReadChallenge = async ({
   });
   if (!delivered) throw invalidProof();
 
-  let consumed;
+  const trustedJob = await jobRepository.hasDeliveredProofState({
+    jobId: delivered.job,
+    generation: delivered.jobGeneration,
+    businessId: business,
+    appointmentId: appointment,
+    purpose: PURPOSE,
+    action: ACTION,
+    verificationId: verification,
+    deliveryId: delivered._id,
+  });
+  if (!trustedJob) throw invalidProof();
+
   try {
-    consumed = await consumeVerificationForBusiness({ businessId: business, purpose: PURPOSE, secret: challenge });
+    await consumeExactVerificationForBusiness({
+      verificationId: verification,
+      businessId: business,
+      purpose: PURPOSE,
+      secret: challenge,
+    });
   } catch {
     throw invalidProof();
   }
-  if (id(consumed.verificationId) !== id(verification)) throw invalidProof();
 
   const secret = crypto.randomBytes(32).toString("base64url");
   const expiresAt = new Date(Date.now() + CAPABILITY_TTL_MS);

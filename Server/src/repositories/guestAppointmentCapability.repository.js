@@ -4,6 +4,7 @@ import ClientContactVerification, {
   CLIENT_CONTACT_VERIFICATION_PURPOSES,
 } from "../db/models/clientContactVerification.model.js";
 import GuestAppointmentVerificationDelivery from "../db/models/guestAppointmentVerificationDelivery.model.js";
+import GuestAppointmentVerificationJob from "../db/models/guestAppointmentVerificationJob.model.js";
 import GuestAppointmentCapability from "../db/models/guestAppointmentCapability.model.js";
 import {
   GUEST_APPOINTMENT_ACTIONS,
@@ -58,7 +59,7 @@ export const createActiveForScope = async ({ businessId, appointmentId, verifica
   const [appointmentExists, verificationConsumed, trustedDelivery] = await Promise.all([
     Appointment.exists({ _id: appointment, business }),
     ClientContactVerification.exists({ _id: verification, business, purpose, status: "consumed" }),
-    GuestAppointmentVerificationDelivery.exists({
+    GuestAppointmentVerificationDelivery.findOne({
       verification,
       business,
       appointment,
@@ -70,6 +71,20 @@ export const createActiveForScope = async ({ businessId, appointmentId, verifica
   ]);
 
   if (!appointmentExists || !verificationConsumed || !trustedDelivery) throw new ReferenceError("Capability scope no disponible");
+
+  const durableDeliveryState = await GuestAppointmentVerificationJob.exists({
+    _id: trustedDelivery.job,
+    business,
+    appointment,
+    purpose,
+    action: scopedAction,
+    generation: trustedDelivery.jobGeneration,
+    verification,
+    delivery: trustedDelivery._id,
+    status: "delivered",
+    deliveredAt: { $ne: null },
+  });
+  if (!durableDeliveryState) throw new ReferenceError("Capability delivery no confirmada");
 
   return GuestAppointmentCapability.create({
     business,
