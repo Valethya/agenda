@@ -97,6 +97,12 @@ export async function apiFetch<T = unknown>(path: string, options: ApiRequestIni
   const headers = new Headers(options.headers);
   let body = options.body;
 
+  // Este cliente pertenece al panel autenticado. La surface se declara de forma
+  // independiente al slug de la URL; callers excepcionales pueden sobrescribirla.
+  if (!headers.has('x-agenda-surface')) {
+    headers.set('x-agenda-surface', 'internal');
+  }
+
   if (slug && !headers.has('x-business-slug') && !headers.has('x-business-id')) {
     headers.set('x-business-slug', slug);
   }
