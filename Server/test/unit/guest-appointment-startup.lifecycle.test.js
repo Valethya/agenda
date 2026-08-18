@@ -58,9 +58,15 @@ test("6.2.5-C2 failed storage gate blocks listen, socket and worker", async () =
 test("6.2.5-C2 listen failure does not initialize socket or worker", async () => {
   const fixture = dependencies();
   fixture.server.listening = false;
-  const start = startServerLifecycle(fixture.options);
-  queueMicrotask(() => fixture.server.emit("error", new Error("EADDRINUSE")));
-  await assert.rejects(start, /EADDRINUSE/u);
+  fixture.options.appInstance = {
+    listen: () => {
+      fixture.calls.push("listen");
+      setImmediate(() => fixture.server.emit("error", new Error("EADDRINUSE")));
+      return fixture.server;
+    },
+  };
+
+  await assert.rejects(startServerLifecycle(fixture.options), /EADDRINUSE/u);
   assert.deepEqual(fixture.calls, ["connect", "availability-gate", "c2-gate", "listen"]);
 });
 
