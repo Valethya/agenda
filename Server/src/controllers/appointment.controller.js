@@ -18,7 +18,12 @@ export const createAppointment = async (req, res, next) => {
     if (clientInfo) {
       // El contacto declarado pertenece exclusivamente a esta Appointment.
       // No busca, crea ni modifica User/CustomerProfile y no concede authority.
-      guestContact = appointmentService.buildGuestBookingContactSnapshot(clientInfo);
+      guestContact = {
+        ...appointmentService.buildGuestBookingContactSnapshot(clientInfo),
+        firstName: clientInfo.firstName.trim(),
+        lastName: clientInfo.lastName.trim(),
+        phone: clientInfo.phone.trim(),
+      };
     } else if (publicBooking) {
       // Una cookie incidental nunca transforma un request headless explícito en
       // booking autenticado ni aporta identidad implícita.
