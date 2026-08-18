@@ -1,9 +1,11 @@
 import mongoose from "mongoose";
 import * as businessRepository from "../repositories/business.repository.js";
 import { findTenantAuthority } from "../services/tenantAuthority.service.js";
-import { ForbiddenError, NotFoundError, ValidationError } from "../utils/appError.js";
+import { ForbiddenError, NotFoundError, UnauthorizedError, ValidationError } from "../utils/appError.js";
 
 const BUSINESS_NOT_AVAILABLE_MESSAGE = "El negocio especificado no está disponible";
+const BOOKING_SURFACE_HEADER = "x-agenda-surface";
+const BOOKING_SURFACES = new Set(["public", "internal"]);
 
 const collectIdentifier = (name, values, normalize = (value) => value) => {
   const provided = values.filter((value) => value !== undefined && value !== null && value !== "");
@@ -65,14 +67,25 @@ const resolveExplicitBusiness = async (req) => {
   return business;
 };
 
-const hasExplicitTenantInput = (req) => [
-  req.query.businessId,
-  req.query.slug,
-  req.body?.businessId,
-  req.body?.slug,
-  req.headers["x-business-id"],
-  req.headers["x-business-slug"],
-].some((value) => value !== undefined && value !== null && value !== "");
+const readBookingSurface = (req) => {
+  const raw = req.headers[BOOKING_SURFACE_HEADER];
+  if (raw === undefined || raw === null || raw === "") {
+    // Los paths compartidos son públicos por defecto. El panel debe identificarse
+    // explícitamente como internal; una cookie incidental nunca eleva la surface.
+    return "public";
+  }
+
+  if (typeof raw !== "string") {
+    throw new ValidationError(`${BOOKING_SURFACE_HEADER} debe ser un texto válido`);
+  }
+
+  const normalized = raw.trim().toLowerCase();
+  if (!BOOKING_SURFACES.has(normalized)) {
+    throw new ValidationError(`${BOOKING_SURFACE_HEADER} debe ser public o internal`);
+  }
+
+  return normalized;
+};
 
 const applyInternalBusinessScope = async (req) => {
   const sessionUser = req.session?.user;
@@ -124,12 +137,23 @@ export const scopePublicBusiness = async (req, res, next) => {
   }
 };
 
-// Compatibilidad de rutas compartidas: presencia de tenant explícito selecciona
-// siempre el contrato público; ausencia de tenant explícito permite al panel usar
-// su contexto de sesión. La decisión de proyección no depende de tenantAuthority.
+// Rutas que comparten path entre panel y contrato headless. Surface y tenant son
+// decisiones independientes: x-agenda-surface selecciona la política; businessId/
+// slug sólo seleccionan tenant cuando la surface es public. La surface internal
+// exige una sesión y usa exclusivamente su Membership/contexto tenant.
 export const scopeHeadlessOrSessionBusiness = async (req, res, next) => {
-  if (hasExplicitTenantInput(req)) {
-    return scopePublicBusiness(req, res, next);
+  try {
+    const surface = readBookingSurface(req);
+    if (surface === "public") {
+      return scopePublicBusiness(req, res, next);
+    }
+
+    if (!req.session?.user) {
+      throw new UnauthorizedError("Debes iniciar sesión para usar la superficie interna");
+    }
+
+    return scopeBusiness(req, res, next);
+  } catch (error) {
+    next(error);
   }
-  return scopeBusiness(req, res, next);
 };
