@@ -1,7 +1,7 @@
 import mongoose from "mongoose";
 import * as businessRepository from "../repositories/business.repository.js";
 import { findTenantAuthority } from "../services/tenantAuthority.service.js";
-import { NotFoundError, ValidationError } from "../utils/appError.js";
+import { ForbiddenError, NotFoundError, ValidationError } from "../utils/appError.js";
 
 const BUSINESS_NOT_AVAILABLE_MESSAGE = "El negocio especificado no está disponible";
 
@@ -85,10 +85,7 @@ const applyInternalBusinessScope = async (req) => {
     }
 
     if (!business.isActive) {
-      const error = new ValidationError("El negocio seleccionado no está disponible");
-      error.statusCode = 403;
-      error.code = "FORBIDDEN_ERROR";
-      throw error;
+      throw new ForbiddenError("El negocio seleccionado no está disponible");
     }
   } else {
     business = await resolveExplicitBusiness(req);
