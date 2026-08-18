@@ -56,11 +56,11 @@ test("6.2.3 confirmation does not bypass physical storage verification", async (
 });
 
 test("6.2.3 startup connects and passes cutover gate before opening HTTP", async () => {
-  const indexPath = fileURLToPath(new URL("../../src/index.js", import.meta.url));
-  const source = await fs.readFile(indexPath, "utf8");
-  const connectPosition = source.indexOf("await connectDB()");
-  const gatePosition = source.indexOf("await assertAvailabilityRuntimeStorageReady");
-  const listenPosition = source.indexOf("app.listen(");
+  const lifecyclePath = fileURLToPath(new URL("../../src/server/startServer.js", import.meta.url));
+  const source = await fs.readFile(lifecyclePath, "utf8");
+  const connectPosition = source.indexOf("await connect()");
+  const gatePosition = source.indexOf("await availabilityGate");
+  const listenPosition = source.indexOf("appInstance.listen(");
 
   assert.notEqual(connectPosition, -1);
   assert.notEqual(gatePosition, -1);

@@ -1,4 +1,5 @@
 import mongoose from "mongoose";
+import { CLIENT_CONTACT_VERIFICATION_RETENTION_SECONDS } from "../../security/clientContactVerificationRetention.constants.js";
 
 export const CLIENT_CONTACT_VERIFICATION_CHANNELS = Object.freeze(["email"]);
 
@@ -69,8 +70,6 @@ const clientContactVerificationSchema = new mongoose.Schema(
   },
 );
 
-// Soporta el consumo atómico tenant + purpose + hash + estado + expiración.
-// No indexa destination/contacto y no es unique.
 clientContactVerificationSchema.index(
   {
     business: 1,
@@ -80,6 +79,17 @@ clientContactVerificationSchema.index(
     expiresAt: 1,
   },
   { name: "client_verification_business_purpose_secret_status_expiry" },
+);
+
+// Shared C1 policy for every purpose, including contact-control. Logical
+// validity still ends exactly at expiresAt; this collection-wide TTL only
+// performs eventual physical cleanup one retention window later.
+clientContactVerificationSchema.index(
+  { expiresAt: 1 },
+  {
+    expireAfterSeconds: CLIENT_CONTACT_VERIFICATION_RETENTION_SECONDS,
+    name: "client_verification_expiry_retention_ttl",
+  },
 );
 
 const ClientContactVerificationModel = mongoose.model(

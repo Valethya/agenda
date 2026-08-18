@@ -6,6 +6,7 @@ export const createAppointment = async (req, res, next) => {
   try {
     const { worker, service, date, startTime, notes, clientInfo, paymentOption, isSuggestion } = req.body;
     let clientId;
+    let guestContact = null;
 
     const tenantScope = await appointmentService.validateBookingTenantScope({
       worker,
@@ -14,6 +15,9 @@ export const createAppointment = async (req, res, next) => {
     });
 
     if (clientInfo) {
+      // Capture Appointment-scoped provenance directly from this booking input
+      // before getOrCreateGuestUser can correlate or mutate any global User.
+      guestContact = appointmentService.buildGuestBookingContactSnapshot(clientInfo);
       const clientUser = await authService.getOrCreateGuestUser(clientInfo);
       clientId = clientUser._id.toString();
     } else if (req.session?.user) {
@@ -33,6 +37,7 @@ export const createAppointment = async (req, res, next) => {
       notes,
       paymentOption,
       isSuggestion,
+      guestContact,
     });
 
     res.status(201).json({ status: "success", message: "Cita reservada exitosamente", payload: appointment });

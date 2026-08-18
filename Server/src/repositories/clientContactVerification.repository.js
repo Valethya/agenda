@@ -94,6 +94,43 @@ export const consumeForBusiness = async ({
   );
 };
 
+// C2 requires the caller-selected verification id to participate in the same
+// atomic consume predicate as Business + purpose + secretHash + lifecycle.
+export const consumeExactForBusiness = async ({
+  verificationId,
+  businessId,
+  purpose,
+  secretHash,
+  now,
+}) => {
+  const scopedVerificationId = requireStrictObjectId(verificationId, "verificationId");
+  const scopedBusinessId = requireStrictObjectId(businessId, "businessId");
+  const scopedPurpose = requirePurpose(purpose);
+  const scopedHash = requireSecretHash(secretHash);
+  const scopedNow = requireDate(now, "now");
+
+  return ClientContactVerification.findOneAndUpdate(
+    {
+      _id: scopedVerificationId,
+      business: scopedBusinessId,
+      purpose: scopedPurpose,
+      secretHash: scopedHash,
+      status: "pending",
+      expiresAt: { $gt: scopedNow },
+    },
+    {
+      $set: {
+        status: "consumed",
+        consumedAt: scopedNow,
+      },
+    },
+    {
+      new: true,
+      runValidators: true,
+    },
+  );
+};
+
 export const revokeForBusiness = async ({
   verificationId,
   businessId,

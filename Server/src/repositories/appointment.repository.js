@@ -98,6 +98,33 @@ export const findByIdAndBusiness = async (id, businessId) => {
   );
 };
 
+// Dedicated C2 bootstrap query. It deliberately selects the immutable
+// Appointment-scoped booking contact and tenant Service coherence, and it never
+// populates Appointment.client/User, CustomerProfile, or historical contacts.
+export const findGuestCapabilityBootstrapByIdAndBusiness = async (id, businessId) => (
+  Appointment.findOne({ _id: id, business: businessId })
+    .select("business service +guestContact")
+    .populate({
+      path: "service",
+      match: { business: businessId },
+      select: "business",
+    })
+);
+
+// Dedicated C2 projection: tenant-scoped and deliberately excludes client/contact
+// data, notes, User authority fields, history and audit timeline.
+export const findGuestReadableByIdAndBusiness = async (id, businessId) => {
+  return await Appointment.findOne({ _id: id, business: businessId })
+    .select("business worker service date startTime endTime status paymentStatus")
+    .populate("worker", "firstName lastName")
+    .populate({
+      path: "service",
+      match: { business: businessId },
+      select: "name duration business",
+    })
+    .populate("business", "name slug");
+};
+
 export const findCoherentAllByBusiness = async (businessId, query = {}) => {
   const appointments = await populateProtectedTenantRelations(
     Appointment.find({ ...query, business: businessId }),

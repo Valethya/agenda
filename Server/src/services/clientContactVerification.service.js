@@ -208,10 +208,41 @@ export const consumeVerificationForBusiness = async ({
     now,
   });
 
-  if (!verification) {
-    throw invalidProof();
-  }
+  if (!verification) throw invalidProof();
+  return safeVerificationProjection(verification);
+};
 
+/**
+ * C2-specific consume primitive. The verification id is part of the atomic
+ * predicate; a valid secret can never consume a different verification and then
+ * fail after the fact.
+ */
+export const consumeExactVerificationForBusiness = async ({
+  verificationId,
+  businessId,
+  purpose,
+  secret,
+}) => {
+  const scopedVerificationId = requireStrictObjectId(verificationId, "verificationId");
+  const scopedBusinessId = requireStrictObjectId(businessId, "businessId");
+  const scopedPurpose = requirePurpose(purpose);
+  const scopedSecret = requireBearerSecret(secret);
+  const now = new Date();
+  const secretHash = deriveSecretHash({
+    businessId: scopedBusinessId,
+    purpose: scopedPurpose,
+    secret: scopedSecret,
+  });
+
+  const verification = await verificationRepository.consumeExactForBusiness({
+    verificationId: scopedVerificationId,
+    businessId: scopedBusinessId,
+    purpose: scopedPurpose,
+    secretHash,
+    now,
+  });
+
+  if (!verification) throw invalidProof();
   return safeVerificationProjection(verification);
 };
 
@@ -232,9 +263,6 @@ export const revokeVerificationForBusiness = async ({
     now,
   });
 
-  if (!verification) {
-    throw invalidProof();
-  }
-
+  if (!verification) throw invalidProof();
   return safeVerificationProjection(verification);
 };
