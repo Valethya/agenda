@@ -1,12 +1,12 @@
 import * as appointmentService from "../services/appointment.service.js";
-import * as authService from "../services/auth.service.js";
 import { projectPublicAppointmentCreated } from "../services/publicBookingContract.service.js";
 import { ValidationError } from "../utils/appError.js";
 
 export const createAppointment = async (req, res, next) => {
   try {
     const { worker, service, date, startTime, notes, clientInfo, paymentOption, isSuggestion } = req.body;
-    let clientId;
+    const publicBooking = req.bookingSurface === "public";
+    let clientId = null;
     let guestContact = null;
 
     const tenantScope = await appointmentService.validateBookingTenantScope({
@@ -16,11 +16,13 @@ export const createAppointment = async (req, res, next) => {
     });
 
     if (clientInfo) {
-      // Capture Appointment-scoped provenance directly from this booking input
-      // before getOrCreateGuestUser can correlate or mutate any global User.
+      // El contacto declarado pertenece exclusivamente a esta Appointment.
+      // No busca, crea ni modifica User/CustomerProfile y no concede authority.
       guestContact = appointmentService.buildGuestBookingContactSnapshot(clientInfo);
-      const clientUser = await authService.getOrCreateGuestUser(clientInfo);
-      clientId = clientUser._id.toString();
+    } else if (publicBooking) {
+      // Una cookie incidental nunca transforma un request headless explícito en
+      // booking autenticado ni aporta identidad implícita.
+      throw new ValidationError("Debe proporcionar la información del cliente (clientInfo) para reservar sin login");
     } else if (req.session?.user) {
       clientId = req.session.user.id;
     } else {
@@ -41,9 +43,9 @@ export const createAppointment = async (req, res, next) => {
       guestContact,
     });
 
-    const payload = req.tenantAuthority
-      ? appointment
-      : projectPublicAppointmentCreated(appointment);
+    const payload = publicBooking
+      ? projectPublicAppointmentCreated(appointment)
+      : appointment;
 
     res.status(201).json({ status: "success", message: "Cita reservada exitosamente", payload });
   } catch (error) { next(error); }
