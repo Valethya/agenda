@@ -143,7 +143,7 @@ test('Flujo de Integración Completo de la API', async (t) => {
     assert.ok(firstAvailableSlot, 'Debe existir al menos un horario disponible');
     const startTime = firstAvailableSlot.startTime;
 
-    // B. Reservar cita mediante el flujo público vigente, enviando clientInfo.
+    // B. Reservar cita mediante el contrato público headless, enviando clientInfo.
     const bookRes = await fetch(`${baseUrl}/appointments`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -164,9 +164,13 @@ test('Flujo de Integración Completo de la API', async (t) => {
     });
     assert.strictEqual(bookRes.status, 201);
     const bookData = await bookRes.json();
-    testAppointmentId = bookData.payload._id;
+    testAppointmentId = bookData.payload.appointmentId;
     assert.strictEqual(bookData.status, 'success');
     assert.ok(testAppointmentId);
+    assert.strictEqual(bookData.payload.businessId, seed.business._id.toString());
+    assert.strictEqual(bookData.payload.serviceId, serviceId);
+    assert.strictEqual(bookData.payload.workerId, workerId);
+    assert.ok(!('client' in bookData.payload));
   });
 
   // 4. CONFIRMACIÓN Y CANCELACIÓN DE CITAS
