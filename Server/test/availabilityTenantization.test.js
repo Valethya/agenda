@@ -117,9 +117,9 @@ test("6.2.3 tenantización física de disponibilidad", async (t) => {
     assert.equal(dayB._id.toString(), shiftB._id.toString());
   });
 
-  await t.test("GET shifts limita físicamente el resultado al tenant solicitado", async () => {
-    const responseA = await request(`/availability/shifts/${seed.worker._id}?slug=${seed.business.slug}`);
-    const responseB = await request(`/availability/shifts/${seed.worker._id}?slug=${seed.businessB.slug}`);
+  await t.test("GET shifts limita físicamente el resultado al tenant autenticado", async () => {
+    const responseA = await request(`/availability/shifts/${seed.worker._id}`, { cookie: adminA.cookie });
+    const responseB = await request(`/availability/shifts/${seed.worker._id}`, { cookie: adminB.cookie });
     assert.equal(responseA.status, 200);
     assert.equal(responseB.status, 200);
 
