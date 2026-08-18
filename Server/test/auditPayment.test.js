@@ -202,7 +202,7 @@ test("Pruebas de Integración - Flujo de Pago Abierto y Registro Progresivo", as
     });
     assert.strictEqual(bookRes.status, 201);
     const bookData = await bookRes.json();
-    const appointmentId = bookData.payload._id;
+    const appointmentId = bookData.payload.appointmentId;
     assert.ok(appointmentId);
 
     // Verificar que se creó el cliente en la base de datos
@@ -318,8 +318,12 @@ test("Pruebas de Integración - Flujo de Pago Abierto y Registro Progresivo", as
     assert.strictEqual(updatedClient.firstName, "Progresivo"); // No sobrescrito
     assert.strictEqual(updatedClient.lastName, "Uno"); // No sobrescrito
 
-    // Comprobar que la cita se asignó a este cliente
-    assert.strictEqual(bookData2.payload.client, updatedClient._id.toString());
+    // Appointment.client sigue siendo una relación interna: la respuesta pública
+    // no la expone. Verificamos el matching directamente en persistencia.
+    const storedAppointment2 = await Appointment.findById(bookData2.payload.appointmentId);
+    assert.ok(storedAppointment2);
+    assert.strictEqual(storedAppointment2.client.toString(), updatedClient._id.toString());
+    assert.ok(!("client" in bookData2.payload));
 
     // C. Probar completado de nombres cuando están vacíos
     // Dejar apellido vacío en base de datos para simular ficha incompleta
@@ -388,7 +392,7 @@ test("Pruebas de Integración - Flujo de Pago Abierto y Registro Progresivo", as
         },
       }),
     });
-    const appointmentId = (await bookRes.json()).payload._id;
+    const appointmentId = (await bookRes.json()).payload.appointmentId;
 
     // Crear bloqueo administrativo en el mismo horario
     await Block.create({
