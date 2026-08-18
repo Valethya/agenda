@@ -6,6 +6,10 @@ export interface Client {
   phone: string;
 }
 
+export interface AppointmentClient extends Client {
+  kind: 'account' | 'guest';
+}
+
 export interface Professional {
   _id: string;
   firstName: string;
@@ -33,7 +37,9 @@ export type AppointmentStatus = 'pending' | 'confirmed' | 'cancelled' | 'complet
 
 export interface Appointment {
   _id: string;
-  client: Client;
+  // DTO operacional interno: puede representar una cuenta real o un guest
+  // Appointment-scoped. kind no concede identidad/ownership.
+  client: AppointmentClient;
   worker: EntityReference<Professional>;
   service: Service;
   date: string | Date;
