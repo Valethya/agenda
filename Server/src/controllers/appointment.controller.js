@@ -4,7 +4,17 @@ import { ValidationError } from "../utils/appError.js";
 
 export const createAppointment = async (req, res, next) => {
   try {
-    const { worker, service, date, startTime, notes, clientInfo, paymentOption, isSuggestion } = req.body;
+    const input = req.bookingInput || {};
+    const {
+      worker,
+      service,
+      date,
+      startTime,
+      notes,
+      clientInfo,
+      paymentOption,
+      isSuggestion,
+    } = input;
     const publicBooking = req.bookingSurface === "public";
     let clientId = null;
     let guestContact = null;
@@ -20,13 +30,11 @@ export const createAppointment = async (req, res, next) => {
       // No busca, crea ni modifica User/CustomerProfile y no concede authority.
       guestContact = {
         ...appointmentService.buildGuestBookingContactSnapshot(clientInfo),
-        firstName: clientInfo.firstName.trim(),
-        lastName: clientInfo.lastName.trim(),
-        phone: clientInfo.phone.trim(),
+        firstName: clientInfo.firstName,
+        lastName: clientInfo.lastName,
+        phone: clientInfo.phone,
       };
     } else if (publicBooking) {
-      // Una cookie incidental nunca transforma un request headless explícito en
-      // booking autenticado ni aporta identidad implícita.
       throw new ValidationError("Debe proporcionar la información del cliente (clientInfo) para reservar sin login");
     } else if (req.session?.user) {
       clientId = req.session.user.id;
@@ -43,6 +51,8 @@ export const createAppointment = async (req, res, next) => {
       date,
       startTime,
       notes,
+      // Estos controles sólo existen en bookingInput cuando la surface interna
+      // los valida explícitamente. El schema público strict nunca los produce.
       paymentOption,
       isSuggestion,
       guestContact,
