@@ -21,7 +21,7 @@ const baseUrl = `http://localhost:${port}/api`;
 const request = async (path, { method = "GET", cookie, body } = {}) => fetch(`${baseUrl}${path}`, {
   method,
   headers: {
-    ...(cookie ? { Cookie: cookie } : {}),
+    ...(cookie ? { Cookie: cookie, "x-agenda-surface": "internal" } : {}),
     ...(body ? { "Content-Type": "application/json" } : {}),
   },
   ...(body ? { body: JSON.stringify(body) } : {}),
