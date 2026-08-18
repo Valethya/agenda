@@ -1,7 +1,7 @@
 import * as serviceService from "../services/service.service.js";
 import { projectPublicService } from "../services/publicBookingContract.service.js";
 
-const isPublicBookingRead = (req) => !req.tenantAuthority;
+const isPublicBookingRead = (req) => req.bookingSurface === "public";
 
 export const getServices = async (req, res, next) => {
   try {
