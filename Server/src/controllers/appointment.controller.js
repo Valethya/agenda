@@ -1,5 +1,9 @@
 import * as appointmentService from "../services/appointment.service.js";
 import { projectPublicAppointmentCreated } from "../services/publicBookingContract.service.js";
+import {
+  projectInternalAppointment,
+  projectInternalAppointments,
+} from "../services/internalAppointmentProjection.service.js";
 import { ValidationError } from "../utils/appError.js";
 
 export const createAppointment = async (req, res, next) => {
@@ -26,8 +30,6 @@ export const createAppointment = async (req, res, next) => {
     });
 
     if (clientInfo) {
-      // El contacto declarado pertenece exclusivamente a esta Appointment.
-      // No busca, crea ni modifica User/CustomerProfile y no concede authority.
       guestContact = {
         ...appointmentService.buildGuestBookingContactSnapshot(clientInfo),
         firstName: clientInfo.firstName,
@@ -51,8 +53,6 @@ export const createAppointment = async (req, res, next) => {
       date,
       startTime,
       notes,
-      // Estos controles sólo existen en bookingInput cuando la surface interna
-      // los valida explícitamente. El schema público strict nunca los produce.
       paymentOption,
       isSuggestion,
       guestContact,
@@ -110,7 +110,7 @@ export const getAppointment = async (req, res, next) => {
       req.tenantAuthority,
       req.businessId,
     );
-    res.status(200).json({ status: "success", payload: appointment });
+    res.status(200).json({ status: "success", payload: projectInternalAppointment(appointment) });
   } catch (error) { next(error); }
 };
 
@@ -121,7 +121,8 @@ export const getMyAppointments = async (req, res, next) => {
       req.tenantAuthority,
       req.businessId,
     );
-    res.status(200).json({ status: "success", results: appointments.length, payload: appointments });
+    const payload = projectInternalAppointments(appointments);
+    res.status(200).json({ status: "success", results: payload.length, payload });
   } catch (error) { next(error); }
 };
 
