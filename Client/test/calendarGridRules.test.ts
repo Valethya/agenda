@@ -33,7 +33,13 @@ const appointment = (
   endTime,
   status: 'confirmed',
   paymentStatus: 'unpaid',
-  client: { firstName: 'Ana', lastName: 'Pérez', email: 'ana@example.com', phone: '+56900000000' },
+  client: {
+    kind: 'account',
+    firstName: 'Ana',
+    lastName: 'Pérez',
+    email: 'ana@example.com',
+    phone: '+56900000000'
+  },
   service: {
     _id: 'service-1',
     name: 'Consulta',
