@@ -4,7 +4,6 @@ process.env.ENABLE_PAYMENTS = "true";
 import test from "node:test";
 import assert from "node:assert/strict";
 import pkg from "transbank-sdk";
-import app, { sessionStore } from "../src/app.js";
 import { connectDB } from "../src/db/db.js";
 import { seedTestData, cleanTestData, teardown } from "./fixtures.js";
 import Appointment from "../src/db/models/appointment.model.js";
@@ -30,6 +29,9 @@ WebpayPlus.Transaction.prototype.commit = async function () {
   };
 };
 
+// ENABLE_PAYMENTS debe existir antes de evaluar config/env.js y routes/index.js.
+const { default: app, sessionStore } = await import("../src/app.js");
+
 await connectDB();
 await cleanTestData();
 const seed = await seedTestData();
@@ -42,6 +44,8 @@ const createLegacyPending = async ({
   paymentBusiness = seed.business._id,
   startTime = "09:00",
 }) => {
+  const hour = Number(startTime.slice(0, 2));
+  const endTime = `${String(hour + 1).padStart(2, "0")}:00`;
   const appointment = await Appointment.create({
     client: seed.client._id,
     worker: seed.worker._id,
@@ -49,7 +53,7 @@ const createLegacyPending = async ({
     business: seed.business._id,
     date: new Date("2099-02-02T00:00:00.000Z"),
     startTime,
-    endTime: startTime === "09:00" ? "10:00" : "11:00",
+    endTime,
     status: "pending_payment",
     paymentStatus: "unpaid",
   });
