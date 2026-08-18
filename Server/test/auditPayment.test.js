@@ -17,9 +17,11 @@ const gatewayState = {
   status: "AUTHORIZED",
   responseCode: 0,
   authorizationCode: "AUTH-LEGACY",
+  commitCount: 0,
 };
 
 WebpayPlus.Transaction.prototype.commit = async function () {
+  gatewayState.commitCount += 1;
   return {
     status: gatewayState.status,
     response_code: gatewayState.responseCode,
@@ -74,6 +76,7 @@ const createLegacyPending = async ({
   gatewayState.status = "AUTHORIZED";
   gatewayState.responseCode = 0;
   gatewayState.authorizationCode = "AUTH-LEGACY";
+  gatewayState.commitCount = 0;
 
   return { appointment, payment };
 };
@@ -89,6 +92,7 @@ test("Payment legacy callback preservado sin reabrir payment authority", async (
     const response = await callReturn("legacy-approved");
     assert.equal(response.status, 302);
     assert.match(response.headers.get("location") || "", /payment-success/);
+    assert.equal(gatewayState.commitCount, 1);
 
     const [storedAppointment, storedPayment] = await Promise.all([
       Appointment.findById(appointment._id),
@@ -108,6 +112,7 @@ test("Payment legacy callback preservado sin reabrir payment authority", async (
     const response = await callReturn("legacy-rejected");
     assert.equal(response.status, 302);
     assert.match(response.headers.get("location") || "", /payment-failed/);
+    assert.equal(gatewayState.commitCount, 1);
 
     const [storedAppointment, storedPayment] = await Promise.all([
       Appointment.findById(appointment._id),
@@ -117,7 +122,7 @@ test("Payment legacy callback preservado sin reabrir payment authority", async (
     assert.equal(storedPayment.status, "rejected");
   });
 
-  await t.test("Payment y Appointment de Businesses distintos fallan cerrado sin transición", async () => {
+  await t.test("Payment y Appointment de Businesses distintos fallan antes del commit externo", async () => {
     const { appointment } = await createLegacyPending({
       token: "legacy-cross-business",
       paymentBusiness: seed.businessB._id,
@@ -127,6 +132,7 @@ test("Payment legacy callback preservado sin reabrir payment authority", async (
     const response = await callReturn("legacy-cross-business");
     assert.equal(response.status, 302);
     assert.match(response.headers.get("location") || "", /payment-failed/);
+    assert.equal(gatewayState.commitCount, 0);
 
     const [storedAppointment, storedPayment] = await Promise.all([
       Appointment.findById(appointment._id),
@@ -137,13 +143,14 @@ test("Payment legacy callback preservado sin reabrir payment authority", async (
     assert.equal(storedPayment.status, "pending");
   });
 
-  await t.test("buy_order distinto al Payment pending falla cerrado", async () => {
+  await t.test("buy_order distinto al Payment pending falla cerrado después del único commit esperado", async () => {
     const { appointment } = await createLegacyPending({ token: "legacy-buy-order", startTime: "12:00" });
     gatewayState.buyOrder = seed.businessB._id.toString();
 
     const response = await callReturn("legacy-buy-order");
     assert.equal(response.status, 302);
     assert.match(response.headers.get("location") || "", /payment-failed/);
+    assert.equal(gatewayState.commitCount, 1);
 
     const [storedAppointment, storedPayment] = await Promise.all([
       Appointment.findById(appointment._id),
