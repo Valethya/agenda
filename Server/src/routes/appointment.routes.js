@@ -11,14 +11,22 @@ import {
 import { isAuthenticated } from "../middleware/auth.middleware.js";
 import { scopeBusiness, scopeHeadlessOrSessionBusiness } from "../middleware/business.middleware.js";
 import { validate } from "../middleware/validate.middleware.js";
-import { createAppointmentSchema } from "../validations/appointment.validation.js";
+import { createAppointmentSchema, publicCreateAppointmentSchema } from "../validations/appointment.validation.js";
 import { objectIdParamSchema } from "../validations/common.validation.js";
 
 const router = Router();
 
-// Tenant explícito => booking headless público. Sin tenant explícito, una sesión
-// existente conserva el flujo interno; la superficie se marca antes del controller.
-router.post("/", scopeHeadlessOrSessionBusiness, validate(createAppointmentSchema), createAppointment);
+// Path compartido, surface explícita. El controller consume bookingInput, nunca
+// req.body raw, para que controles legacy no atraviesen la frontera pública.
+router.post(
+  "/",
+  scopeHeadlessOrSessionBusiness,
+  validate(
+    (req) => req.bookingSurface === "public" ? publicCreateAppointmentSchema : createAppointmentSchema,
+    { assignBody: "bookingInput" },
+  ),
+  createAppointment,
+);
 
 router.get("/my", scopeBusiness, isAuthenticated, getMyAppointments);
 router.get("/:id", scopeBusiness, isAuthenticated, validate(objectIdParamSchema), getAppointment);
