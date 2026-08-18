@@ -137,9 +137,9 @@ const getPendingLegacyPayment = async (tokenWs) => {
   return payment;
 };
 
-// 2. Confirmar un Payment legacy YA EXISTENTE. token_ws no autoriza una cita
-// arbitraria: primero fija Payment pending + Business + Appointment; Webpay debe
-// devolver exactamente ese buy_order.
+// 2. Confirmar un Payment legacy YA EXISTENTE. token_ws fija primero Payment,
+// Appointment y Business localmente. Sólo después de validar ese scope se llama
+// al proveedor; Webpay debe devolver exactamente el buy_order esperado.
 export const confirmPayment = async (tokenWs) => {
   if (!tokenWs) {
     await logEvent({
@@ -155,6 +155,32 @@ export const confirmPayment = async (tokenWs) => {
     const pendingPayment = await getPendingLegacyPayment(tokenWs);
     appointmentId = asId(pendingPayment.appointment);
     const paymentBusinessId = asId(pendingPayment.business);
+
+    const appointment = await appointmentRepository.findById(appointmentId);
+    if (!appointment) {
+      throw new NotFoundError("La cita asociada al pago no fue encontrada");
+    }
+
+    const businessId = asId(appointment.business);
+    if (!businessId || !paymentBusinessId || !sameId(businessId, paymentBusinessId)) {
+      throw new ValidationError("Payment y Appointment no pertenecen al mismo negocio");
+    }
+
+    if (appointment.status !== "pending_payment") {
+      throw new ValidationError(`La cita no se encuentra en estado pendiente de pago (Estado actual: ${appointment.status})`);
+    }
+
+    const business = await businessRepository.findById(businessId);
+    if (!business) {
+      throw new NotFoundError("El negocio asociado al pago no existe");
+    }
+
+    const service = appointment.service;
+    if (!service) {
+      throw new NotFoundError("El servicio asociado a la cita no existe");
+    }
+
+    const userId = appointment.client?._id || null;
 
     await logEvent({
       appointmentId,
@@ -186,30 +212,7 @@ export const confirmPayment = async (tokenWs) => {
       metadata: { commitResponse }
     });
 
-    const appointment = await appointmentRepository.findById(appointmentId);
-    if (!appointment) {
-      throw new NotFoundError("La cita asociada al pago no fue encontrada");
-    }
-
-    const businessId = asId(appointment.business);
-    if (!businessId || !paymentBusinessId || !sameId(businessId, paymentBusinessId)) {
-      throw new ValidationError("Payment y Appointment no pertenecen al mismo negocio");
-    }
-
-    const business = await businessRepository.findById(businessId);
-    if (!business) {
-      throw new NotFoundError("El negocio asociado al pago no existe");
-    }
-
-    const userId = appointment.client?._id || null;
-    if (appointment.status !== "pending_payment") {
-      throw new ValidationError(`La cita no se encuentra en estado pendiente de pago (Estado actual: ${appointment.status})`);
-    }
-
     if (commitResponse.status === "AUTHORIZED" && commitResponse.response_code === 0) {
-      const service = appointment.service;
-      if (!service) throw new NotFoundError("El servicio asociado a la cita no existe");
-
       const expectedDeposit = service.depositAmount > 0 ? service.depositAmount : null;
       const expectedFull = service.price;
       const isDeposit = Boolean(expectedDeposit) && commitResponse.amount === expectedDeposit;
