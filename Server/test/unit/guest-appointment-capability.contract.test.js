@@ -4,6 +4,8 @@ import mongoose from "mongoose";
 import ClientContactVerification from "../../src/db/models/clientContactVerification.model.js";
 import GuestAppointmentCapability, { GUEST_APPOINTMENT_CAPABILITY_STATUSES } from "../../src/db/models/guestAppointmentCapability.model.js";
 import GuestAppointmentVerificationDelivery from "../../src/db/models/guestAppointmentVerificationDelivery.model.js";
+import GuestAppointmentVerificationJob from "../../src/db/models/guestAppointmentVerificationJob.model.js";
+import GuestAppointmentIntakeBucket from "../../src/db/models/guestAppointmentIntakeBucket.model.js";
 import {
   GUEST_APPOINTMENT_ACTIONS,
   GUEST_APPOINTMENT_IMPLEMENTED_ACTIONS,
@@ -43,6 +45,28 @@ test("6.2.5-C2 capability contract", async (t) => {
     assert.equal(GuestAppointmentCapability.schema.path("secret"), undefined);
     assert.equal(GuestAppointmentVerificationDelivery.schema.path("destination"), undefined);
     assert.equal(ClientContactVerification.schema.path("appointment"), undefined);
+  });
+
+  await t.test("durable jobs only expose terminal purge timestamps and intake guard stores no resource identifiers", () => {
+    assert.ok(GuestAppointmentVerificationJob.schema.path("purgeAfter"));
+    assert.equal(GuestAppointmentVerificationJob.schema.path("bearer"), undefined);
+    assert.equal(GuestAppointmentVerificationJob.schema.path("destination"), undefined);
+    assert.equal(GuestAppointmentIntakeBucket.schema.path("business"), undefined);
+    assert.equal(GuestAppointmentIntakeBucket.schema.path("appointment"), undefined);
+    assert.equal(GuestAppointmentIntakeBucket.schema.path("destination"), undefined);
+
+    const jobTtl = GuestAppointmentVerificationJob.schema.indexes().find(([, options]) => (
+      options.name === "guest_appointment_job_terminal_ttl"
+    ));
+    const bucketTtl = GuestAppointmentIntakeBucket.schema.indexes().find(([, options]) => (
+      options.name === "guest_appointment_intake_bucket_ttl"
+    ));
+    assert.ok(jobTtl);
+    assert.deepEqual(jobTtl[0], { purgeAfter: 1 });
+    assert.equal(jobTtl[1].expireAfterSeconds, 0);
+    assert.ok(bucketTtl);
+    assert.deepEqual(bucketTtl[0], { expiresAt: 1 });
+    assert.equal(bucketTtl[1].expireAfterSeconds, 0);
   });
 
   await t.test("sensitive URL origin must be explicit HTTPS without credentials/path/query/hash", () => {

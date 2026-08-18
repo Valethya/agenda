@@ -8,8 +8,10 @@ import ClientContactVerification, {
   CLIENT_CONTACT_VERIFICATION_STATUSES,
 } from "../../src/db/models/clientContactVerification.model.js";
 import * as verificationRepository from "../../src/repositories/clientContactVerification.repository.js";
+import * as verificationService from "../../src/services/clientContactVerification.service.js";
 import {
   CLIENT_CONTACT_VERIFICATION_ERROR_CODES,
+  consumeExactVerificationForBusiness,
   consumeVerificationForBusiness,
   issueVerificationForBusiness,
 } from "../../src/services/clientContactVerification.service.js";
@@ -68,7 +70,23 @@ test("6.2.5-C1 Verification schema is tenant-scoped and purpose-bound", () => {
 
   assert.deepEqual(
     Object.keys(verificationRepository).sort(),
-    ["consumeForBusiness", "createForBusiness", "revokeForBusiness"],
+    [
+      "consumeExactForBusiness",
+      "consumeForBusiness",
+      "createForBusiness",
+      "revokeForBusiness",
+    ],
+  );
+
+  assert.deepEqual(
+    Object.keys(verificationService).sort(),
+    [
+      "CLIENT_CONTACT_VERIFICATION_ERROR_CODES",
+      "consumeExactVerificationForBusiness",
+      "consumeVerificationForBusiness",
+      "issueVerificationForBusiness",
+      "revokeVerificationForBusiness",
+    ],
   );
 });
 
@@ -137,6 +155,26 @@ test("6.2.5-C1 strict ObjectIds fail before query", async () => {
         TypeError,
       );
       await assert.rejects(
+        verificationRepository.consumeExactForBusiness({
+          verificationId: validVerificationId,
+          businessId: invalidId,
+          purpose: "contact-control",
+          secretHash: "a".repeat(64),
+          now: new Date(),
+        }),
+        TypeError,
+      );
+      await assert.rejects(
+        verificationRepository.consumeExactForBusiness({
+          verificationId: invalidId,
+          businessId: validBusinessId,
+          purpose: "contact-control",
+          secretHash: "a".repeat(64),
+          now: new Date(),
+        }),
+        TypeError,
+      );
+      await assert.rejects(
         verificationRepository.revokeForBusiness({
           verificationId: validVerificationId,
           businessId: invalidId,
@@ -172,6 +210,7 @@ test("6.2.5-C1 invalid purpose and malformed secret fail before consume query", 
 
   try {
     const businessId = new mongoose.Types.ObjectId();
+    const verificationId = new mongoose.Types.ObjectId();
 
     await assert.rejects(
       verificationRepository.consumeForBusiness({
@@ -196,7 +235,61 @@ test("6.2.5-C1 invalid purpose and malformed secret fail before consume query", 
       ),
     );
 
+    await assert.rejects(
+      consumeExactVerificationForBusiness({
+        verificationId,
+        businessId,
+        purpose: "contact-control",
+        secret: "malformed",
+      }),
+      (error) => (
+        error.code === CLIENT_CONTACT_VERIFICATION_ERROR_CODES.INVALID_PROOF
+        && error.message === "Verification no válida"
+      ),
+    );
+
     assert.equal(updateCalls, 0);
+  } finally {
+    ClientContactVerification.findOneAndUpdate = originalFindOneAndUpdate;
+  }
+});
+
+test("6.2.5-C1 exact consume includes verificationId in the atomic predicate", async () => {
+  const originalFindOneAndUpdate = ClientContactVerification.findOneAndUpdate;
+  let capturedFilter = null;
+  ClientContactVerification.findOneAndUpdate = (filter) => {
+    capturedFilter = filter;
+    return Promise.resolve({
+      _id: filter._id,
+      business: filter.business,
+      channel: "email",
+      destination: "client@example.com",
+      purpose: filter.purpose,
+      status: "consumed",
+      expiresAt: new Date(Date.now() + 60_000),
+      consumedAt: new Date(),
+      revokedAt: null,
+    });
+  };
+
+  try {
+    const businessId = new mongoose.Types.ObjectId();
+    const verificationId = new mongoose.Types.ObjectId();
+    const secret = "A".repeat(43);
+    const result = await consumeExactVerificationForBusiness({
+      verificationId,
+      businessId,
+      purpose: "appointment-read-bootstrap",
+      secret,
+    });
+
+    assert.equal(result.verificationId.toString(), verificationId.toString());
+    assert.equal(capturedFilter._id.toString(), verificationId.toString());
+    assert.equal(capturedFilter.business.toString(), businessId.toString());
+    assert.equal(capturedFilter.purpose, "appointment-read-bootstrap");
+    assert.equal(capturedFilter.status, "pending");
+    assert.deepEqual(Object.keys(capturedFilter.expiresAt), ["$gt"]);
+    assert.match(capturedFilter.secretHash, /^[0-9a-f]{64}$/u);
   } finally {
     ClientContactVerification.findOneAndUpdate = originalFindOneAndUpdate;
   }
