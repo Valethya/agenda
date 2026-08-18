@@ -81,6 +81,12 @@ const guestAppointmentVerificationJobSchema = new mongoose.Schema(
       type: Date,
       default: null,
     },
+    // Only terminal jobs receive purgeAfter. Active jobs keep this null so the
+    // MongoDB TTL monitor can never remove queued/processing/delivering work.
+    purgeAfter: {
+      type: Date,
+      default: null,
+    },
   },
   {
     timestamps: true,
@@ -99,6 +105,13 @@ guestAppointmentVerificationJobSchema.index(
 guestAppointmentVerificationJobSchema.index(
   { status: 1, leaseExpiresAt: 1, updatedAt: 1 },
   { name: "guest_appointment_job_claim" },
+);
+
+// expireAfterSeconds:0 means purgeAfter itself is the expiry timestamp. Missing
+// or null purgeAfter values are ignored by MongoDB's TTL monitor.
+guestAppointmentVerificationJobSchema.index(
+  { purgeAfter: 1 },
+  { expireAfterSeconds: 0, name: "guest_appointment_job_terminal_ttl" },
 );
 
 const GuestAppointmentVerificationJobModel = mongoose.model(

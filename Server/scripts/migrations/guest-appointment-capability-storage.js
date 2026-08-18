@@ -6,7 +6,12 @@ const spec = (collection, name, key, options = {}) => Object.freeze({
   collection,
   name,
   key: Object.freeze({ ...key }),
-  options: Object.freeze({ unique: Boolean(options.unique) }),
+  options: Object.freeze({
+    unique: Boolean(options.unique),
+    expireAfterSeconds: Number.isInteger(options.expireAfterSeconds)
+      ? options.expireAfterSeconds
+      : null,
+  }),
 });
 
 export const GUEST_APPOINTMENT_C2_INDEX_SPECS = Object.freeze([
@@ -48,16 +53,43 @@ export const GUEST_APPOINTMENT_C2_INDEX_SPECS = Object.freeze([
     "guest_appointment_job_claim",
     { status: 1, leaseExpiresAt: 1, updatedAt: 1 },
   ),
+  spec(
+    "guestappointmentverificationjobs",
+    "guest_appointment_job_terminal_ttl",
+    { purgeAfter: 1 },
+    { expireAfterSeconds: 0 },
+  ),
+  spec(
+    "guestappointmentintakebuckets",
+    "guest_appointment_intake_bucket_ttl",
+    { expiresAt: 1 },
+    { expireAfterSeconds: 0 },
+  ),
 ]);
 
 const orderedEntries = (value) => Object.entries(value ?? {});
-const keyEquals = (actual, expected) => JSON.stringify(orderedEntries(actual)) === JSON.stringify(orderedEntries(expected));
-const exactIndex = (index, expected) => (
-  keyEquals(index?.key, expected.key)
-  && Boolean(index?.unique) === Boolean(expected.options.unique)
+const keyEquals = (actual, expected) => (
+  JSON.stringify(orderedEntries(actual)) === JSON.stringify(orderedEntries(expected))
+);
+const normalizedPhysicalOptions = (index) => ({
+  unique: Boolean(index?.unique),
+  expireAfterSeconds: Number.isInteger(index?.expireAfterSeconds)
+    ? index.expireAfterSeconds
+    : null,
+});
+const optionsEqual = (index, expected) => (
+  JSON.stringify(normalizedPhysicalOptions(index)) === JSON.stringify(expected.options)
 );
 
-const relevantCollections = () => [...new Set(GUEST_APPOINTMENT_C2_INDEX_SPECS.map((entry) => entry.collection))];
+// Physical names are diagnostic labels, not security identity. Security
+// equivalence is the ordered key pattern plus the options that affect semantics.
+const exactIndex = (index, expected) => (
+  keyEquals(index?.key, expected.key) && optionsEqual(index, expected)
+);
+
+const relevantCollections = () => [
+  ...new Set(GUEST_APPOINTMENT_C2_INDEX_SPECS.map((entry) => entry.collection)),
+];
 
 export const assertGuestAppointmentCapabilitySupportedTopology = async (db) => {
   if (!db) throw new Error("Storage 6.2.5-C2 bloqueado: MongoDB no está conectado");
@@ -83,13 +115,15 @@ const assertNoIncompatiblePhysicalIndex = (indexes, expected) => {
   }
 
   const sameKeys = indexes.find((index) => index.name !== "_id_" && keyEquals(index.key, expected.key));
-  if (sameKeys && Boolean(sameKeys.unique) !== Boolean(expected.options.unique)) {
-    throw new Error(`Storage 6.2.5-C2 bloqueado: unicidad incompatible para ${expected.collection}.${expected.name}`);
+  if (sameKeys && !optionsEqual(sameKeys, expected)) {
+    throw new Error(`Storage 6.2.5-C2 bloqueado: opciones incompatibles para ${expected.collection}.${expected.name}`);
   }
 };
 
 export const inspectGuestAppointmentCapabilityIndexes = async (db) => {
-  const names = new Set((await db.listCollections({}, { nameOnly: true }).toArray()).map((entry) => entry.name));
+  const names = new Set(
+    (await db.listCollections({}, { nameOnly: true }).toArray()).map((entry) => entry.name),
+  );
   const result = [];
 
   for (const expected of GUEST_APPOINTMENT_C2_INDEX_SPECS) {
@@ -118,14 +152,27 @@ export const assertGuestAppointmentCapabilityIndexesReady = async (db) => {
   const inspection = await inspectGuestAppointmentCapabilityIndexes(db);
   const problem = inspection.find((entry) => !entry.present || !entry.compatible);
   if (problem) {
-    throw new Error(`Storage 6.2.5-C2 bloqueado: índice físico requerido ausente/incompatible (${problem.collection}.${problem.name})`);
+    throw new Error(
+      `Storage 6.2.5-C2 bloqueado: índice físico requerido ausente/incompatible (${problem.collection}.${problem.name})`,
+    );
   }
   return { ready: true, indexes: inspection.length };
 };
 
+const createOptions = (expected) => {
+  const options = { name: expected.name };
+  if (expected.options.unique) options.unique = true;
+  if (expected.options.expireAfterSeconds !== null) {
+    options.expireAfterSeconds = expected.options.expireAfterSeconds;
+  }
+  return options;
+};
+
 export const applyGuestAppointmentCapabilityIndexes = async (db) => {
   const topology = await assertGuestAppointmentCapabilitySupportedTopology(db);
-  const names = new Set((await db.listCollections({}, { nameOnly: true }).toArray()).map((entry) => entry.name));
+  const names = new Set(
+    (await db.listCollections({}, { nameOnly: true }).toArray()).map((entry) => entry.name),
+  );
 
   for (const collectionName of relevantCollections()) {
     if (!names.has(collectionName)) {
@@ -142,7 +189,7 @@ export const applyGuestAppointmentCapabilityIndexes = async (db) => {
 
     await db.collection(expected.collection).createIndex(
       expected.key,
-      { name: expected.name, unique: Boolean(expected.options.unique) },
+      createOptions(expected),
     );
 
     const after = await listIndexes(db, expected.collection);

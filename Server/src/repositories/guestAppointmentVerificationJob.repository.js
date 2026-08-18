@@ -1,5 +1,6 @@
 import mongoose from "mongoose";
 import GuestAppointmentVerificationJob from "../db/models/guestAppointmentVerificationJob.model.js";
+import GuestAppointmentIntakeBucket from "../db/models/guestAppointmentIntakeBucket.model.js";
 import {
   GUEST_APPOINTMENT_ACTIONS,
   GUEST_APPOINTMENT_IMPLEMENTED_PURPOSE_TO_ACTION,
@@ -10,6 +11,10 @@ const OBJECT_ID_HEX_PATTERN = /^[0-9a-fA-F]{24}$/u;
 export const GUEST_APPOINTMENT_CHALLENGE_COOLDOWN_MS = 15 * 60 * 1000;
 export const GUEST_APPOINTMENT_PROCESSING_LEASE_MS = 60 * 1000;
 export const GUEST_APPOINTMENT_DELIVERY_LEASE_MS = 5 * 60 * 1000;
+export const GUEST_APPOINTMENT_JOB_RETENTION_MS = 60 * 60 * 1000;
+export const GUEST_APPOINTMENT_INTAKE_WINDOW_MS = 60 * 1000;
+export const GUEST_APPOINTMENT_INTAKE_MAX_PER_WINDOW = 240;
+export const GUEST_APPOINTMENT_INTAKE_BUCKET_RETENTION_MS = 10 * 60 * 1000;
 
 const requireStrictObjectId = (value, fieldName) => {
   if (value instanceof mongoose.Types.ObjectId) return value;
@@ -49,6 +54,11 @@ const requireDuration = (value, fieldName) => {
   return value;
 };
 
+const requirePositiveInteger = (value, fieldName, max = 1_000_000) => {
+  if (!Number.isInteger(value) || value < 1 || value > max) throw new TypeError(`${fieldName} inválido`);
+  return value;
+};
+
 const requireWorkerId = (value) => {
   if (typeof value !== "string" || value.length < 8 || value.length > 128) {
     throw new TypeError("workerId inválido");
@@ -70,6 +80,42 @@ const scope = ({ businessId, appointmentId, purpose, action }) => {
 
 const isDuplicateKey = (error) => error?.code === 11000;
 
+const reserveIntakeSlot = async ({
+  now,
+  windowMs = GUEST_APPOINTMENT_INTAKE_WINDOW_MS,
+  maxPerWindow = GUEST_APPOINTMENT_INTAKE_MAX_PER_WINDOW,
+  bucketRetentionMs = GUEST_APPOINTMENT_INTAKE_BUCKET_RETENTION_MS,
+}) => {
+  const scopedNow = requireDate(now, "now");
+  const window = requireDuration(windowMs, "windowMs");
+  const limit = requirePositiveInteger(maxPerWindow, "maxPerWindow");
+  const retention = requireDuration(bucketRetentionMs, "bucketRetentionMs");
+  if (retention < window) throw new TypeError("bucketRetentionMs debe cubrir la ventana de intake");
+
+  // The bucket key contains only a coarse time window. It does not encode or
+  // query Business/Appointment, so saturation cannot reveal resource existence.
+  const bucketStart = Math.floor(scopedNow.getTime() / window) * window;
+  const bucketId = `guest-appointment-read:${bucketStart}`;
+  const expiresAt = new Date(bucketStart + window + retention);
+
+  const incrementExisting = () => GuestAppointmentIntakeBucket.findOneAndUpdate(
+    { _id: bucketId, count: { $lt: limit } },
+    { $inc: { count: 1 } },
+    { new: true, runValidators: true },
+  );
+
+  const existing = await incrementExisting();
+  if (existing) return true;
+
+  try {
+    await GuestAppointmentIntakeBucket.create({ _id: bucketId, count: 1, expiresAt });
+    return true;
+  } catch (error) {
+    if (!isDuplicateKey(error)) throw error;
+    return Boolean(await incrementExisting());
+  }
+};
+
 export const enqueueForScope = async ({
   businessId,
   appointmentId,
@@ -77,11 +123,22 @@ export const enqueueForScope = async ({
   action,
   now,
   cooldownMs = GUEST_APPOINTMENT_CHALLENGE_COOLDOWN_MS,
+  intakeWindowMs = GUEST_APPOINTMENT_INTAKE_WINDOW_MS,
+  intakeMaxPerWindow = GUEST_APPOINTMENT_INTAKE_MAX_PER_WINDOW,
+  intakeBucketRetentionMs = GUEST_APPOINTMENT_INTAKE_BUCKET_RETENTION_MS,
 }) => {
   const scoped = scope({ businessId, appointmentId, purpose, action });
   const scopedNow = requireDate(now, "now");
   const cooldown = requireDuration(cooldownMs, "cooldownMs");
   const nextEligibleAt = new Date(scopedNow.getTime() + cooldown);
+
+  const intakeAccepted = await reserveIntakeSlot({
+    now: scopedNow,
+    windowMs: intakeWindowMs,
+    maxPerWindow: intakeMaxPerWindow,
+    bucketRetentionMs: intakeBucketRetentionMs,
+  });
+  if (!intakeAccepted) return { enqueued: false, job: null, backpressured: true };
 
   const reset = await GuestAppointmentVerificationJob.findOneAndUpdate(
     {
@@ -99,12 +156,13 @@ export const enqueueForScope = async ({
         delivery: null,
         deliveredAt: null,
         failedAt: null,
+        purgeAfter: null,
       },
       $inc: { generation: 1 },
     },
     { new: true, runValidators: true },
   );
-  if (reset) return { enqueued: true, job: reset };
+  if (reset) return { enqueued: true, job: reset, backpressured: false };
 
   try {
     const job = await GuestAppointmentVerificationJob.create({
@@ -119,10 +177,11 @@ export const enqueueForScope = async ({
       delivery: null,
       deliveredAt: null,
       failedAt: null,
+      purgeAfter: null,
     });
-    return { enqueued: true, job };
+    return { enqueued: true, job, backpressured: false };
   } catch (error) {
-    if (isDuplicateKey(error)) return { enqueued: false, job: null };
+    if (isDuplicateKey(error)) return { enqueued: false, job: null, backpressured: false };
     throw error;
   }
 };
@@ -149,6 +208,7 @@ export const claimNext = async ({
         status: "processing",
         leaseOwner: owner,
         leaseExpiresAt,
+        purgeAfter: null,
       },
       $inc: { attempts: 1 },
     },
@@ -160,41 +220,34 @@ export const claimNext = async ({
   ).select("+leaseOwner");
 };
 
-export const attachVerification = async ({
-  jobId,
-  generation,
-  workerId,
-  verificationId,
-}) => GuestAppointmentVerificationJob.findOneAndUpdate(
-  {
-    _id: requireStrictObjectId(jobId, "jobId"),
-    generation,
-    status: "processing",
-    leaseOwner: requireWorkerId(workerId),
-    verification: null,
-  },
-  { $set: { verification: requireStrictObjectId(verificationId, "verificationId") } },
-  { new: true, runValidators: true },
-).select("+leaseOwner");
+export const attachVerification = async ({ jobId, generation, workerId, verificationId }) => (
+  GuestAppointmentVerificationJob.findOneAndUpdate(
+    {
+      _id: requireStrictObjectId(jobId, "jobId"),
+      generation,
+      status: "processing",
+      leaseOwner: requireWorkerId(workerId),
+      verification: null,
+    },
+    { $set: { verification: requireStrictObjectId(verificationId, "verificationId") } },
+    { new: true, runValidators: true },
+  ).select("+leaseOwner")
+);
 
-export const attachDelivery = async ({
-  jobId,
-  generation,
-  workerId,
-  verificationId,
-  deliveryId,
-}) => GuestAppointmentVerificationJob.findOneAndUpdate(
-  {
-    _id: requireStrictObjectId(jobId, "jobId"),
-    generation,
-    status: "processing",
-    leaseOwner: requireWorkerId(workerId),
-    verification: requireStrictObjectId(verificationId, "verificationId"),
-    delivery: null,
-  },
-  { $set: { delivery: requireStrictObjectId(deliveryId, "deliveryId") } },
-  { new: true, runValidators: true },
-).select("+leaseOwner");
+export const attachDelivery = async ({ jobId, generation, workerId, verificationId, deliveryId }) => (
+  GuestAppointmentVerificationJob.findOneAndUpdate(
+    {
+      _id: requireStrictObjectId(jobId, "jobId"),
+      generation,
+      status: "processing",
+      leaseOwner: requireWorkerId(workerId),
+      verification: requireStrictObjectId(verificationId, "verificationId"),
+      delivery: null,
+    },
+    { $set: { delivery: requireStrictObjectId(deliveryId, "deliveryId") } },
+    { new: true, runValidators: true },
+  ).select("+leaseOwner")
+);
 
 export const beginDelivery = async ({
   jobId,
@@ -220,10 +273,23 @@ export const beginDelivery = async ({
       $set: {
         status: "delivering",
         leaseExpiresAt: new Date(scopedNow.getTime() + lease),
+        purgeAfter: null,
       },
     },
     { new: true, runValidators: true },
   ).select("+leaseOwner");
+};
+
+const terminalTimes = ({ now, cooldownMs, retentionMs }) => {
+  const scopedNow = requireDate(now, "now");
+  const cooldown = requireDuration(cooldownMs, "cooldownMs");
+  const retention = requireDuration(retentionMs, "retentionMs");
+  if (retention < cooldown) throw new TypeError("retentionMs debe ser >= cooldownMs");
+  return {
+    scopedNow,
+    nextEligibleAt: new Date(scopedNow.getTime() + cooldown),
+    purgeAfter: new Date(scopedNow.getTime() + retention),
+  };
 };
 
 export const markDelivered = async ({
@@ -234,36 +300,41 @@ export const markDelivered = async ({
   deliveryId,
   now,
   cooldownMs = GUEST_APPOINTMENT_CHALLENGE_COOLDOWN_MS,
+  retentionMs = GUEST_APPOINTMENT_JOB_RETENTION_MS,
 }) => {
-  const scopedNow = requireDate(now, "now");
-  const cooldown = requireDuration(cooldownMs, "cooldownMs");
+  const { scopedNow, nextEligibleAt, purgeAfter } = terminalTimes({ now, cooldownMs, retentionMs });
   return GuestAppointmentVerificationJob.findOneAndUpdate(
-  {
-    _id: requireStrictObjectId(jobId, "jobId"),
-    generation,
-    status: "delivering",
-    leaseOwner: requireWorkerId(workerId),
-    verification: requireStrictObjectId(verificationId, "verificationId"),
-    delivery: requireStrictObjectId(deliveryId, "deliveryId"),
-  },
-  {
-    $set: {
-      status: "delivered",
-      deliveredAt: scopedNow,
-      nextEligibleAt: new Date(scopedNow.getTime() + cooldown),
-      leaseOwner: null,
-      leaseExpiresAt: null,
+    {
+      _id: requireStrictObjectId(jobId, "jobId"),
+      generation,
+      status: "delivering",
+      leaseOwner: requireWorkerId(workerId),
+      verification: requireStrictObjectId(verificationId, "verificationId"),
+      delivery: requireStrictObjectId(deliveryId, "deliveryId"),
     },
-  },
-  { new: true, runValidators: true },
+    {
+      $set: {
+        status: "delivered",
+        deliveredAt: scopedNow,
+        nextEligibleAt,
+        purgeAfter,
+        leaseOwner: null,
+        leaseExpiresAt: null,
+      },
+    },
+    { new: true, runValidators: true },
   );
 };
 
 export const markFailed = async ({
-  jobId, generation, workerId, now, cooldownMs = GUEST_APPOINTMENT_CHALLENGE_COOLDOWN_MS,
+  jobId,
+  generation,
+  workerId,
+  now,
+  cooldownMs = GUEST_APPOINTMENT_CHALLENGE_COOLDOWN_MS,
+  retentionMs = GUEST_APPOINTMENT_JOB_RETENTION_MS,
 }) => {
-  const scopedNow = requireDate(now, "now");
-  const cooldown = requireDuration(cooldownMs, "cooldownMs");
+  const { scopedNow, nextEligibleAt, purgeAfter } = terminalTimes({ now, cooldownMs, retentionMs });
   return GuestAppointmentVerificationJob.findOneAndUpdate(
     {
       _id: requireStrictObjectId(jobId, "jobId"),
@@ -275,7 +346,8 @@ export const markFailed = async ({
       $set: {
         status: "failed",
         failedAt: scopedNow,
-        nextEligibleAt: new Date(scopedNow.getTime() + cooldown),
+        nextEligibleAt,
+        purgeAfter,
         leaseOwner: null,
         leaseExpiresAt: null,
       },
@@ -285,25 +357,27 @@ export const markFailed = async ({
 };
 
 export const failOneStaleDelivery = async ({
-  now, cooldownMs = GUEST_APPOINTMENT_CHALLENGE_COOLDOWN_MS,
+  now,
+  cooldownMs = GUEST_APPOINTMENT_CHALLENGE_COOLDOWN_MS,
+  retentionMs = GUEST_APPOINTMENT_JOB_RETENTION_MS,
 }) => {
-  const scopedNow = requireDate(now, "now");
-  const cooldown = requireDuration(cooldownMs, "cooldownMs");
+  const { scopedNow, nextEligibleAt, purgeAfter } = terminalTimes({ now, cooldownMs, retentionMs });
   return GuestAppointmentVerificationJob.findOneAndUpdate(
-  {
-    status: "delivering",
-    leaseExpiresAt: { $lte: scopedNow },
-  },
-  {
-    $set: {
-      status: "failed",
-      failedAt: scopedNow,
-      nextEligibleAt: new Date(scopedNow.getTime() + cooldown),
-      leaseOwner: null,
-      leaseExpiresAt: null,
+    {
+      status: "delivering",
+      leaseExpiresAt: { $lte: scopedNow },
     },
-  },
-  { sort: { leaseExpiresAt: 1, _id: 1 }, new: true, runValidators: true },
+    {
+      $set: {
+        status: "failed",
+        failedAt: scopedNow,
+        nextEligibleAt,
+        purgeAfter,
+        leaseOwner: null,
+        leaseExpiresAt: null,
+      },
+    },
+    { sort: { leaseExpiresAt: 1, _id: 1 }, new: true, runValidators: true },
   );
 };
 
