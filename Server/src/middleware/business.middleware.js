@@ -20,77 +20,119 @@ const collectIdentifier = (name, values, normalize = (value) => value) => {
   return normalized[0] || null;
 };
 
-export const scopeBusiness = async (req, res, next) => {
-  try {
-    const sessionUser = req.session?.user;
-    let business = null;
+const readExplicitTenantIdentifiers = (req) => ({
+  businessId: collectIdentifier("businessId", [
+    req.query.businessId,
+    req.body?.businessId,
+    req.headers["x-business-id"],
+  ], (value) => value.trim()),
+  slug: collectIdentifier("slug", [
+    req.query.slug,
+    req.body?.slug,
+    req.headers["x-business-slug"],
+  ], (value) => value.toLowerCase().trim()),
+});
 
-    // Un negocio almacenado en sesión representa sólo contexto seleccionado.
-    // No se interpreta el rol copiado en sesión como prueba de autoridad.
-    if (sessionUser?.businessId) {
-      business = await businessRepository.findById(sessionUser.businessId);
-      if (!business) {
-        throw new NotFoundError("El negocio asociado a tu sesión no existe");
-      }
+const resolveExplicitBusiness = async (req) => {
+  const { businessId, slug } = readExplicitTenantIdentifiers(req);
 
-      if (!business.isActive) {
-        return res.status(403).json({
-          status: "fail",
-          message: "El negocio seleccionado no está disponible",
-        });
-      }
-    } else {
-      // Ruta pública o sesión sin tenant seleccionado: exige contexto explícito.
-      const businessId = collectIdentifier("businessId", [
-        req.query.businessId,
-        req.body?.businessId,
-        req.headers["x-business-id"],
-      ], (value) => value.trim());
-      const slug = collectIdentifier("slug", [
-        req.query.slug,
-        req.body?.slug,
-        req.headers["x-business-slug"],
-      ], (value) => value.toLowerCase().trim());
+  if (!businessId && !slug) {
+    throw new ValidationError("Debe especificar el negocio mediante businessId o slug");
+  }
 
-      if (!businessId && !slug) {
-        throw new ValidationError("Debe especificar el negocio mediante businessId o slug");
-      }
+  if (businessId && !mongoose.isValidObjectId(businessId)) {
+    throw new ValidationError("businessId debe ser un ObjectId válido");
+  }
 
-      if (businessId && !mongoose.isValidObjectId(businessId)) {
-        throw new ValidationError("businessId debe ser un ObjectId válido");
-      }
+  let businessById = null;
+  let businessBySlug = null;
+  if (businessId) businessById = await businessRepository.findById(businessId);
+  if (slug) businessBySlug = await businessRepository.findBySlug(slug);
 
-      let businessById = null;
-      let businessBySlug = null;
-      if (businessId) businessById = await businessRepository.findById(businessId);
-      if (slug) businessBySlug = await businessRepository.findBySlug(slug);
+  if ((businessId && !businessById) || (slug && !businessBySlug)) {
+    throw new NotFoundError(BUSINESS_NOT_AVAILABLE_MESSAGE);
+  }
 
-      if ((businessId && !businessById) || (slug && !businessBySlug)) {
-        throw new NotFoundError(BUSINESS_NOT_AVAILABLE_MESSAGE);
-      }
+  if (businessById && businessBySlug && !businessById._id.equals(businessBySlug._id)) {
+    throw new ValidationError("businessId y slug corresponden a negocios diferentes");
+  }
 
-      if (businessById && businessBySlug && !businessById._id.equals(businessBySlug._id)) {
-        throw new ValidationError("businessId y slug corresponden a negocios diferentes");
-      }
+  const business = businessById || businessBySlug;
+  if (!business?.isActive) {
+    throw new NotFoundError(BUSINESS_NOT_AVAILABLE_MESSAGE);
+  }
 
-      business = businessById || businessBySlug;
-      if (!business.isActive) {
-        throw new NotFoundError(BUSINESS_NOT_AVAILABLE_MESSAGE);
-      }
+  return business;
+};
+
+const hasExplicitTenantInput = (req) => [
+  req.query.businessId,
+  req.query.slug,
+  req.body?.businessId,
+  req.body?.slug,
+  req.headers["x-business-id"],
+  req.headers["x-business-slug"],
+].some((value) => value !== undefined && value !== null && value !== "");
+
+const applyInternalBusinessScope = async (req) => {
+  const sessionUser = req.session?.user;
+  let business = null;
+
+  if (sessionUser?.businessId) {
+    business = await businessRepository.findById(sessionUser.businessId);
+    if (!business) {
+      throw new NotFoundError("El negocio asociado a tu sesión no existe");
     }
 
-    req.business = business;
-    req.businessId = business._id;
+    if (!business.isActive) {
+      const error = new ValidationError("El negocio seleccionado no está disponible");
+      error.statusCode = 403;
+      error.code = "FORBIDDEN_ERROR";
+      throw error;
+    }
+  } else {
+    business = await resolveExplicitBusiness(req);
+  }
 
-    // Resolver de forma oportunista la autoridad vigente. Las rutas públicas
-    // pueden continuar sin Membership; las políticas protegidas exigirán
-    // req.tenantAuthority explícitamente.
-    req.tenantAuthority = sessionUser?.id
-      ? await findTenantAuthority(sessionUser.id, business._id, { business })
-      : null;
+  req.business = business;
+  req.businessId = business._id;
+  req.bookingSurface = "internal";
+  req.tenantAuthority = sessionUser?.id
+    ? await findTenantAuthority(sessionUser.id, business._id, { business })
+    : null;
+};
 
+export const scopeBusiness = async (req, res, next) => {
+  try {
+    await applyInternalBusinessScope(req);
     next();
   } catch (error) {
     next(error);
   }
+};
+
+// Contrato headless: el tenant se resuelve exclusivamente desde identificadores
+// explícitos del request. Una cookie existente no sustituye el Business solicitado
+// ni convierte la respuesta en una proyección administrativa.
+export const scopePublicBusiness = async (req, res, next) => {
+  try {
+    const business = await resolveExplicitBusiness(req);
+    req.business = business;
+    req.businessId = business._id;
+    req.bookingSurface = "public";
+    req.tenantAuthority = null;
+    next();
+  } catch (error) {
+    next(error);
+  }
+};
+
+// Compatibilidad de rutas compartidas: presencia de tenant explícito selecciona
+// siempre el contrato público; ausencia de tenant explícito permite al panel usar
+// su contexto de sesión. La decisión de proyección no depende de tenantAuthority.
+export const scopeHeadlessOrSessionBusiness = async (req, res, next) => {
+  if (hasExplicitTenantInput(req)) {
+    return scopePublicBusiness(req, res, next);
+  }
+  return scopeBusiness(req, res, next);
 };
