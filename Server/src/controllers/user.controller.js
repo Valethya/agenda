@@ -27,7 +27,7 @@ export const deleteWorker = async (req, res, next) => {
 
 export const getWorkers = async (req, res, next) => {
   try {
-    if (!req.tenantAuthority) {
+    if (req.bookingSurface === "public") {
       const workers = await getPublicProfessionalsForService({
         businessId: req.businessId,
         serviceId: req.query.serviceId,
@@ -35,7 +35,7 @@ export const getWorkers = async (req, res, next) => {
       return res.status(200).json({ status: "success", results: workers.length, payload: workers });
     }
 
-    const onlyActive = req.tenantAuthority.role !== "admin";
+    const onlyActive = req.tenantAuthority?.role !== "admin";
     const workers = await userService.getWorkersList(req.businessId, onlyActive);
     return res.status(200).json({ status: "success", results: workers.length, payload: workers });
   } catch (error) { next(error); }
