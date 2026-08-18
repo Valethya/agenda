@@ -20,6 +20,26 @@ const STATUS_TRANSITIONS = Object.freeze({
   cancel: Object.freeze({ from: Object.freeze(["pending", "pending_payment", "confirmed"]), to: "cancelled" }),
 });
 
+const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/u;
+
+export const buildGuestBookingContactSnapshot = (clientInfo) => {
+  const rawEmail = clientInfo?.email;
+  if (typeof rawEmail !== "string") throw new ValidationError("El email del cliente no es válido");
+  const trimmed = rawEmail.trim();
+  if (!trimmed || trimmed.length > 320 || !EMAIL_PATTERN.test(trimmed)) {
+    throw new ValidationError("El email del cliente no es válido");
+  }
+  const separatorIndex = trimmed.lastIndexOf("@");
+  const localPart = trimmed.slice(0, separatorIndex);
+  const domainPart = trimmed.slice(separatorIndex + 1).toLowerCase();
+  return {
+    channel: "email",
+    destination: `${localPart}@${domainPart}`,
+    provenance: "guest-booking-input-v1",
+    capturedAt: new Date(),
+  };
+};
+
 const asId = (value) => {
   const candidate = value?._id ?? value;
   return candidate?.toString?.() || "";
@@ -72,6 +92,7 @@ export const bookAppointment = async (appointmentData) => {
     notes,
     paymentOption,
     isSuggestion,
+    guestContact = null,
   } = appointmentData;
 
   await logEvent({
@@ -135,6 +156,7 @@ export const bookAppointment = async (appointmentData) => {
     status: initialStatus,
     notes: finalNotes,
     business: businessId,
+    guestContact,
   });
 
   await auditLogRepository.associateOrphanedLogs(client, newAppointment._id);

@@ -1,5 +1,35 @@
 import mongoose from "mongoose";
 
+const appointmentGuestContactSchema = new mongoose.Schema(
+  {
+    channel: {
+      type: String,
+      enum: ["email"],
+      required: true,
+      immutable: true,
+    },
+    destination: {
+      type: String,
+      required: true,
+      trim: true,
+      maxlength: 320,
+      immutable: true,
+    },
+    provenance: {
+      type: String,
+      enum: ["guest-booking-input-v1"],
+      required: true,
+      immutable: true,
+    },
+    capturedAt: {
+      type: Date,
+      required: true,
+      immutable: true,
+    },
+  },
+  { _id: false, versionKey: false },
+);
+
 const appointmentSchema = new mongoose.Schema(
   {
     client: {
@@ -47,6 +77,14 @@ const appointmentSchema = new mongoose.Schema(
       required: [true, "El negocio para la cita es obligatorio"],
       index: true,
     },
+    // Operational contact captured from the booking request itself. This is
+    // resource-scoped provenance, not identity or Client authority. Legacy
+    // appointments without this snapshot are intentionally ineligible for C2.
+    guestContact: {
+      type: appointmentGuestContactSchema,
+      default: null,
+      select: false,
+    },
     notes: {
       type: String,
       trim: true,
@@ -56,6 +94,12 @@ const appointmentSchema = new mongoose.Schema(
     timestamps: true,
     versionKey: false,
     autoIndex: process.env.NODE_ENV === "test",
+    toJSON: {
+      transform: (_doc, ret) => {
+        delete ret.guestContact;
+        return ret;
+      },
+    },
   }
 );
 
