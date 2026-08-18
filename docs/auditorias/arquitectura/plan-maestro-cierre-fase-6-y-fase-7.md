@@ -1,15 +1,10 @@
 # Plan maestro de cierre de Fase 6 y estado de Fase 7
 
 **Proyecto:** ATMÓSFERA Agenda
-**Estado del documento:** Plan vigente reconciliado con `master`; 6.2.2-B tiene
-su implementación read-only cerrada mediante los PR #17 y #19 y su ejecución
-operativa permanece pendiente sobre la nueva baseline; incluye la rebaseline
-del PR #18, el bootstrap fusionado mediante el PR #20 y el asistente local
-endurecido en el PR #21 todavía Draft
+**Estado del documento:** Plan histórico vigente; esta revisión reconcilia únicamente el bloque 6.2.6-A contra `master` posterior a PR #29 y no reescribe retrospectivamente los registros operativos de fases anteriores. 6.2.6-A formaliza el contrato headless mínimo en una rama de trabajo y permanece pendiente de CI/revisión; no declara cerrada la totalidad de 6.2.6.
 **Fecha original:** 21 de julio de 2026
-**Última revisión:** 8 de agosto de 2026
-**Base de contraste:** `master` después del PR #20
-(`14dc6967c16f1579e24f4e5d83b40309945f7a6f`)
+**Última revisión:** 18 de agosto de 2026
+**Base de contraste 6.2.6-A:** `master@3f2ab734d412828f5a77ec72b778a8d575a14cd4`, merge aprobado de PR #29 / 6.2.5-C2
 **Alcance:** Backend, multitenencia, seguridad, pagos, impersonación, frontend, pruebas y operación
 
 ## 1. Objetivo
@@ -69,7 +64,7 @@ No se considerará terminada una tarea solamente porque el código compile. Cada
 - 7.10 está cerrada mediante el PR #15.
 - 7.1–7.6 también están fusionadas según el registro de cada etapa.
 - 7.8 está aplazada por decisión de producto.
-- 6.2.2 es el siguiente bloque crítico.
+- El registro anterior se conserva como fotografía histórica. Para 6.2.6-A la fuente de verdad es `master@3f2ab734d412828f5a77ec72b778a8d575a14cd4`, que ya contiene el merge aprobado de PR #29 / 6.2.5-C2.
 
 ## 4. Etapa 6.1 — Base verificable
 
@@ -387,15 +382,32 @@ ATMÓSFERA Agenda funcionará como infraestructura de reservas headless según e
 
 Las webs construidas por ATMÓSFERA serán la interfaz del negocio y consumirán la API para crear recorridos completamente personalizados. En el futuro, el mismo contrato podrá ofrecerse a páginas de terceros sin modificar el dominio central.
 
+**Estado 6.2.6-A en esta rama**
+
+- se añadió la especificación versionable [`fase-6.2.6-contrato-headless-minimo.md`](./fase-6.2.6-contrato-headless-minimo.md);
+- servicios públicos usan una proyección allowlist mínima;
+- profesionales públicos se resuelven para un Service activo concreto mediante Membership vigente + `Service.workers`, sin usar `User.role`/`User.business` como authority;
+- disponibilidad conserva Business + Service + worker + Shift + Block + Appointment tenant-scoped;
+- la creación guest conserva `Appointment.guestContact` internamente pero devuelve una proyección mínima que no expone `Appointment.client` ni contacto;
+- tenant ausente/contradictorio continúa fail-closed y no existe fallback;
+- el error del limiter global se estabiliza como `429 RATE_LIMITED`;
+- la creación no añade una plataforma genérica de idempotency keys: el índice único tenant-scoped existente evita el duplicado activo equivalente, mientras un timeout post-commit permanece explícitamente ambiguo;
+- C2 READ permanece action-scoped y no concede cancel, reschedule ni payment authority;
+- la suite contractual se incorpora al comando oficial de integración.
+
+**Pendiente / no cerrado por 6.2.6-A**
+
+`BusinessConfig` aún no contiene `websiteUrl`/`bookingUrl` persistidos ni existe infraestructura completa de verificación de dominio. C2 continúa usando `GUEST_APPOINTMENT_ACCESS_ORIGIN` HTTPS server-side como trusted origin. No se inventa un verificador de dominios dentro de 6.2.6-A. Por esta razón, 6.2.6 completo no se declara cerrado.
+
 **Cambio necesario**
 
-- Definir una versión inicial mínima para servicios, profesionales, disponibilidad y creación de citas.
-- Reservar confirmación, reprogramación y cancelación públicas para operaciones separadas con credenciales de acción.
-- Exigir `businessId` o slug válido en todas las operaciones públicas y aplicar ownership en el backend.
-- Evitar que la API dependa del orden visual, cantidad de pasos o estructura del formulario consumidor.
-- Registrar por negocio una `websiteUrl` y una `bookingUrl` HTTPS cuyos dominios hayan sido verificados.
-- Construir enlaces operativos exclusivamente desde la configuración persistida; nunca desde una URL arbitraria recibida del navegador.
-- Definir estados, códigos de error, idempotencia, límites de frecuencia y reglas de compatibilidad.
+- ~~Definir una versión inicial mínima para servicios, profesionales, disponibilidad y creación de citas.~~ **Implementado en 6.2.6-A; pendiente CI/revisión.**
+- Reservar confirmación, reprogramación y cancelación públicas para operaciones separadas con credenciales de acción. **READ existe en C2; las capabilities futuras continúan fuera de alcance.**
+- ~~Exigir `businessId` o slug válido en todas las operaciones públicas y aplicar ownership en el backend.~~ **Preservado y cubierto contractualmente.**
+- ~~Evitar que la API dependa del orden visual, cantidad de pasos o estructura del formulario consumidor.~~ **Formalizado en 6.2.6-A.**
+- Registrar por negocio una `websiteUrl` y una `bookingUrl` HTTPS cuyos dominios hayan sido verificados. **Pendiente; no se implementa sin infraestructura de confianza.**
+- Construir enlaces operativos exclusivamente desde la configuración persistida; nunca desde una URL arbitraria recibida del navegador. **C2 ya usa trusted server-side origin; la variante persistida por Business sigue pendiente.**
+- ~~Definir estados, códigos de error, idempotencia, límites de frecuencia y reglas de compatibilidad.~~ **Formalizado para el contrato mínimo; no implica que todas las deudas operativas futuras estén resueltas.**
 
 **Criterio de aceptación**
 
@@ -404,6 +416,7 @@ Las webs construidas por ATMÓSFERA serán la interfaz del negocio y consumirán
 - Una solicitud con negocio inexistente o recurso de otro tenant se rechaza de manera determinista.
 - Cambiar la presentación de una web no requiere modificar la lógica central de citas.
 - El contrato inicial no incorpora endpoints ajenos a los recorridos necesarios para el MVP.
+- Las pruebas de 6.2.6-A deben permanecer verdes junto con tenant isolation, availability, Appointment ownership, C1 y C2 antes de declarar la subfase lista para revisión.
 
 ## 6. Etapa 6.3 — Autorización, sesiones y pagos
 
@@ -841,41 +854,14 @@ La Fase 6 podrá declararse terminada cuando se cumplan todas estas condiciones:
 
 ## 13. Siguiente bloque de trabajo recomendado
 
-6.1, 6.2.1 y 6.2.2-A están cerradas. 6.2.2-B tiene cerrada su implementación
-read-only mediante los PR #17 y #19, pero conserva pendiente su ejecución operativa
-sobre la nueva baseline. No existe un conjunto productivo que migrar. El
-siguiente hito es verificar y ejecutar de forma controlada la baseline
-preproductiva sin mezclar todavía 6.2.3, 6.2.4 ni el responsive:
+En la baseline verificada para esta revisión, `master@3f2ab734d412828f5a77ec72b778a8d575a14cd4` ya contiene PR #29 / 6.2.5-C2. El bloque actual es **6.2.6-A** y debe cerrarse únicamente después de CI y revisión adversarial del contrato headless mínimo.
 
-1. terminar la revisión del PR #21, mantenerlo Draft hasta confirmar sus nuevas
-   pruebas adversariales y fusionarlo sólo con autorización explícita;
-2. preparar fuera del repositorio las credenciales iniciales y aprobar el
-   fingerprint del destino de desarrollo;
-3. ejecutar primero `plan` y conservar su evidencia operativa sin secretos;
-4. ejecutar `apply` de forma manual y controlada únicamente si el preflight
-   declara la base elegible y confirma una topología replica set; ante un
-   resultado `unknown`, volver obligatoriamente a `plan` antes de reintentar.
-   Una sesión caída o transacción expirada se recupera mediante rollback del
-   servidor, nunca borrando manualmente un lock comprometido;
-5. crear y verificar de forma controlada el índice único físico, sin depender
-   de `autoIndex`,
-   `{ user: 1, business: 1 }`;
-6. crear la nueva base de desarrollo sólo después de fusionar y verificar la
-   implementación;
-7. verificar después del bootstrap las colecciones, los documentos esperados y
-   el índice físico;
-8. ejecutar operativamente el auditor read-only como gate posterior sobre la
-   nueva base y exigir un informe seguro;
-9. mantener 6.2.2-D bloqueada hasta crear, verificar y auditar la baseline;
-   después, desplegar el corte de autoridad HTTP y sesión en un PR separado;
-10. cerrar lecturas heredadas y WebSocket en otro PR;
-11. conservar el contrato de migración completo como contingencia: si aparece
-   información real antes del corte, detener la rebaseline e implementar
-   respaldo, `apply`, `verify` y `rollback` antes de escribir;
-12. retirar `User.role` y `User.business` únicamente después de comprobar que
-    no quedan lecturas productivas y de cerrar la ventana de compatibilidad.
+Orden inmediato:
 
-El diseño documental no autoriza por sí mismo ninguna escritura productiva.
-La creación real de la baseline, la ejecución operativa del auditor y el diseño
-que separará autoridad administrativa de capacidad profesional continúan
-pendientes. Los propietarios todavía no son profesionales agendables.
+1. validar la suite contractual junto con todas las barreras CI existentes;
+2. revisar adversarialmente proyecciones públicas, aislamiento tenant, errores, rate limits, idempotencia y compatibilidad;
+3. mantener explícita la deuda `websiteUrl`/`bookingUrl` + verificación de dominio sin inventar infraestructura dentro de 6.2.6-A;
+4. no convertir C2 READ en cancel/reschedule/payment authority;
+5. no iniciar 6.3 hasta que 6.2.6-A haya sido revisada y se decida de forma explícita qué parte pendiente de 6.2.6 debe resolverse antes del salto de fase.
+
+El diseño documental no autoriza por sí mismo ninguna escritura productiva ni amplía capabilities existentes.
