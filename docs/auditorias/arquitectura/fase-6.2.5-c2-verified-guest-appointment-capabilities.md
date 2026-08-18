@@ -2,319 +2,242 @@
 
 ## Estado y baseline
 
-Implementación construida sobre `master` en:
+Implementación construida sobre `master@a84b5619b7f2fc0f928fff51755c8930934fcc0c`, merge aprobado de 6.2.5-C1 / PR #28.
 
-`a84b5619b7f2fc0f928fff51755c8930934fcc0c`
+C2 conserva los contratos de 6.2.5-A, 6.2.5-B, 6.2.5-C1, ADR-002 y APT-CLIENT-01. El alcance ejecutable continúa siendo **READ únicamente**.
 
-Esa baseline corresponde al merge aprobado de 6.2.5-C1 / PR #28.
+## Autoridad que introduce C2
 
-C2 conserva los contratos congelados de 6.2.5-A, 6.2.5-B, 6.2.5-C1, ADR-002 y APT-CLIENT-01.
+El flujo efectivo es:
 
-## Objetivo
+`HTTP acceptance -> durable intent -> worker -> Appointment-scoped contact provenance -> C1 Verification -> trusted delivery -> exact C1 consume -> Appointment READ capability`
 
-C2 introduce una autoridad guest explícita, temporal y por recurso:
+Una capability significa exclusivamente que quien posee el bearer puede ejecutar `read` sobre **una Appointment exacta de un Business exacto** mientras el grant sea válido.
 
-`issue challenge -> trusted email delivery -> consume challenge -> Appointment capability`
+No significa Client account, User authority, Membership, CustomerProfile ownership, claim, historial ni continuidad histórica.
 
-Una capability C2 significa únicamente:
+`appointment-read-bootstrap -> read` es el único mapping implementado. `cancel` y `reschedule` permanecen separados y fuera de este PR.
 
-> quien posee este bearer puede ejecutar esta acción exacta sobre esta Appointment exacta dentro de este Business mientras el grant continúe válido.
+## Provenance Appointment-scoped
 
-No significa identidad histórica, Client account, CustomerProfile ownership, Membership, User authority ni continuidad entre citas.
+Las nuevas reservas guest capturan `Appointment.guestContact` directamente desde el input de ese booking **antes** de llamar a `getOrCreateGuestUser()`:
 
-## Alcance implementado
+- `channel: email`
+- `destination`
+- `provenance: guest-booking-input-v1`
+- `capturedAt`
 
-C2 implementa **READ end-to-end**.
+El snapshot es `select:false` e inmutable. Es contacto operacional del recurso; no es identidad ni ownership.
 
-Las acciones quedan conceptualmente separadas:
+El worker C2 consulta únicamente `Appointment + Business + Service + guestContact`. No popula `Appointment.client`, `User`, `CustomerProfile`, otras Appointment ni historial.
 
-- `read`
-- `cancel`
-- `reschedule`
+Por tanto:
 
-Pero sólo existe el mapping ejecutable:
+- `Appointment.client` no habilita bootstrap;
+- `User.email` / `User.phone` legacy no son provenance;
+- cambiar posteriormente `User.email` no cambia el destinatario histórico de la Appointment;
+- Appointment legacy sin `guestContact` válido falla cerrado;
+- no existe migración heurística de legacy en C2.
 
-`appointment-read-bootstrap -> read`
+`current channel control != historical subject continuity` sigue siendo una frontera explícita.
 
-`cancel` y `reschedule` quedan congeladas para un incremento posterior. Cualquier combinación distinta al mapping READ implementado falla cerrada. No existe `appointment-manage` ni otro grant multipropósito.
+## Frontera HTTP y orquestación durable
 
-## Persistencia
+`POST /api/guest-appointments/read/challenge` valida sólo IDs sintácticos, persiste/deduplica una intención durable y responde el mismo `202` genérico. No consulta Appointment, User, CustomerProfile ni proveedor de email antes de responder.
 
-### GuestAppointmentVerificationDelivery
+`GuestAppointmentVerificationJob` mantiene scope físico único:
 
-Registro de orquestación que vincula un challenge C1 ya emitido con:
+`Business + Appointment + purpose + action`
 
+Lifecycle:
+
+`queued -> processing -> delivering -> delivered | failed`
+
+El worker:
+
+1. reclama un job con lease atómico;
+2. resuelve la Appointment tenant-scoped y `guestContact` válido;
+3. emite C1 Verification;
+4. adjunta la Verification a la generación reclamada;
+5. crea y adjunta Delivery con la misma generación;
+6. construye la URL desde `GUEST_APPOINTMENT_ACCESS_ORIGIN`;
+7. cambia a `delivering` antes del transporte externo;
+8. sólo tras aceptación marca Delivery y Job como `delivered`.
+
+Un worker sin ownership o con generación obsoleta no puede completar el estado actual.
+
+### Leases y resultado externo incierto
+
+`processing` stale puede recuperarse porque ningún email ha sido intentado todavía. Los artefactos derivados conocidos se cierran/revocan antes de emitir un nuevo challenge.
+
+`delivering` stale **no se reenvía automáticamente**. Se convierte a `failed`, se intenta cerrar Delivery y revocar la Verification conocida. Si el proveedor aceptó el email justo cuando otro worker marcó el job failed, la Verification queda revocada y el job no está `delivered`; exchange exige ambos estados coherentes, por lo que no aparece una segunda autoridad.
+
+Esta política sacrifica disponibilidad ante resultado de transporte incierto para conservar fail-closed.
+
+## Trusted delivery y secretos
+
+Challenges y capabilities usan `crypto.randomBytes(32)` y `base64url`.
+
+MongoDB nunca persiste challenge raw ni capability bearer raw. C1 y C2 persisten únicamente hashes derivados.
+
+El challenge raw existe en memoria del worker durante la construcción/entrega del mensaje. La URL lo lleva en fragment (`#`), no query.
+
+La infraestructura sensible de email:
+
+- usa el destination persistido por C1, proveniente del snapshot Appointment-scoped;
+- no registra recipient;
+- no registra HTML/body;
+- no registra bearer URL;
+- no registra provider error body;
+- no imprime preview URL Ethereal para mensajes sensibles.
+
+`delivered` significa sólo que el transport/provider configurado aceptó el mensaje. No demuestra lectura ni identidad histórica.
+
+## Consumo exacto de C1
+
+C1 mantiene su API previa `consumeVerificationForBusiness()`.
+
+C2 usa la primitive adicional `consumeExactVerificationForBusiness()`, que deriva el mismo hash y ejecuta una única operación atómica con:
+
+`verificationId + Business + purpose + secretHash + status=pending + expiresAt>now`
+
+Un verificationId incorrecto acompañado de un secret válido no consume otra proof.
+
+C1 Verification continúa sin campo Appointment y no se convierte en Appointment authority.
+
+## Capability READ
+
+`GuestAppointmentCapability` persiste:
+
+- `business`
+- `appointment`
 - `verification`
-- `business`
-- `appointment`
-- `purpose`
-- `action`
-- `status`: `pending | delivered | failed`
-- `deliveredAt`
-- `failedAt`
-
-Este documento **no concede autoridad**. Su función es demostrar que el challenge asociado al scope exacto fue aceptado por la trusted delivery layer.
-
-No duplica `destination` y no persiste bearer raw. C1 continúa siendo la fuente del channel/destination persistido.
-
-C1 permanece sin campo `appointment`; C2 no rompe el contrato que separa Verification de Appointment authority.
-
-### GuestAppointmentCapability
-
-Campos relevantes:
-
-- `business`
-- `appointment`
-- `verification` como provenance
-- `action`
+- `action=read`
 - `secretHash`
-- `status`: `active | consumed | revoked`
+- `status=active|consumed|revoked`
 - `expiresAt`
-- `consumedAt`
-- `revokedAt`
-- timestamps
+- timestamps terminales
 
-No contiene:
+Una Verification sólo puede respaldar una capability por índice unique.
 
-- `User`
-- `Membership`
-- `CustomerProfile`
-- email/phone
-- raw bearer
-- historial
-- permisos sobre otras Appointment
+READ es single-use. `expiresAt <= now` falla cerrado y revocación/consumo son terminales.
 
-El bearer se genera con `crypto.randomBytes(32)` y se codifica `base64url`.
+La proyección READ contiene sólo datos operacionales de Appointment, Business, Service y professional. No expone client/contact, notes, User authority, Membership, CustomerProfile, historial ni timeline.
 
-MongoDB almacena únicamente un SHA-256 derivado del scope físico `Business + Appointment + action + bearer`.
+## Anti-amplificación durable
 
-## Preconditions para emitir capability
+### Cooldown por scope
 
-El repository C2 exige simultáneamente:
+Un índice unique conserva un único job por `Business + Appointment + purpose + action`. El cooldown actual es 15 minutos y funciona entre procesos/instancias.
 
-1. Appointment existente dentro del `businessId` explícito;
-2. Verification C1 exacta, mismo Business y purpose, en estado `consumed`;
-3. Delivery C2 exacta, misma Verification, Business, Appointment, purpose y action, en estado `delivered` con `deliveredAt`.
+### Retención terminal
 
-Por tanto, estos caminos no conceden capability:
+Los jobs `delivered` y `failed` reciben `purgeAfter`. La retención por defecto es 60 minutos, superior al cooldown.
 
-- `issue -> capability`
-- `issue -> consume sin trusted delivery -> capability`
-- Verification de Business A + Appointment de Business B
-- proof READ -> cancel/reschedule
-- bearer de Appointment A -> Appointment B
+`queued`, `processing` y `delivering` mantienen `purgeAfter=null`, por lo que el TTL nunca elimina trabajo activo.
 
-## Trusted email delivery
+MongoDB materializa:
 
-C2 reutiliza la infraestructura de email existente mediante un transporte sensible dedicado.
+`{ purgeAfter: 1 }` con `expireAfterSeconds: 0`.
 
-Para mensajes bearer-bearing:
+Al reutilizar un scope terminal después del cooldown, `generation` aumenta y `purgeAfter` vuelve a `null`.
 
-- el destino usado es `issued.destination`, es decir, el destination normalizado que C1 persiste al emitir el challenge;
-- no existe parámetro HTTP posterior que pueda sustituir ese email;
-- no se registra destinatario;
-- no se registra HTML/body;
-- no se registra bearer URL;
-- no se registra texto de error del proveedor;
-- no se imprime preview URL de Ethereal;
-- el challenge raw no se persiste.
+### Backpressure de intake
 
-`delivered` significa que el proveedor/transport configurado aceptó el mensaje. No se interpreta como lectura del email ni como identidad histórica.
+Antes de crear/reutilizar un job, un bucket global persistente reserva capacidad en una ventana temporal. Por defecto:
 
-Si el transporte no confirma aceptación, el delivery se marca `failed` cuando es posible y el challenge C1 se revoca best-effort. Aunque la revocación fallara, la ausencia de un delivery `delivered` impide que C2 emita capability.
+- ventana: 60 segundos;
+- máximo: 240 intents por ventana;
+- retención del bucket: 10 minutos tras su ventana.
 
-## Contacto operacional y legacy guest User
+El bucket contiene sólo `_id` temporal, `count` y `expiresAt`: no contiene Business, Appointment, email ni autoridad. Por ello saturarlo no exige consultar ni revela la existencia del recurso.
 
-El schema actual de Appointment no contiene un snapshot inmutable del email usado al reservar; contiene `Appointment.client -> User` y `User.email` es un arreglo que puede haber acumulado contactos legacy.
+Su TTL físico es:
 
-C2 **no interpreta `User.email` como autoridad**.
+`{ expiresAt: 1 }` con `expireAfterSeconds: 0`.
 
-Para evitar elegir arbitrariamente un mailbox incorrecto:
+Al alcanzar el límite, el enqueue no crea otro scope, pero la superficie pública conserva exactamente el mismo `202`.
 
-- si la Appointment resuelve exactamente un email operacional no vacío, C2 puede enviar allí el challenge;
-- si el User legacy contiene múltiples emails, C2 falla cerrado y no envía un challenge.
+Este mecanismo limita la tasa durable de scopes aleatorios; la retención terminal evita acumulación indefinida de jobs ya procesados. Una caída indefinida del worker puede seguir acumulando jobs activos a la tasa limitada, porque C2 deliberadamente no aplica TTL a trabajo activo; es un riesgo operacional residual a monitorizar, no una razón para consultar Appointment antes del 202.
 
-Esto es intencional. Resolver el snapshot de contacto de Appointment o una migración histórica queda fuera de C2 y no debe inferirse mediante matching de email, CustomerProfile u otras Appointment.
+## Índices físicos y cutover
 
-La verificación sólo demuestra:
+Antes de exponer C2 remotamente se ejecuta:
 
-`current channel control`
+`npm run migration:guest-appointment-capability-storage`
 
-No demuestra:
+El migrador conecta con `autoIndex:false`, exige replica set o mongos, materializa de forma idempotente las colecciones/índices C1+C2 y no hace drop/recreate destructivo.
 
-`historical subject continuity`.
+La identidad de seguridad de un índice es:
 
-## URLs sensibles
+- key pattern en orden exacto;
+- `unique` exacto;
+- `expireAfterSeconds` exacto cuando corresponde.
 
-Las URLs de verificación se construyen únicamente desde:
+**El nombre físico no forma parte de la equivalencia de seguridad.** Un índice con key/options equivalentes y otro nombre es aceptable. Sin embargo, si el nombre esperado ya existe con keys/options incompatibles, el cutover falla cerrado para no ocultar una colisión de topología.
 
-`GUEST_APPOINTMENT_ACCESS_ORIGIN`
+Índices C2 adicionales de jobs:
 
-La configuración debe ser un origin HTTPS explícito sin:
+- scope unique;
+- claim por status/lease/updatedAt;
+- TTL terminal sobre `purgeAfter`.
 
-- credenciales;
-- path distinto de `/`;
-- query;
-- fragment.
+También existe TTL del bucket de intake sobre `expiresAt`.
 
-C2 nunca usa para construir el enlace:
+Runtime remoto requiere:
 
-- `Host`
-- `Origin`
-- `Referer`
-- `X-Forwarded-Host`
-- headers del requester
-- slug o tenant derivado de sesión
+`GUEST_APPOINTMENT_6_2_5_C2_CUTOVER=GUEST_APPOINTMENT_6_2_5_C2_STORAGE_READY`
 
-El challenge se coloca en el **fragmento** (`#...`) de `/appointment-access`, no en query string. El fragmento no se envía en la petición HTTP inicial ni en el header Referer.
+El orden de startup es:
 
-La página claimant elimina el fragmento mediante `history.replaceState` antes del primer POST y no carga recursos de terceros.
+`connectDB -> availability cutover gate -> C2 storage cutover gate -> app.listen -> socket init -> worker start`
 
-## Superficie HTTP
+Si cualquiera de los gates falla, HTTP no abre y el worker no arranca. El worker se detiene al evento `close` del HTTP server.
 
-Rutas públicas C2:
+## URLs y claimant
 
-- `POST /api/guest-appointments/read/challenge`
-- `POST /api/guest-appointments/read/verify`
-- `POST /api/guest-appointments/read`
+`GUEST_APPOINTMENT_ACCESS_ORIGIN` debe ser un origin HTTPS explícito, sin credenciales/path/query/hash. No se usan `Host`, `Origin`, `Referer` ni `X-Forwarded-*` del requester para construir bearer links.
 
-Todas exigen `businessId` explícito dentro del body. No usan `scopeBusiness`, porque esa abstracción también acepta fuentes de tenant como sesión, slug o headers.
+`/appointment-access` elimina el fragmento antes del primer POST, usa `credentials: omit`, no usa `localStorage` ni `sessionStorage`, no crea Client session y no carga recursos third-party antes del canje.
 
-Los schemas son `strict` y rechazan campos adicionales como:
+## Evidencia automatizada real
 
-- `email`
-- `action`
-- tenant alternativo
+Los archivos de prueba C2 presentes son:
 
-La emisión responde siempre `202 Accepted` de forma genérica para reducir enumeración de citas/contactos.
-
-`verify` y `read` devuelven errores públicos estables y no exponen errores internos.
-
-Las respuestas sensibles incluyen:
-
-- `Cache-Control: no-store`
-- `Referrer-Policy: no-referrer`
-
-Los endpoints tienen budgets de rate limit separados, incluido un límite más estricto para issuance de email.
-
-## Claimant mínimo
-
-`/appointment-access` es únicamente un claimant técnico para completar READ end-to-end.
-
-No es un frontend Client ni crea sesión.
-
-Características:
-
-- `credentials: omit`;
-- no `localStorage`;
-- no `sessionStorage`;
-- no cookies de Client;
-- no historial;
-- no listado de citas;
-- no cancel/reschedule;
-- bearer sólo en memoria;
-- elimina el challenge del fragmento antes del exchange;
-- usa el capability READ una vez y no lo conserva.
-
-## READ projection
-
-La lectura guest devuelve exclusivamente:
-
-- Appointment id;
-- Business: id, name, slug;
-- Service: id, name, duration;
-- professional: id, firstName, lastName;
-- date;
-- startTime;
-- endTime;
-- status;
-- paymentStatus.
-
-No devuelve:
-
-- `Appointment.client`;
-- emails/teléfonos;
-- notes;
-- CustomerProfile;
-- User authority;
-- Membership;
-- historial;
-- timeline.
-
-## Lifecycle
-
-READ es single-use.
-
-Transiciones admitidas:
-
-- `active -> consumed` al ejecutar READ correctamente;
-- `active -> revoked` mediante revocación interna;
-- `active` deja de ser utilizable cuando `expiresAt <= now`.
-
-Una capability consumida, revocada o expirada no vuelve a activarse y no se acepta en replay.
-
-TTL inicial de READ: 10 minutos desde emisión de capability.
-
-## Contratos que permanecen intactos
-
-C2 no modifica la autoridad de:
-
-- User como identidad global autenticable;
-- Membership como autoridad tenant ordinaria admin/worker;
-- CustomerProfile como dato tenant sin autoridad;
-- Business.owner;
-- superadmin;
-- Appointment.client bajo APT-CLIENT-01.
-
-En particular:
-
-`Appointment.client === authenticated User._id`
-
-sigue sin conceder read/list/history/cancel/reschedule/timeline.
-
-La autoridad READ guest proviene exclusivamente del bearer C2 correctamente scoped.
+- `Server/test/guestAppointmentCapability.test.js`
+  - intake durable sin transporte HTTP;
+  - provenance Appointment-scoped;
+  - legacy fail-closed;
+  - delivery accepted/failed;
+  - C1 directo sin delivery;
+  - purpose confusion;
+  - cross-Business/cross-Appointment;
+  - bearer raw ausente;
+  - READ projection/single-use/replay/expiry/revoke;
+  - service incoherence;
+  - worker concurrency, stale processing/delivering, ownership y generation;
+  - cooldown, retención y backpressure.
+- `Server/test/guestAppointmentCapabilityStorage.test.js`
+  - `autoIndex:false`;
+  - materialización e inspección con `listIndexes()`;
+  - key order, unique y TTL exactos;
+  - idempotencia;
+  - índices incompatibles;
+  - semántica de nombres físicos;
+  - standalone reject / replica set accept;
+  - gate remoto y confirmation.
+- `Server/test/unit/client-contact-verification.contract.test.js`
+  - superficie C1 preservada más primitives exactas documentadas.
+- `Server/test/unit/guest-appointment-capability.contract.test.js`
+  - fronteras de action/scope/secrets/TTL e HTTP strict.
+- `Server/test/unit/guest-appointment-startup.lifecycle.test.js`
+  - database real de Mongoose sin typo;
+  - gate fallido antes de listen;
+  - orden gates/listen/socket/worker;
+  - shutdown del worker en `close`.
+
+No se declaran suites inexistentes.
 
 ## Fuera de alcance
 
-No se implementan:
-
-- Client account/login/session;
-- User <-> CustomerProfile binding;
-- CustomerProfile claim;
-- Client history/list/timeline;
-- recuperación de citas antiguas;
-- matching histórico por email/teléfono;
-- deduplicación/merge/split;
-- Appointment.client como autoridad;
-- cambios a `getOrCreateGuestUser()`;
-- password recovery;
-- Membership Client;
-- OAuth Client;
-- loyalty/subscription/CRM/marketing consent;
-- frontend Client completo;
-- SMS;
-- migración masiva o data migration;
-- cancel/reschedule end-to-end;
-- fase 6.2.5-D.
-
-## Verificación automatizada
-
-Las suites C2 verifican, entre otros:
-
-- issue no expone bearer al requester;
-- trusted delivery usa el destination persistido por C1;
-- delivery no confirmado no puede generar capability;
-- C1 issue directo sin delivery C2 no puede generar capability;
-- purpose/action mapping fail-closed;
-- aislamiento cross-tenant;
-- aislamiento cross-Appointment;
-- secreto raw ausente de MongoDB;
-- hash distinto del bearer;
-- READ projection mínima;
-- single-use/replay denial;
-- expiración estricta `expiresAt <= now`;
-- revocación terminal;
-- rechazo de User legacy con múltiples emails;
-- origin HTTPS confiable;
-- validaciones HTTP strict;
-- C1 sigue sin `appointment`.
+C2 no implementa Client account/login/session, User↔CustomerProfile binding, claims, Client history/list/timeline, correlación histórica, CustomerProfile ownership, Appointment.client authority, cambios a `getOrCreateGuestUser()`, Membership Client, OAuth Client, CRM/marketing/loyalty/subscription, SMS, migración histórica, cancel/reschedule end-to-end ni 6.2.5-D.
