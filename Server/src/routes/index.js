@@ -16,20 +16,23 @@ const router = Router();
 
 router.use("/", authRoutes);
 
-router.use("/services", scopeBusiness, serviceRoutes);
-router.use("/availability", scopeBusiness, availabilityRoutes);
-router.use("/appointments", scopeBusiness, appointmentRoutes);
+// Services, availability, appointments and workers contain both public headless
+// and internal panel operations. Each router declares its tenant policy at the
+// route boundary so an incidental session cannot redefine a public request.
+router.use("/services", serviceRoutes);
+router.use("/availability", availabilityRoutes);
+router.use("/appointments", appointmentRoutes);
+router.use("/users", userRoutes);
 
 // C2 has its own explicit businessId contract and intentionally does not use
-// scopeBusiness, which also accepts session/slug/header-derived tenant context.
+// the generic Business scoping middleware.
 router.use("/guest-appointments", guestAppointmentCapabilityRoutes);
 
 if (paymentRoutesEnabled) {
   router.use("/payments", paymentRoutes);
 }
-router.use("/users", scopeBusiness, userRoutes);
-router.use("/business-settings", scopeBusiness, businessConfigRoutes);
 
+router.use("/business-settings", scopeBusiness, businessConfigRoutes);
 router.use("/superadmin", superadminRoutes);
 router.use("/health", healthRoutes);
 
