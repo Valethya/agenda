@@ -21,7 +21,7 @@ const baseUrl = `http://localhost:${server.address().port}/api`;
 const request = (path, { method = "GET", cookie, body, headers = {} } = {}) => fetch(`${baseUrl}${path}`, {
   method,
   headers: {
-    ...(cookie ? { Cookie: cookie } : {}),
+    ...(cookie ? { Cookie: cookie, "x-agenda-surface": "internal" } : {}),
     ...(body ? { "Content-Type": "application/json" } : {}),
     ...headers,
   },
@@ -122,7 +122,8 @@ test("6.2.4-B Appointment ownership enforcement", async (t) => {
     const slots = await request(`/availability/slots?workerId=${seed.admin._id}&serviceId=${service._id}&date=2099-09-01&slug=${seed.business.slug}`);
     assert.equal(slots.status, 200);
     const booking = await request("/appointments", {
-      method: "POST", headers: { "x-business-slug": seed.business.slug },
+      method: "POST", cookie: adminCookie,
+      headers: { "x-business-slug": seed.business.slug },
       body: {
         worker: seed.admin._id.toString(), service: service._id, date: "2099-09-01", startTime: "09:00", isSuggestion: true,
         clientInfo: { firstName: "Guest", lastName: "Admin Pro", email: "admin-pro-guest@example.com", phone: "+56981110003" },
@@ -207,7 +208,8 @@ test("6.2.4-B Appointment ownership enforcement", async (t) => {
     assert.ok(await Appointment.findById(historical._id));
     assert.equal((await request(`/availability/slots?workerId=${seed.worker._id}&serviceId=${activeService._id}&date=2099-09-01&slug=${seed.business.slug}`)).status, 404);
     assert.equal((await request("/appointments", {
-      method: "POST", headers: { "x-business-slug": seed.business.slug },
+      method: "POST", cookie: adminCookie,
+      headers: { "x-business-slug": seed.business.slug },
       body: {
         worker: seed.worker._id.toString(), service: activeService._id, date: "2099-09-01", startTime: "11:00", isSuggestion: true,
         clientInfo: { firstName: "Guest", lastName: "Inactive", email: "inactive-booking-624b@example.com", phone: "+56981110006" },
