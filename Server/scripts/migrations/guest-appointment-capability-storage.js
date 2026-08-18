@@ -1,16 +1,49 @@
 import mongoose from "mongoose";
+import { isDeepStrictEqual } from "node:util";
 import { fileURLToPath } from "node:url";
 import { urlMongo } from "../../src/config/env.js";
+import { GUEST_APPOINTMENT_ARTIFACT_RETENTION_SECONDS } from "../../src/security/guestAppointmentArtifactRetention.constants.js";
+
+const canonicalizeOptionValue = (value) => {
+  if (Array.isArray(value)) return value.map(canonicalizeOptionValue);
+  if (value && typeof value === "object" && Object.getPrototypeOf(value) === Object.prototype) {
+    return Object.fromEntries(
+      Object.keys(value)
+        .sort()
+        .map((key) => [key, canonicalizeOptionValue(value[key])]),
+    );
+  }
+  return value;
+};
+
+const normalizeCollation = (value) => {
+  if (value === undefined || value === null) return null;
+  const normalized = canonicalizeOptionValue(value);
+  if (
+    normalized
+    && normalized.locale === "simple"
+    && Object.keys(normalized).length === 1
+  ) {
+    return null;
+  }
+  return normalized;
+};
 
 const spec = (collection, name, key, options = {}) => Object.freeze({
   collection,
   name,
   key: Object.freeze({ ...key }),
   options: Object.freeze({
-    unique: Boolean(options.unique),
+    unique: options.unique === true,
     expireAfterSeconds: Number.isInteger(options.expireAfterSeconds)
       ? options.expireAfterSeconds
       : null,
+    sparse: options.sparse === true,
+    partialFilterExpression: options.partialFilterExpression === undefined
+      ? null
+      : canonicalizeOptionValue(options.partialFilterExpression),
+    collation: normalizeCollation(options.collation),
+    hidden: options.hidden === true,
   }),
 });
 
@@ -19,6 +52,12 @@ export const GUEST_APPOINTMENT_C2_INDEX_SPECS = Object.freeze([
     "clientcontactverifications",
     "client_verification_business_purpose_secret_status_expiry",
     { business: 1, purpose: 1, secretHash: 1, status: 1, expiresAt: 1 },
+  ),
+  spec(
+    "clientcontactverifications",
+    "client_verification_expiry_retention_ttl",
+    { expiresAt: 1 },
+    { expireAfterSeconds: GUEST_APPOINTMENT_ARTIFACT_RETENTION_SECONDS },
   ),
   spec(
     "guestappointmentverificationdeliveries",
@@ -32,6 +71,12 @@ export const GUEST_APPOINTMENT_C2_INDEX_SPECS = Object.freeze([
     { business: 1, appointment: 1, purpose: 1, action: 1, status: 1 },
   ),
   spec(
+    "guestappointmentverificationdeliveries",
+    "guest_appointment_delivery_retention_ttl",
+    { purgeAfter: 1 },
+    { expireAfterSeconds: 0 },
+  ),
+  spec(
     "guestappointmentcapabilities",
     "guest_appointment_capability_verification_unique",
     { verification: 1 },
@@ -41,6 +86,12 @@ export const GUEST_APPOINTMENT_C2_INDEX_SPECS = Object.freeze([
     "guestappointmentcapabilities",
     "guest_appointment_capability_scope_secret_status_expiry",
     { business: 1, appointment: 1, action: 1, secretHash: 1, status: 1, expiresAt: 1 },
+  ),
+  spec(
+    "guestappointmentcapabilities",
+    "guest_appointment_capability_expiry_retention_ttl",
+    { expiresAt: 1 },
+    { expireAfterSeconds: GUEST_APPOINTMENT_ARTIFACT_RETENTION_SECONDS },
   ),
   spec(
     "guestappointmentverificationjobs",
@@ -68,21 +119,31 @@ export const GUEST_APPOINTMENT_C2_INDEX_SPECS = Object.freeze([
 ]);
 
 const orderedEntries = (value) => Object.entries(value ?? {});
-const keyEquals = (actual, expected) => (
-  JSON.stringify(orderedEntries(actual)) === JSON.stringify(orderedEntries(expected))
+const keyEquals = (actual, expected) => isDeepStrictEqual(
+  orderedEntries(actual),
+  orderedEntries(expected),
 );
+
 const normalizedPhysicalOptions = (index) => ({
-  unique: Boolean(index?.unique),
+  unique: index?.unique === true,
   expireAfterSeconds: Number.isInteger(index?.expireAfterSeconds)
     ? index.expireAfterSeconds
     : null,
+  sparse: index?.sparse === true,
+  partialFilterExpression: index?.partialFilterExpression === undefined
+    ? null
+    : canonicalizeOptionValue(index.partialFilterExpression),
+  collation: normalizeCollation(index?.collation),
+  hidden: index?.hidden === true,
 });
-const optionsEqual = (index, expected) => (
-  JSON.stringify(normalizedPhysicalOptions(index)) === JSON.stringify(expected.options)
+
+const optionsEqual = (index, expected) => isDeepStrictEqual(
+  normalizedPhysicalOptions(index),
+  expected.options,
 );
 
 // Physical names are diagnostic labels, not security identity. Security
-// equivalence is the ordered key pattern plus the options that affect semantics.
+// equivalence is ordered keys plus every semantic option declared above.
 const exactIndex = (index, expected) => (
   keyEquals(index?.key, expected.key) && optionsEqual(index, expected)
 );
@@ -114,8 +175,10 @@ const assertNoIncompatiblePhysicalIndex = (indexes, expected) => {
     throw new Error(`Storage 6.2.5-C2 bloqueado: índice incompatible ${expected.collection}.${expected.name}`);
   }
 
-  const sameKeys = indexes.find((index) => index.name !== "_id_" && keyEquals(index.key, expected.key));
-  if (sameKeys && !optionsEqual(sameKeys, expected)) {
+  const sameKeyIndexes = indexes.filter((index) => (
+    index.name !== "_id_" && keyEquals(index.key, expected.key)
+  ));
+  if (sameKeyIndexes.some((index) => !optionsEqual(index, expected))) {
     throw new Error(`Storage 6.2.5-C2 bloqueado: opciones incompatibles para ${expected.collection}.${expected.name}`);
   }
 };
@@ -133,14 +196,22 @@ export const inspectGuestAppointmentCapabilityIndexes = async (db) => {
     }
     const indexes = await listIndexes(db, expected.collection);
     const sameName = indexes.find((index) => index.name === expected.name);
-    const exact = indexes.find((index) => index.name !== "_id_" && exactIndex(index, expected));
-    const present = Boolean(exact);
+    const sameKeys = indexes.filter((index) => (
+      index.name !== "_id_" && keyEquals(index.key, expected.key)
+    ));
+    const exact = sameKeys.find((index) => exactIndex(index, expected));
+    const hasSemanticConflict = sameKeys.some((index) => !optionsEqual(index, expected));
+    const present = Boolean(exact) && !hasSemanticConflict;
     result.push({
       ...expected,
       physicalName: exact?.name ?? null,
       present,
       compatible: present,
-      reason: present ? null : sameName ? "index-incompatible" : "index-missing",
+      reason: present
+        ? null
+        : sameName || sameKeys.length > 0
+          ? "index-incompatible"
+          : "index-missing",
     });
   }
 
@@ -165,6 +236,15 @@ const createOptions = (expected) => {
   if (expected.options.expireAfterSeconds !== null) {
     options.expireAfterSeconds = expected.options.expireAfterSeconds;
   }
+  if (expected.options.sparse) options.sparse = true;
+  if (expected.options.partialFilterExpression !== null) {
+    options.partialFilterExpression = expected.options.partialFilterExpression;
+  }
+  // Force simple collation on materialization so a non-simple collection
+  // default cannot silently alter index semantics. Absence and {locale:"simple"}
+  // are treated as the same security identity when inspecting existing indexes.
+  options.collation = expected.options.collation ?? { locale: "simple" };
+  if (expected.options.hidden) options.hidden = true;
   return options;
 };
 
@@ -193,6 +273,7 @@ export const applyGuestAppointmentCapabilityIndexes = async (db) => {
     );
 
     const after = await listIndexes(db, expected.collection);
+    assertNoIncompatiblePhysicalIndex(after, expected);
     if (!after.some((index) => exactIndex(index, expected))) {
       throw new Error(`Storage 6.2.5-C2 bloqueado: no se materializó ${expected.collection}.${expected.name}`);
     }

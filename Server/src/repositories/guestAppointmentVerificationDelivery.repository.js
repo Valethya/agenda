@@ -9,6 +9,7 @@ import {
   GUEST_APPOINTMENT_ACTIONS,
   GUEST_APPOINTMENT_IMPLEMENTED_PURPOSE_TO_ACTION,
 } from "../security/guestAppointmentCapability.constants.js";
+import { GUEST_APPOINTMENT_ARTIFACT_RETENTION_MS } from "../security/guestAppointmentArtifactRetention.constants.js";
 
 const OBJECT_ID_HEX_PATTERN = /^[0-9a-fA-F]{24}$/u;
 
@@ -69,14 +70,14 @@ const scope = ({ verificationId, jobId, jobGeneration, businessId, appointmentId
 
 export const createPending = async ({ verificationId, jobId, jobGeneration, businessId, appointmentId, purpose, action }) => {
   const scoped = scope({ verificationId, jobId, jobGeneration, businessId, appointmentId, purpose, action });
-  const [appointmentExists, verificationExists, jobExists] = await Promise.all([
+  const [appointmentExists, verification, jobExists] = await Promise.all([
     Appointment.exists({ _id: scoped.appointment, business: scoped.business }),
-    ClientContactVerification.exists({
+    ClientContactVerification.findOne({
       _id: scoped.verification,
       business: scoped.business,
       purpose: scoped.purpose,
       status: "pending",
-    }),
+    }).select("expiresAt").lean(),
     GuestAppointmentVerificationJob.exists({
       _id: scoped.job,
       generation: scoped.jobGeneration,
@@ -88,12 +89,15 @@ export const createPending = async ({ verificationId, jobId, jobGeneration, busi
       verification: scoped.verification,
     }),
   ]);
-  if (!appointmentExists || !verificationExists || !jobExists) throw new ReferenceError("Delivery scope no disponible");
+  if (!appointmentExists || !verification || !jobExists) throw new ReferenceError("Delivery scope no disponible");
+
+  const verificationExpiresAt = requireDate(verification.expiresAt, "verification.expiresAt");
   return GuestAppointmentVerificationDelivery.create({
     ...scoped,
     status: "pending",
     deliveredAt: null,
     failedAt: null,
+    purgeAfter: new Date(verificationExpiresAt.getTime() + GUEST_APPOINTMENT_ARTIFACT_RETENTION_MS),
   });
 };
 

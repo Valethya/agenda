@@ -12,6 +12,10 @@ import {
   GUEST_APPOINTMENT_IMPLEMENTED_PURPOSE_TO_ACTION,
 } from "../../src/security/guestAppointmentCapability.constants.js";
 import {
+  GUEST_APPOINTMENT_ARTIFACT_RETENTION_MS,
+  GUEST_APPOINTMENT_ARTIFACT_RETENTION_SECONDS,
+} from "../../src/security/guestAppointmentArtifactRetention.constants.js";
+import {
   buildGuestAppointmentVerificationUrl,
   getTrustedGuestAppointmentOrigin,
 } from "../../src/security/guestAppointmentAccessUrl.js";
@@ -21,6 +25,7 @@ import {
 } from "../../src/validations/guestAppointmentCapability.validation.js";
 
 const originalOrigin = process.env.GUEST_APPOINTMENT_ACCESS_ORIGIN;
+const indexByName = (model, name) => model.schema.indexes().find(([, options]) => options.name === name);
 
 test("6.2.5-C2 capability contract", async (t) => {
   await t.test("READ is the only implemented action and purpose mapping is closed", () => {
@@ -47,20 +52,36 @@ test("6.2.5-C2 capability contract", async (t) => {
     assert.equal(ClientContactVerification.schema.path("appointment"), undefined);
   });
 
-  await t.test("durable jobs only expose terminal purge timestamps and intake guard stores no resource identifiers", () => {
+  await t.test("C1/C2 proof artifacts have bounded physical retention without changing logical expiry", () => {
+    assert.equal(GUEST_APPOINTMENT_ARTIFACT_RETENTION_MS, 60 * 60 * 1000);
+    assert.equal(GUEST_APPOINTMENT_ARTIFACT_RETENTION_SECONDS, 60 * 60);
+    assert.ok(GuestAppointmentVerificationDelivery.schema.path("purgeAfter"));
+
+    const verificationTtl = indexByName(ClientContactVerification, "client_verification_expiry_retention_ttl");
+    const deliveryTtl = indexByName(GuestAppointmentVerificationDelivery, "guest_appointment_delivery_retention_ttl");
+    const capabilityTtl = indexByName(GuestAppointmentCapability, "guest_appointment_capability_expiry_retention_ttl");
+    assert.ok(verificationTtl);
+    assert.deepEqual(verificationTtl[0], { expiresAt: 1 });
+    assert.equal(verificationTtl[1].expireAfterSeconds, GUEST_APPOINTMENT_ARTIFACT_RETENTION_SECONDS);
+    assert.ok(deliveryTtl);
+    assert.deepEqual(deliveryTtl[0], { purgeAfter: 1 });
+    assert.equal(deliveryTtl[1].expireAfterSeconds, 0);
+    assert.ok(capabilityTtl);
+    assert.deepEqual(capabilityTtl[0], { expiresAt: 1 });
+    assert.equal(capabilityTtl[1].expireAfterSeconds, GUEST_APPOINTMENT_ARTIFACT_RETENTION_SECONDS);
+  });
+
+  await t.test("durable jobs only expose terminal purge timestamps and intake guard stores no raw resource identifiers", () => {
     assert.ok(GuestAppointmentVerificationJob.schema.path("purgeAfter"));
     assert.equal(GuestAppointmentVerificationJob.schema.path("bearer"), undefined);
     assert.equal(GuestAppointmentVerificationJob.schema.path("destination"), undefined);
     assert.equal(GuestAppointmentIntakeBucket.schema.path("business"), undefined);
     assert.equal(GuestAppointmentIntakeBucket.schema.path("appointment"), undefined);
     assert.equal(GuestAppointmentIntakeBucket.schema.path("destination"), undefined);
+    assert.ok(GuestAppointmentIntakeBucket.schema.path("scopeKeys"));
 
-    const jobTtl = GuestAppointmentVerificationJob.schema.indexes().find(([, options]) => (
-      options.name === "guest_appointment_job_terminal_ttl"
-    ));
-    const bucketTtl = GuestAppointmentIntakeBucket.schema.indexes().find(([, options]) => (
-      options.name === "guest_appointment_intake_bucket_ttl"
-    ));
+    const jobTtl = indexByName(GuestAppointmentVerificationJob, "guest_appointment_job_terminal_ttl");
+    const bucketTtl = indexByName(GuestAppointmentIntakeBucket, "guest_appointment_intake_bucket_ttl");
     assert.ok(jobTtl);
     assert.deepEqual(jobTtl[0], { purgeAfter: 1 });
     assert.equal(jobTtl[1].expireAfterSeconds, 0);

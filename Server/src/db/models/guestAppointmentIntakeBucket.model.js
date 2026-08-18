@@ -6,9 +6,11 @@ const guestAppointmentIntakeBucketSchema = new mongoose.Schema(
       type: String,
       required: true,
     },
-    count: {
-      type: Number,
-      min: 1,
+    // Bounded SHA-256 fingerprints of scopes admitted in this coarse window.
+    // Raw Business/Appointment identifiers are never persisted in the bucket.
+    scopeKeys: {
+      type: [{ type: String, match: /^[0-9a-f]{64}$/u }],
+      default: [],
       required: true,
     },
     expiresAt: {
@@ -22,8 +24,6 @@ const guestAppointmentIntakeBucketSchema = new mongoose.Schema(
   },
 );
 
-// The bucket is purely an anti-amplification guard. It contains no Business,
-// Appointment, email or authority data and expires automatically.
 guestAppointmentIntakeBucketSchema.index(
   { expiresAt: 1 },
   { expireAfterSeconds: 0, name: "guest_appointment_intake_bucket_ttl" },

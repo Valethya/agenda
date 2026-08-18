@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import mongoose from "mongoose";
 import GuestAppointmentVerificationJob from "../db/models/guestAppointmentVerificationJob.model.js";
 import GuestAppointmentIntakeBucket from "../db/models/guestAppointmentIntakeBucket.model.js";
@@ -78,9 +79,21 @@ const scope = ({ businessId, appointmentId, purpose, action }) => {
   };
 };
 
+const scopeFingerprint = (scoped) => crypto
+  .createHash("sha256")
+  .update(scoped.business.toHexString(), "utf8")
+  .update("\0", "utf8")
+  .update(scoped.appointment.toHexString(), "utf8")
+  .update("\0", "utf8")
+  .update(scoped.purpose, "utf8")
+  .update("\0", "utf8")
+  .update(scoped.action, "utf8")
+  .digest("hex");
+
 const isDuplicateKey = (error) => error?.code === 11000;
 
 const reserveIntakeSlot = async ({
+  scopeKey,
   now,
   windowMs = GUEST_APPOINTMENT_INTAKE_WINDOW_MS,
   maxPerWindow = GUEST_APPOINTMENT_INTAKE_MAX_PER_WINDOW,
@@ -91,56 +104,73 @@ const reserveIntakeSlot = async ({
   const limit = requirePositiveInteger(maxPerWindow, "maxPerWindow");
   const retention = requireDuration(bucketRetentionMs, "bucketRetentionMs");
   if (retention < window) throw new TypeError("bucketRetentionMs debe cubrir la ventana de intake");
+  if (typeof scopeKey !== "string" || !/^[0-9a-f]{64}$/u.test(scopeKey)) {
+    throw new TypeError("scopeKey inválido");
+  }
 
-  // The bucket key contains only a coarse time window. It does not encode or
-  // query Business/Appointment, so saturation cannot reveal resource existence.
   const bucketStart = Math.floor(scopedNow.getTime() / window) * window;
   const bucketId = `guest-appointment-read:${bucketStart}`;
   const expiresAt = new Date(bucketStart + window + retention);
 
-  const incrementExisting = () => GuestAppointmentIntakeBucket.findOneAndUpdate(
-    { _id: bucketId, count: { $lt: limit } },
-    { $inc: { count: 1 } },
-    { new: true, runValidators: true },
-  );
+  const filter = {
+    _id: bucketId,
+    $or: [
+      { scopeKeys: scopeKey },
+      {
+        $expr: {
+          $lt: [
+            { $size: { $ifNull: ["$scopeKeys", []] } },
+            limit,
+          ],
+        },
+      },
+    ],
+  };
 
-  const existing = await incrementExisting();
-  if (existing) return true;
+  const updateExisting = async () => {
+    const before = await GuestAppointmentIntakeBucket.findOneAndUpdate(
+      filter,
+      { $addToSet: { scopeKeys: scopeKey } },
+      { new: false, runValidators: true },
+    ).lean();
+    if (!before) return null;
+    return {
+      accepted: true,
+      consumedNewScope: !before.scopeKeys?.includes(scopeKey),
+      bucketId,
+    };
+  };
+
+  const existing = await updateExisting();
+  if (existing) return existing;
 
   try {
-    await GuestAppointmentIntakeBucket.create({ _id: bucketId, count: 1, expiresAt });
-    return true;
+    await GuestAppointmentIntakeBucket.create({
+      _id: bucketId,
+      scopeKeys: [scopeKey],
+      expiresAt,
+    });
+    return { accepted: true, consumedNewScope: true, bucketId };
   } catch (error) {
     if (!isDuplicateKey(error)) throw error;
-    return Boolean(await incrementExisting());
+    const raced = await updateExisting();
+    return raced ?? { accepted: false, consumedNewScope: false, bucketId };
   }
 };
 
-export const enqueueForScope = async ({
-  businessId,
-  appointmentId,
-  purpose,
-  action,
-  now,
-  cooldownMs = GUEST_APPOINTMENT_CHALLENGE_COOLDOWN_MS,
-  intakeWindowMs = GUEST_APPOINTMENT_INTAKE_WINDOW_MS,
-  intakeMaxPerWindow = GUEST_APPOINTMENT_INTAKE_MAX_PER_WINDOW,
-  intakeBucketRetentionMs = GUEST_APPOINTMENT_INTAKE_BUCKET_RETENTION_MS,
-}) => {
-  const scoped = scope({ businessId, appointmentId, purpose, action });
-  const scopedNow = requireDate(now, "now");
-  const cooldown = requireDuration(cooldownMs, "cooldownMs");
-  const nextEligibleAt = new Date(scopedNow.getTime() + cooldown);
+const existingScopeState = (scoped) => GuestAppointmentVerificationJob.findOne(scoped)
+  .select("status nextEligibleAt generation")
+  .lean();
 
-  const intakeAccepted = await reserveIntakeSlot({
-    now: scopedNow,
-    windowMs: intakeWindowMs,
-    maxPerWindow: intakeMaxPerWindow,
-    bucketRetentionMs: intakeBucketRetentionMs,
-  });
-  if (!intakeAccepted) return { enqueued: false, job: null, backpressured: true };
+const isTerminalEligible = (job, now) => (
+  job
+  && ["delivered", "failed"].includes(job.status)
+  && job.nextEligibleAt instanceof Date
+  && job.nextEligibleAt.getTime() <= now.getTime()
+);
 
-  const reset = await GuestAppointmentVerificationJob.findOneAndUpdate(
+const resetEligibleTerminalScope = ({ scoped, scopedNow, nextEligibleAt }) => (
+  GuestAppointmentVerificationJob.findOneAndUpdate(
     {
       ...scoped,
       status: { $in: ["delivered", "failed"] },
@@ -161,8 +191,52 @@ export const enqueueForScope = async ({
       $inc: { generation: 1 },
     },
     { new: true, runValidators: true },
-  );
-  if (reset) return { enqueued: true, job: reset, backpressured: false };
+  )
+);
+
+export const enqueueForScope = async ({
+  businessId,
+  appointmentId,
+  purpose,
+  action,
+  now,
+  cooldownMs = GUEST_APPOINTMENT_CHALLENGE_COOLDOWN_MS,
+  intakeWindowMs = GUEST_APPOINTMENT_INTAKE_WINDOW_MS,
+  intakeMaxPerWindow = GUEST_APPOINTMENT_INTAKE_MAX_PER_WINDOW,
+  intakeBucketRetentionMs = GUEST_APPOINTMENT_INTAKE_BUCKET_RETENTION_MS,
+}) => {
+  const scoped = scope({ businessId, appointmentId, purpose, action });
+  const scopedNow = requireDate(now, "now");
+  const cooldown = requireDuration(cooldownMs, "cooldownMs");
+  const nextEligibleAt = new Date(scopedNow.getTime() + cooldown);
+
+  // Exact-scope dedupe happens before touching the global creation budget. This
+  // lookup only addresses the durable intent collection and never probes the
+  // Business or Appointment resource itself.
+  const existing = await existingScopeState(scoped);
+  if (existing) {
+    if (isTerminalEligible(existing, scopedNow)) {
+      const reset = await resetEligibleTerminalScope({ scoped, scopedNow, nextEligibleAt });
+      if (reset) return { enqueued: true, job: reset, backpressured: false };
+      if (await existingScopeState(scoped)) {
+        return { enqueued: false, job: null, backpressured: false };
+      }
+      // A TTL race removed the terminal record between read/reset. Only then do
+      // we fall through to the new-storage admission path.
+    } else {
+      return { enqueued: false, job: null, backpressured: false };
+    }
+  }
+
+  const scopeKey = scopeFingerprint(scoped);
+  const admission = await reserveIntakeSlot({
+    scopeKey,
+    now: scopedNow,
+    windowMs: intakeWindowMs,
+    maxPerWindow: intakeMaxPerWindow,
+    bucketRetentionMs: intakeBucketRetentionMs,
+  });
+  if (!admission.accepted) return { enqueued: false, job: null, backpressured: true };
 
   try {
     const job = await GuestAppointmentVerificationJob.create({
@@ -181,6 +255,10 @@ export const enqueueForScope = async ({
     });
     return { enqueued: true, job, backpressured: false };
   } catch (error) {
+    // Admission is intentionally not refunded: it represents an attempt to add
+    // a new durable scope in this short window. A duplicate race keeps exactly
+    // one fingerprint, and transient write failures remain bounded to one slot
+    // until the bucket expires.
     if (isDuplicateKey(error)) return { enqueued: false, job: null, backpressured: false };
     throw error;
   }

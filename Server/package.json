@@ -20,7 +20,7 @@
     "test:tenant-resource-isolation": "node --test test/tenantResourceIsolation.test.js",
     "test:customer-profile-persistence": "node --test test/customerProfilePersistence.test.js",
     "test:client-contact-verification": "node --test test/clientContactVerification.test.js",
-    "test:guest-appointment-capability": "node --test test/guestAppointmentCapability.test.js",
+    "test:guest-appointment-capability": "node --test test/guestAppointmentCapability.test.js && node --test test/guestAppointmentCapabilityHardening.test.js",
     "test:guest-appointment-capability-storage": "node --test test/guestAppointmentCapabilityStorage.test.js",
     "test:availability-migration-e2e": "node --test test/availabilityTenantizationMigration.test.js",
     "test:availability-worker-lifecycle": "node --test test/availabilityWorkerLifecycle.test.js",

@@ -31,10 +31,12 @@ export const assertGuestAppointmentCapabilityRuntimeStorageReady = async (
   db,
   processEnvironment = process.env,
 ) => {
-  // Integration tests create their own isolated production-like database to
-  // verify autoIndex:false explicitly. Runtime startup is not gated there.
-  if (processEnvironment?.NODE_ENV === "test") return { enforced: false };
-  if (!isGuestAppointmentRemoteRuntime(processEnvironment)) return { enforced: false };
+  const remote = isGuestAppointmentRemoteRuntime(processEnvironment);
+
+  // A deployment indicator always wins over NODE_ENV=test. Test is exempt only
+  // for a genuinely local/non-deployed process.
+  if (!remote && processEnvironment?.NODE_ENV === "test") return { enforced: false };
+  if (!remote) return { enforced: false };
 
   if (processEnvironment?.[GUEST_APPOINTMENT_C2_CUTOVER_ENV] !== GUEST_APPOINTMENT_C2_CUTOVER_CONFIRMATION) {
     throw new Error(

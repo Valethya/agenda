@@ -59,6 +59,13 @@ const guestAppointmentVerificationDeliverySchema = new mongoose.Schema(
       type: Date,
       default: null,
     },
+    // Cleanup deadline derived from the C1 Verification expiry. It is not an
+    // authority deadline; pending/delivered/failed delivery state remains
+    // available through the entire challenge lifetime plus retention window.
+    purgeAfter: {
+      type: Date,
+      required: true,
+    },
   },
   {
     timestamps: true,
@@ -67,7 +74,6 @@ const guestAppointmentVerificationDeliverySchema = new mongoose.Schema(
   },
 );
 
-// A challenge emitted by C1 can belong to only one C2 delivery scope.
 guestAppointmentVerificationDeliverySchema.index(
   { verification: 1 },
   { unique: true, name: "guest_appointment_delivery_verification_unique" },
@@ -82,6 +88,11 @@ guestAppointmentVerificationDeliverySchema.index(
     status: 1,
   },
   { name: "guest_appointment_delivery_scope_status" },
+);
+
+guestAppointmentVerificationDeliverySchema.index(
+  { purgeAfter: 1 },
+  { expireAfterSeconds: 0, name: "guest_appointment_delivery_retention_ttl" },
 );
 
 const GuestAppointmentVerificationDeliveryModel = mongoose.model(
