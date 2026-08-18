@@ -1,6 +1,6 @@
 # Fase 6.2.6-A — Contrato headless público mínimo
 
-**Estado:** contrato implementado; cierre sujeto a CI final y revisión adversarial  
+**Estado:** hardening de segunda revisión implementado; cierre sujeto a CI final y nueva revisión adversarial  
 **Fecha:** 18 de agosto de 2026  
 **Baseline verificada:** `master@3f2ab734d412828f5a77ec72b778a8d575a14cd4`  
 **Precedente:** PR #29 / 6.2.5-C2 merged en esa baseline  
@@ -43,7 +43,7 @@ READ capability
 
 No se implementan las capabilities futuras en este PR.
 
-## 3. Frontera pública versus sesión
+## 3. Tenant y surface son decisiones independientes
 
 ### 3.1 Tenant público explícito
 
@@ -63,31 +63,50 @@ Reglas:
 - Business inexistente o inactivo: `404 NOT_FOUND` genérico;
 - jamás hay fallback al primer Business ni a otro tenant.
 
-### 3.2 Una cookie incidental no redefine el contrato
+### 3.2 El tenant no selecciona la surface
 
-La presencia de una sesión no puede sustituir silenciosamente el tenant headless solicitado.
+La presencia de `businessId`, `slug`, `x-business-id` o `x-business-slug` **no** significa que una request sea pública. Tampoco la presencia de una cookie significa que una request sea interna.
 
-Para las rutas compartidas de lectura/booking:
+Las rutas que comparten path entre panel y contrato headless usan una política de surface separada:
 
 ```text
-hay businessId/slug explícito
-=> bookingSurface = public
-=> resolver tenant sólo desde input explícito
-=> cookie no decide Business
-=> tenantAuthority no decide proyección
-
-no hay tenant explícito
-=> puede operar la superficie interna del panel usando el contexto de sesión
+x-agenda-surface: public | internal
 ```
 
-Por tanto, una cookie autenticada de Business A que llama el contrato público con Business B:
+Semántica:
+
+- `public` resuelve el Business sólo desde identificadores tenant explícitos;
+- `public` ignora una sesión ambiente como fuente de autoridad/proyección;
+- `internal` exige sesión autenticada y usa exclusivamente el Business/Membership vigentes de esa sesión;
+- `internal` nunca obtiene autoridad de `User.role` ni `User.business`;
+- la mera presencia de tenant identifiers nunca eleva ni degrada la proyección;
+- en paths compartidos, ausencia de `x-agenda-surface` conserva la política segura por defecto: `public`;
+- por tanto, una cookie incidental jamás convierte automáticamente una request pública en interna.
+
+Para un consumidor headless que pueda portar cookies se recomienda enviar explícitamente:
+
+```http
+x-agenda-surface: public
+```
+
+El panel autenticado declara explícitamente:
+
+```http
+x-agenda-surface: internal
+```
+
+El frontend administrativo real (`apiFetch`) conserva `x-business-slug` derivado de `/admin?slug=...`, pero ese header es sólo contexto/selector tenant para superficies que lo necesitan. `apiFetch` añade además `x-agenda-surface: internal`, por lo que `CalendarDataContext` puede seguir consumiendo `/users/workers` sin `serviceId`, Services administrativos, `/appointments/my` y Shift raw sin ser reclasificado como headless.
+
+### 3.3 Cookie A + contrato público B
+
+Una cookie autenticada de Business A que llama el contrato público para Business B:
 
 - resuelve B;
 - nunca devuelve datos de A;
 - nunca eleva la respuesta a proyección administrativa;
 - no adquiere Membership ni autoridad en B por ese hecho.
 
-La selección public/internal se deriva de política de ruta (`bookingSurface`), no de `!req.tenantAuthority`.
+La selección public/internal se deriva de política de surface (`bookingSurface`), nunca de `!req.tenantAuthority` ni de la presencia de tenant identifiers.
 
 ## 4. Operaciones públicas incluidas
 
@@ -213,7 +232,7 @@ Un guest recibe `401/403`. La superficie pública debe consumir `/availability/s
 
 Tenant explícito obligatorio para la superficie headless.
 
-Input mínimo:
+Input contractual permitido:
 
 ```json
 {
@@ -226,18 +245,56 @@ Input mínimo:
     "firstName": "string",
     "lastName": "string",
     "email": "email",
-    "phone": "string"
+    "phone": "+56912345678"
   }
 }
 ```
 
-Reglas:
+También se aceptan `businessId`/`slug` únicamente como selectores tenant compatibles con el resolver.
+
+#### Allowlist de input público
+
+El schema público es `strict` y el controller consume exclusivamente el body parseado/transformado. No reutiliza `req.body` raw para controles del service layer.
+
+Por tanto, la superficie pública **no acepta**:
+
+- `isSuggestion`;
+- `paymentOption`;
+- overrides administrativos;
+- campos desconocidos/control fields no documentados.
+
+Esos campos fallan con `400 VALIDATION_ERROR` antes de llamar `bookAppointment()`.
+
+Consecuencias contractuales:
+
+- `isSuggestion=true` no puede saltarse `getAvailableSlots()`;
+- `isSuggestion=true` no puede crear solapamientos públicos;
+- `paymentOption=local` no puede alterar status, pago ni auto-confirmación;
+- un control legacy agregado en el body no puede influir silenciosamente en el dominio público.
+
+La superficie interna puede conservar controles legacy sólo después de `x-agenda-surface: internal`, sesión vigente y política tenant aplicable.
+
+#### Validación de `clientInfo`
+
+Antes de persistencia Mongoose:
+
+- `firstName` y `lastName` se trimean;
+- whitespace-only falla;
+- nombres: máximo 120 caracteres;
+- email: máximo 320 caracteres y formato email válido;
+- dominio del email se normaliza a lowercase conservando el local-part;
+- phone se trimea y debe cumplir formato E.164-like `+?[1-9][0-9]{6,14}`;
+- objetos `clientInfo` con campos desconocidos fallan cerrado.
+
+Los errores de estos inputs son `400 VALIDATION_ERROR`; no dependen de un error posterior de Mongoose.
+
+#### Reglas de identidad y persistencia
 
 1. Service y worker se validan dentro del Business antes de persistir;
 2. `date` debe ser una fecha Gregoriana real;
-3. disponibilidad se revalida antes de crear una reserva normal;
+3. disponibilidad se revalida antes de crear una reserva pública normal;
 4. un guest no necesita login;
-5. `clientInfo` se transforma sólo en `Appointment.guestContact` inmutable/select:false;
+5. `clientInfo` se transforma sólo en `Appointment.guestContact` Appointment-scoped/select:false;
 6. el flujo guest **no busca User por email ni por teléfono**;
 7. el flujo guest **no añade emails/teléfonos/nombres a User existente**;
 8. el flujo guest **no crea User ni contraseña aleatoria**;
@@ -246,7 +303,7 @@ Reglas:
 11. booking fallido no deja side effects de identidad global;
 12. `guestContact`, `Appointment.client`, CustomerProfile o coincidencia de contacto no conceden authority.
 
-`guestContact` conserva únicamente provenance operacional de la propia reserva, incluyendo el destino de email y datos de contacto declarados necesarios para notificaciones. Continúa fuera de la proyección pública.
+`guestContact` conserva únicamente provenance operacional de la propia reserva, incluyendo destino de email y datos de contacto declarados necesarios para notificaciones. Continúa fuera de la proyección pública.
 
 Las notificaciones de una reserva guest se envían al `Appointment.guestContact` persistido; no dependen de correlacionar un User global.
 
@@ -276,6 +333,62 @@ No incluye:
 - Membership;
 - timestamps internos.
 
+### 4.5 Proyección operacional interna de Appointment guest
+
+La persistencia segura permanece:
+
+```text
+Appointment.client = null
+Appointment.guestContact = datos declarados Appointment-scoped
+```
+
+Las lecturas internas protegidas pueden necesitar nombre/email/teléfono para operar el calendario. Sólo después de pasar la autorización tenant/Appointment existente, el repositorio selecciona `guestContact` y una proyección interna lo transforma a un DTO operacional:
+
+```json
+{
+  "client": {
+    "kind": "guest",
+    "firstName": "Ada",
+    "lastName": "Lovelace",
+    "email": "ada@example.com",
+    "phone": "+56912345678"
+  }
+}
+```
+
+Para una identidad autenticable real, el mismo campo usa:
+
+```json
+{
+  "client": {
+    "kind": "account",
+    "_id": "ObjectId",
+    "firstName": "...",
+    "lastName": "...",
+    "email": "...",
+    "phone": "..."
+  }
+}
+```
+
+Este DTO es **representación operacional**, no ownership. `kind: guest` o coincidencia de contacto no concede acceso adicional.
+
+Nunca se serializan a ese DTO:
+
+- `guestContact` raw;
+- `provenance`;
+- `capturedAt`;
+- `channel`;
+- Verification;
+- CustomerProfile;
+- bindings;
+- Membership;
+- datos históricos de otros Appointments.
+
+Admin del Business y profesional realmente autorizado/asignado pueden recibir esta proyección. Un worker no asignado o un Business distinto no adquieren acceso por conocer el contacto.
+
+C2 conserva su consulta/proyección independiente y **no** recibe este DTO ampliado.
+
 ## 5. Operaciones expresamente fuera del contrato base
 
 Conocer `businessId + appointmentId` no concede:
@@ -294,7 +407,7 @@ Conocer `businessId + appointmentId` no concede:
 
 Las acciones administrativas existentes continúan bajo sesión + política tenant.
 
-## 6. Payment: fail-closed hasta una autoridad purpose-specific
+## 6. Payment: inicio fail-closed y callback legacy acotado
 
 6.2.6-A no implementa payment capability.
 
@@ -308,7 +421,28 @@ Business + Appointment ID
 
 Esto evita que una feature flag convierta `appointmentId` en bearer implícito.
 
-Se conserva el callback Webpay legacy únicamente para transacciones ya iniciadas; no permite crear una transacción nueva.
+### Callback Webpay legacy preservado
+
+Se conserva `/api/payments/webpay-return` únicamente para transacciones legacy **ya iniciadas**. No crea una transacción nueva y no acepta `appointmentId` como authority de inicio.
+
+El callback se resuelve fail-closed en este orden:
+
+```text
+token_ws
+-> Payment existente con status=pending
+-> Payment.appointment
+-> Payment.business
+-> commit Transbank
+-> buy_order debe coincidir exactamente con Payment.appointment
+-> Appointment debe existir y pertenecer a Payment.business
+-> Appointment debe estar pending_payment
+-> monto/status Transbank válido
+-> transición aprobada o rechazada
+```
+
+Un `Payment` de Business B no puede transicionar una Appointment de A. Un `buy_order` distinto al Appointment fijado por el Payment pending falla sin transición.
+
+El gate oficial prepara fixtures directamente en estado `Payment pending + Appointment pending_payment`; no reabre `/payments/initiate` para fabricar fixtures.
 
 ## 7. C2 preservado
 
@@ -332,8 +466,8 @@ Los códigos son contrato estable; el mensaje humano puede refinarse.
 
 | HTTP | Código | Semántica |
 |---|---|---|
-| 400 | `VALIDATION_ERROR` | input/tenant ausente, malformado, contradictorio o fecha imposible |
-| 401 | `UNAUTHORIZED_ERROR` | endpoint interno requiere autenticación |
+| 400 | `VALIDATION_ERROR` | input/tenant ausente, malformado, contradictorio, campo público no permitido o fecha imposible |
+| 401 | `UNAUTHORIZED_ERROR` | endpoint/surface interna requiere autenticación |
 | 403 | `FORBIDDEN_ERROR` | sesión sin política necesaria o acción pública deliberadamente no habilitada |
 | 404 | `NOT_FOUND` | tenant/recurso públicamente no disponible en el scope solicitado |
 | 409 | `CONFLICT_ERROR` | conflicto operacional, por ejemplo slot ocupado |
@@ -352,7 +486,7 @@ Las diferencias de error no deben convertirse en oráculos para descubrir:
 
 No se devuelven errores Mongoose/driver como mensajes públicos.
 
-## 9. Campos sensibles excluidos
+## 9. Campos sensibles excluidos de la superficie pública
 
 Como mínimo:
 
@@ -369,6 +503,8 @@ Como mínimo:
 - payment provider payloads;
 - URI con credenciales;
 - configuración interna no requerida para booking.
+
+La proyección operacional interna descrita en 4.5 no modifica esta exclusión pública.
 
 ## 10. Idempotencia de Appointment
 
@@ -405,9 +541,9 @@ El modelo `Holiday` vigente:
 - tiene `date` única global;
 - se consulta por fecha sin tenant.
 
-6.2.6-A **no inventa una tenantización ni migración** para Holiday. Se formaliza el comportamiento actual como un **calendario global compartido de cierre**: un Holiday aplica deliberadamente por igual a todos los Businesses.
+6.2.6-A **no inventa una tenantización ni migración** para Holiday. Se mantiene como decisión explícita de producto/modelo: un **calendario global compartido de cierre**, donde un Holiday aplica deliberadamente por igual a todos los Businesses.
 
-Esta excepción no concede autoridad ni permite leer recursos de otro tenant. Shift, Block y Appointment continúan tenant-scoped.
+Esto **no** es una garantía de aislamiento tenant de Holiday. Es precisamente una excepción global conocida. No concede autoridad ni permite leer recursos de otro tenant. Shift, Block y Appointment continúan tenant-scoped.
 
 Existe una regresión contractual que crea un Holiday global y demuestra que el mismo día cierra disponibilidad de dos Businesses independientes.
 
@@ -460,7 +596,7 @@ La configuración tenant-scoped de website/booking origins y su verificación re
 
 ## 15. Criterios de aceptación verificables
 
-La suite contractual debe demostrar como mínimo:
+La suite contractual/gate debe demostrar como mínimo:
 
 - [x] dos Businesses usan el mismo contrato público;
 - [x] Service B no se usa dentro de A;
@@ -471,19 +607,47 @@ La suite contractual debe demostrar como mínimo:
 - [x] identificadores contradictorios fallan;
 - [x] responses públicas no incluyen campos internos;
 - [x] guest booking no requiere login;
-- [x] cookie de A + tenant B explícito sigue siendo contrato público de B;
+- [x] cookie de A + surface pública + tenant B explícito sigue siendo contrato público de B;
+- [x] tenant identifiers por sí solos no seleccionan surface;
+- [x] `/admin?slug=A` + `apiFetch` interno carga workers sin `serviceId`, Services administrativos, Appointments y Shifts;
 - [x] guest booking no crea ni modifica User;
 - [x] teléfono conocido + email atacante no modifica a la víctima;
 - [x] slot ocupado no deja mutaciones de identidad global;
 - [x] guest nuevo no crea password aleatoria;
+- [x] admin autorizado ve DTO operacional guest de su Appointment;
+- [x] profesional asignado autorizado ve sólo los cuatro datos operacionales necesarios;
+- [x] worker no asignado y Business B no adquieren acceso por `guestContact`;
+- [x] `guestContact` raw/provenance/capturedAt no se serializan al panel;
+- [x] C2 READ no amplía su proyección;
+- [x] `isSuggestion`, `paymentOption` y controles desconocidos públicos fallan con `400 VALIDATION_ERROR`;
+- [x] booking público normal sigue revalidando disponibilidad y funcionando;
 - [x] Shift raw no es endpoint guest;
 - [x] fecha imposible como `2026-02-31` falla;
 - [x] Holiday global afecta deliberadamente a dos Businesses;
 - [x] Appointment ID no concede detail/cancel;
 - [x] Appointment ID no concede payment initiation aun con flag habilitado;
+- [x] callback Payment legacy approved/rejected continúa cubierto con fixture pending existente;
+- [x] callback Payment legacy valida coherencia Payment/Appointment/Business y `buy_order`;
 - [x] C2 READ sigue sin conceder otras acciones.
 
-## 16. Riesgos y trabajo pendiente
+## 16. Gate oficial
+
+`Server/package.json` conserva como gate de integración, además de las suites históricas, las regresiones específicas de 6.2.6-A:
+
+- `test:panel-surface-compatibility`;
+- `test:headless-public-contract`;
+- `test:public-booking-input`;
+- `test:payment`.
+
+`test:payment` vuelve a incluir:
+
+- `paymentAuthorityBoundary.test.js`;
+- los entrypoints opt-in históricos, ahora apoyados en fixtures legacy pending compatibles con el contrato vigente;
+- cobertura de callback Webpay approved/rejected y coherencia Business/buy_order.
+
+No se obtiene CI verde retirando la superficie legacy que el runtime declara seguir soportando.
+
+## 17. Riesgos y trabajo pendiente
 
 Persisten fuera de 6.2.6-A:
 
@@ -491,9 +655,10 @@ Persisten fuera de 6.2.6-A:
 2. `websiteUrl`/`bookingUrl` tenant-scoped con verificación real de dominio;
 3. capabilities futuras CANCEL/RESCHEDULE/PAYMENT;
 4. decisión futura de producto si Holiday debe dejar de ser global;
-5. Client account/login/history, que no forman parte de esta fase.
+5. Client account/login/history, que no forman parte de esta fase;
+6. retirada o rediseño purpose-specific definitivo del módulo Payment legacy; 6.2.6-A sólo conserva su callback existente de forma fail-closed.
 
-## 17. No scope creep
+## 18. No scope creep
 
 Este PR no implementa:
 
@@ -504,7 +669,7 @@ Este PR no implementa:
 - cancel capability;
 - reschedule capability;
 - payment capability;
-- Webpay hardening general;
+- un nuevo inicio de Webpay;
 - CSRF redesign;
 - password recovery redesign;
 - impersonation;
@@ -512,4 +677,4 @@ Este PR no implementa:
 - 6.3;
 - 6.4.
 
-La finalidad de 6.2.6-A es hacer verdadera y verificable la frontera pública mínima, no construir las capacidades futuras.
+La finalidad de 6.2.6-A es hacer verdadera y verificable la frontera pública mínima sin romper la superficie administrativa existente, no construir las capacidades futuras.
