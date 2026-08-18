@@ -2,6 +2,7 @@ import mongoose from "mongoose";
 import { isDeepStrictEqual } from "node:util";
 import { fileURLToPath } from "node:url";
 import { urlMongo } from "../../src/config/env.js";
+import { CLIENT_CONTACT_VERIFICATION_RETENTION_SECONDS } from "../../src/security/clientContactVerificationRetention.constants.js";
 import { GUEST_APPOINTMENT_ARTIFACT_RETENTION_SECONDS } from "../../src/security/guestAppointmentArtifactRetention.constants.js";
 
 const canonicalizeOptionValue = (value) => {
@@ -57,7 +58,7 @@ export const GUEST_APPOINTMENT_C2_INDEX_SPECS = Object.freeze([
     "clientcontactverifications",
     "client_verification_expiry_retention_ttl",
     { expiresAt: 1 },
-    { expireAfterSeconds: GUEST_APPOINTMENT_ARTIFACT_RETENTION_SECONDS },
+    { expireAfterSeconds: CLIENT_CONTACT_VERIFICATION_RETENTION_SECONDS },
   ),
   spec(
     "guestappointmentverificationdeliveries",
@@ -118,6 +119,9 @@ export const GUEST_APPOINTMENT_C2_INDEX_SPECS = Object.freeze([
   ),
 ]);
 
+const isTtlSpec = (expected) => expected.options.expireAfterSeconds !== null;
+const structuralSpecs = () => GUEST_APPOINTMENT_C2_INDEX_SPECS.filter((entry) => !isTtlSpec(entry));
+const ttlSpecs = () => GUEST_APPOINTMENT_C2_INDEX_SPECS.filter(isTtlSpec);
 const orderedEntries = (value) => Object.entries(value ?? {});
 const keyEquals = (actual, expected) => isDeepStrictEqual(
   orderedEntries(actual),
@@ -142,8 +146,6 @@ const optionsEqual = (index, expected) => isDeepStrictEqual(
   expected.options,
 );
 
-// Physical names are diagnostic labels, not security identity. Security
-// equivalence is ordered keys plus every semantic option declared above.
 const exactIndex = (index, expected) => (
   keyEquals(index?.key, expected.key) && optionsEqual(index, expected)
 );
@@ -183,51 +185,116 @@ const assertNoIncompatiblePhysicalIndex = (indexes, expected) => {
   }
 };
 
-export const inspectGuestAppointmentCapabilityIndexes = async (db) => {
+const loadPhysicalState = async (db) => {
   const names = new Set(
     (await db.listCollections({}, { nameOnly: true }).toArray()).map((entry) => entry.name),
   );
-  const result = [];
+  const indexesByCollection = new Map();
 
-  for (const expected of GUEST_APPOINTMENT_C2_INDEX_SPECS) {
-    if (!names.has(expected.collection)) {
-      result.push({ ...expected, present: false, compatible: false, reason: "collection-missing" });
-      continue;
-    }
-    const indexes = await listIndexes(db, expected.collection);
-    const sameName = indexes.find((index) => index.name === expected.name);
-    const sameKeys = indexes.filter((index) => (
-      index.name !== "_id_" && keyEquals(index.key, expected.key)
-    ));
-    const exact = sameKeys.find((index) => exactIndex(index, expected));
-    const hasSemanticConflict = sameKeys.some((index) => !optionsEqual(index, expected));
-    const present = Boolean(exact) && !hasSemanticConflict;
-    result.push({
-      ...expected,
-      physicalName: exact?.name ?? null,
-      present,
-      compatible: present,
-      reason: present
-        ? null
-        : sameName || sameKeys.length > 0
-          ? "index-incompatible"
-          : "index-missing",
-    });
+  for (const collectionName of relevantCollections()) {
+    if (!names.has(collectionName)) continue;
+    indexesByCollection.set(collectionName, await listIndexes(db, collectionName));
   }
 
-  return result;
+  return { names, indexesByCollection };
 };
 
-export const assertGuestAppointmentCapabilityIndexesReady = async (db) => {
-  await assertGuestAppointmentCapabilitySupportedTopology(db);
-  const inspection = await inspectGuestAppointmentCapabilityIndexes(db);
-  const problem = inspection.find((entry) => !entry.present || !entry.compatible);
-  if (problem) {
+const inspectSpecsFromState = (state, specs) => specs.map((expected) => {
+  if (!state.names.has(expected.collection)) {
+    return {
+      ...expected,
+      physicalName: null,
+      present: false,
+      compatible: false,
+      reason: "collection-missing",
+    };
+  }
+
+  const indexes = state.indexesByCollection.get(expected.collection) ?? [];
+  const sameName = indexes.find((index) => index.name === expected.name);
+  const sameKeys = indexes.filter((index) => (
+    index.name !== "_id_" && keyEquals(index.key, expected.key)
+  ));
+  const exact = sameKeys.find((index) => exactIndex(index, expected));
+  const hasSemanticConflict = sameKeys.some((index) => !optionsEqual(index, expected));
+  const present = Boolean(exact) && !hasSemanticConflict;
+
+  return {
+    ...expected,
+    physicalName: exact?.name ?? null,
+    present,
+    compatible: present,
+    reason: present
+      ? null
+      : sameName || sameKeys.length > 0
+        ? "index-incompatible"
+        : "index-missing",
+  };
+});
+
+export const inspectGuestAppointmentCapabilityIndexes = async (db) => {
+  const state = await loadPhysicalState(db);
+  return inspectSpecsFromState(state, GUEST_APPOINTMENT_C2_INDEX_SPECS);
+};
+
+const duplicateAggregationId = (expected) => Object.fromEntries(
+  Object.keys(expected.key).map((field) => [
+    field,
+    { $ifNull: [`$${field}`, null] },
+  ]),
+);
+
+const assertUniqueDataCompatible = async (db, expected, collectionExists) => {
+  if (!expected.options.unique || !collectionExists) return;
+
+  const duplicate = await db.collection(expected.collection).aggregate(
+    [
+      {
+        $group: {
+          _id: duplicateAggregationId(expected),
+          count: { $sum: 1 },
+        },
+      },
+      { $match: { count: { $gt: 1 } } },
+      { $limit: 1 },
+    ],
+    {
+      allowDiskUse: false,
+      collation: { locale: "simple" },
+    },
+  ).next();
+
+  if (duplicate) {
     throw new Error(
-      `Storage 6.2.5-C2 bloqueado: índice físico requerido ausente/incompatible (${problem.collection}.${problem.name})`,
+      `Storage 6.2.5-C2 bloqueado: datos duplicados impiden índice unique ${expected.collection}.${expected.name}`,
     );
   }
-  return { ready: true, indexes: inspection.length };
+};
+
+const assertStateHasNoPredictableConflicts = async (db, state) => {
+  for (const expected of GUEST_APPOINTMENT_C2_INDEX_SPECS) {
+    if (!state.names.has(expected.collection)) continue;
+    const indexes = state.indexesByCollection.get(expected.collection) ?? [];
+    assertNoIncompatiblePhysicalIndex(indexes, expected);
+  }
+
+  for (const expected of GUEST_APPOINTMENT_C2_INDEX_SPECS) {
+    await assertUniqueDataCompatible(db, expected, state.names.has(expected.collection));
+  }
+};
+
+export const preflightGuestAppointmentCapabilityIndexes = async (db) => {
+  const topology = await assertGuestAppointmentCapabilitySupportedTopology(db);
+  const state = await loadPhysicalState(db);
+  await assertStateHasNoPredictableConflicts(db, state);
+
+  const inspection = inspectSpecsFromState(state, GUEST_APPOINTMENT_C2_INDEX_SPECS);
+  return {
+    topology,
+    indexes: inspection.length,
+    missingIndexes: inspection.filter((entry) => !entry.present).length,
+    missingCollections: relevantCollections().filter((name) => !state.names.has(name)).length,
+  };
 };
 
 const createOptions = (expected) => {
@@ -240,32 +307,44 @@ const createOptions = (expected) => {
   if (expected.options.partialFilterExpression !== null) {
     options.partialFilterExpression = expected.options.partialFilterExpression;
   }
-  // Force simple collation on materialization so a non-simple collection
-  // default cannot silently alter index semantics. Absence and {locale:"simple"}
-  // are treated as the same security identity when inspecting existing indexes.
   options.collation = expected.options.collation ?? { locale: "simple" };
   if (expected.options.hidden) options.hidden = true;
   return options;
 };
 
-export const applyGuestAppointmentCapabilityIndexes = async (db) => {
-  const topology = await assertGuestAppointmentCapabilitySupportedTopology(db);
+const ensureRelevantCollections = async (db) => {
   const names = new Set(
     (await db.listCollections({}, { nameOnly: true }).toArray()).map((entry) => entry.name),
   );
 
   for (const collectionName of relevantCollections()) {
-    if (!names.has(collectionName)) {
-      await db.createCollection(collectionName);
-      names.add(collectionName);
-    }
+    if (names.has(collectionName)) continue;
+    await db.createCollection(collectionName);
+    names.add(collectionName);
   }
+};
 
-  for (const expected of GUEST_APPOINTMENT_C2_INDEX_SPECS) {
+const assertSpecsReady = async (db, specs) => {
+  const state = await loadPhysicalState(db);
+  const inspection = inspectSpecsFromState(state, specs);
+  const problem = inspection.find((entry) => !entry.present || !entry.compatible);
+  if (problem) {
+    throw new Error(
+      `Storage 6.2.5-C2 bloqueado: índice físico requerido ausente/incompatible (${problem.collection}.${problem.name})`,
+    );
+  }
+  return inspection;
+};
+
+const materializeSpecs = async (db, specs, { recheckUnique = false } = {}) => {
+  for (const expected of specs) {
     const indexes = await listIndexes(db, expected.collection);
     assertNoIncompatiblePhysicalIndex(indexes, expected);
-    const alreadyExact = indexes.some((index) => exactIndex(index, expected));
-    if (alreadyExact) continue;
+    if (indexes.some((index) => exactIndex(index, expected))) continue;
+
+    if (recheckUnique && expected.options.unique) {
+      await assertUniqueDataCompatible(db, expected, true);
+    }
 
     await db.collection(expected.collection).createIndex(
       expected.key,
@@ -278,9 +357,36 @@ export const applyGuestAppointmentCapabilityIndexes = async (db) => {
       throw new Error(`Storage 6.2.5-C2 bloqueado: no se materializó ${expected.collection}.${expected.name}`);
     }
   }
+};
 
+export const assertGuestAppointmentCapabilityIndexesReady = async (db) => {
+  await assertGuestAppointmentCapabilitySupportedTopology(db);
+  const inspection = await assertSpecsReady(db, GUEST_APPOINTMENT_C2_INDEX_SPECS);
+  return { ready: true, indexes: inspection.length };
+};
+
+export const applyGuestAppointmentCapabilityIndexes = async (db) => {
+  // PHASE 1 — complete read-only preflight.
+  const preflight = await preflightGuestAppointmentCapabilityIndexes(db);
+
+  // PHASE 2 — structural/non-destructive materialization.
+  await ensureRelevantCollections(db);
+  await materializeSpecs(db, structuralSpecs(), { recheckUnique: true });
+  await assertSpecsReady(db, structuralSpecs());
+
+  // Re-read all cleanup targets before activating the first new TTL.
+  const beforeTtl = await loadPhysicalState(db);
+  for (const expected of ttlSpecs()) {
+    const indexes = beforeTtl.indexesByCollection.get(expected.collection) ?? [];
+    assertNoIncompatiblePhysicalIndex(indexes, expected);
+  }
+
+  // PHASE 3 — TTL/cleanup materialization.
+  await materializeSpecs(db, ttlSpecs());
+
+  // PHASE 4 — final physical verification.
   const ready = await assertGuestAppointmentCapabilityIndexesReady(db);
-  return { ...ready, topology };
+  return { ...ready, topology: preflight.topology };
 };
 
 const runCli = async () => {

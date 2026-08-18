@@ -1,5 +1,5 @@
 import mongoose from "mongoose";
-import { GUEST_APPOINTMENT_ARTIFACT_RETENTION_SECONDS } from "../../security/guestAppointmentArtifactRetention.constants.js";
+import { CLIENT_CONTACT_VERIFICATION_RETENTION_SECONDS } from "../../security/clientContactVerificationRetention.constants.js";
 
 export const CLIENT_CONTACT_VERIFICATION_CHANNELS = Object.freeze(["email"]);
 
@@ -81,13 +81,13 @@ clientContactVerificationSchema.index(
   { name: "client_verification_business_purpose_secret_status_expiry" },
 );
 
-// Runtime validity still fails closed at expiresAt <= now. TTL is cleanup only:
-// verification evidence remains bounded and is removed one retention window
-// after its authority has already expired logically.
+// Shared C1 policy for every purpose, including contact-control. Logical
+// validity still ends exactly at expiresAt; this collection-wide TTL only
+// performs eventual physical cleanup one retention window later.
 clientContactVerificationSchema.index(
   { expiresAt: 1 },
   {
-    expireAfterSeconds: GUEST_APPOINTMENT_ARTIFACT_RETENTION_SECONDS,
+    expireAfterSeconds: CLIENT_CONTACT_VERIFICATION_RETENTION_SECONDS,
     name: "client_verification_expiry_retention_ttl",
   },
 );

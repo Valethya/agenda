@@ -8,44 +8,34 @@ C2 conserva los contratos de 6.2.5-A, 6.2.5-B, 6.2.5-C1, ADR-002 y APT-CLIENT-01
 
 ## Autoridad que introduce C2
 
-El flujo efectivo es:
+El flujo efectivo sigue siendo:
 
 `HTTP acceptance -> durable intent -> worker -> Appointment-scoped contact provenance -> C1 Verification -> trusted delivery -> exact C1 consume -> Appointment READ capability`
 
-Una capability significa exclusivamente que quien posee el bearer puede ejecutar `read` sobre **una Appointment exacta de un Business exacto** mientras el grant sea válido.
+Una capability concede exclusivamente `read` sobre una Appointment exacta de un Business exacto mientras el bearer single-use siga válido. No significa Client account, User authority, Membership, Business.owner authority, superadmin Client authority, CustomerProfile ownership, claim, historial ni continuidad histórica.
 
-No significa Client account, User authority, Membership, CustomerProfile ownership, claim, historial ni continuidad histórica.
-
-`appointment-read-bootstrap -> read` es el único mapping implementado. `cancel` y `reschedule` permanecen separados y fuera de este PR.
+`appointment-read-bootstrap -> read` es el único mapping implementado. Cancel y reschedule permanecen fuera de C2.
 
 ## Provenance Appointment-scoped
 
-Las nuevas reservas guest capturan `Appointment.guestContact` directamente desde el input de ese booking **antes** de llamar a `getOrCreateGuestUser()`:
+Las reservas guest nuevas capturan `Appointment.guestContact` directamente desde el input del booking **antes** de `getOrCreateGuestUser()`:
 
 - `channel: email`;
 - `destination`;
 - `provenance: guest-booking-input-v1`;
 - `capturedAt`.
 
-El snapshot es `select:false` e inmutable. Es contacto operacional del recurso; no es identidad ni ownership.
+El snapshot es interno, inmutable y operacional; no es identidad ni ownership. El worker resuelve únicamente Appointment + Business + Service + `guestContact`.
 
-El worker C2 consulta únicamente `Appointment + Business + Service + guestContact`. No popula `Appointment.client`, `User`, `CustomerProfile`, otras Appointment ni historial.
+No existe fallback a `Appointment.client`, `User.email`, `User.phone`, CustomerProfile, otra Appointment ni matching histórico. Appointment legacy sin provenance válida falla cerrado.
 
-Por tanto:
-
-- `Appointment.client` no habilita bootstrap;
-- `User.email` / `User.phone` legacy no son provenance;
-- cambiar posteriormente `User.email` no cambia el destinatario de la Appointment;
-- Appointment legacy sin `guestContact` válido falla cerrado;
-- no existe migración heurística de legacy en C2.
-
-`current channel control != historical subject continuity` sigue siendo una frontera explícita.
+`current channel control != historical subject continuity` continúa siendo frontera obligatoria.
 
 ## Frontera HTTP y orquestación durable
 
-`POST /api/guest-appointments/read/challenge` valida sólo IDs sintácticos, persiste/deduplica una intención durable y responde el mismo `202` genérico. No consulta Appointment, User, CustomerProfile ni proveedor de email antes de responder.
+`POST /api/guest-appointments/read/challenge` valida sólo IDs sintácticos, persiste/deduplica una intención durable y responde el mismo `202` genérico. No demuestra existencia consultando Business/Appointment antes de responder y no espera al proveedor de email.
 
-`GuestAppointmentVerificationJob` mantiene scope físico único:
+`GuestAppointmentVerificationJob` mantiene scope único:
 
 `Business + Appointment + purpose + action`
 
@@ -53,107 +43,141 @@ Lifecycle:
 
 `queued -> processing -> delivering -> delivered | failed`
 
-El worker reclama con lease atómico, resuelve provenance, emite C1, vincula Verification y Delivery a la misma generación, cambia a `delivering` antes del proveedor y sólo tras aceptación marca Delivery/Job `delivered`.
+Sólo un worker reclama un job mediante lease. `processing` stale es reclaimable. `delivering` stale falla cerrado, no se reenvía automáticamente y revoca la Verification conocida. Un worker sin ownership o una generación antigua no puede completar una generación nueva.
 
-`processing` stale puede recuperarse. `delivering` stale no se reenvía: termina fail-closed y revoca la Verification conocida. Un worker sin ownership o una generación antigua no puede completar el estado actual.
+## Trusted delivery, exact consume y secretos
 
-## Trusted delivery y secretos
+Challenges y capabilities usan `crypto.randomBytes(32)` + `base64url`. Los bearer raw nunca se persisten; MongoDB conserva sólo hashes SHA-256 scoped.
 
-Challenges y capabilities usan `crypto.randomBytes(32)` y `base64url`.
+La URL sensible usa fragment y un trusted HTTPS origin explícito. La ruta sensible de email no registra recipient, body/HTML, bearer URL ni provider payload.
 
-MongoDB nunca persiste challenge raw ni capability bearer raw. El challenge raw sólo existe en memoria del worker durante trusted delivery y la URL lo transporta en fragment (`#`), no query.
-
-La ruta sensible de email no registra recipient, HTML/body, bearer URL, provider error body ni preview URL Ethereal. El origin se obtiene exclusivamente de `GUEST_APPOINTMENT_ACCESS_ORIGIN`, nunca de `Host`, `Origin`, `Referer` ni `X-Forwarded-*` del requester.
-
-## Consumo exacto de C1
-
-C1 conserva su API previa. C2 usa `consumeExactVerificationForBusiness()`, respaldado por un único `findOneAndUpdate()` que exige:
+C2 consume C1 mediante una única operación atómica que exige:
 
 `verificationId + Business + purpose + secretHash + status=pending + expiresAt>now`
 
-Un verificationId incorrecto acompañado de un secret válido no consume otra proof. C1 Verification continúa sin campo Appointment.
+Una emisión C1 directa sin Delivery/Job C2 coherentes no puede mintar capability.
 
-## Capability READ
-
-`GuestAppointmentCapability` persiste sólo Business, Appointment, Verification, action, hash derivado, lifecycle y expiración. Una Verification sólo puede respaldar una capability por índice unique.
-
-READ es single-use. `expiresAt <= now` falla cerrado; revocación y consumo son terminales. La proyección READ no expone client/contact, notes, CustomerProfile, Membership, historial ni timeline.
+READ es single-use y la proyección no expone client/contact, notes, CustomerProfile, Membership, historial ni timeline.
 
 ## Anti-amplificación durable
 
-### Cooldown y dedupe exact-scope
+Se preserva el diseño aprobado:
 
-El índice unique mantiene un único job por `Business + Appointment + purpose + action`. El cooldown es 15 minutos.
+1. consultar sólo `GuestAppointmentVerificationJob` por exact scope;
+2. scope existente/activo/cooldown -> dedupe sin cobrar presupuesto global;
+3. terminal elegible -> reutilizar el mismo job y aumentar `generation` sin cobrar crecimiento nuevo;
+4. sólo ausencia real entra al intake guard.
 
-Antes de tocar el presupuesto global de creación, `enqueueForScope()` consulta **solamente** la colección de durable intents por ese scope exacto. No consulta Business ni Appointment.
+`GuestAppointmentIntakeBucket.scopeKeys` almacena fingerprints SHA-256, nunca Business/Appointment/email raw. `$addToSet` hace idempotente la admisión concurrente del mismo scope.
 
-- si el scope ya existe y sigue dentro del cooldown o está activo: se deduplica y no consume presupuesto global;
-- si el scope terminal ya es elegible: se reutiliza el mismo documento, aumenta `generation` y tampoco consume presupuesto de crecimiento;
-- sólo cuando no existe un job durable se entra al guard de creación de storage.
-
-Esto elimina la primitive anterior en que miles de replays de un único scope agotaban el bucket global aunque no creciera MongoDB.
-
-### Guard de creación de scopes nuevos
-
-`GuestAppointmentIntakeBucket` contiene:
-
-- `_id` de ventana temporal;
-- `scopeKeys`: fingerprints SHA-256 de scopes admitidos;
-- `expiresAt`.
-
-No persiste Business, Appointment, email, destination ni authority data en claro.
-
-Por defecto:
+Valores actuales:
 
 - ventana: 60 segundos;
-- máximo: 240 **scopes nuevos distintos** por ventana;
-- retención del bucket: 10 minutos tras la ventana.
+- máximo: 240 scopes nuevos distintos por ventana;
+- retención bucket: 10 minutos;
+- saturación: mismo `202 { accepted: true }`.
 
-`$addToSet` hace idempotente la admisión del mismo fingerprint: carreras concurrentes del mismo scope ocupan un único cupo. Cuando la ventana alcanza el máximo de fingerprints distintos, no se crean nuevos jobs, pero la API pública conserva el mismo `202 { accepted: true }`.
+El riesgo residual cross-tenant por suficientes scopes distintos es un trade-off de disponibilidad aceptado; no se amplía C2 con identidad/autenticación para eliminarlo.
 
-La defensa sigue siendo deliberadamente global para no necesitar comprobar existencia de Business antes del 202. Un atacante que genere suficientes scopes sintácticamente distintos todavía puede provocar backpressure temporal cross-tenant; ahora debe consumir el presupuesto con **crecimiento potencial distinto**, no mediante replay gratuito de un solo scope. Ese trade-off de disponibilidad queda explícito y no concede autoridad.
+## Retención — política por artefacto
 
-## Política explícita de retención C1/C2
+C2 adopta explícitamente **política A: retención por artefacto**. No existe una deadline única de cadena completa. Cada objeto conserva 60 minutos desde su propio deadline relevante; por ello Verification, Delivery, Job y Capability pueden desaparecer físicamente en instantes distintos.
 
-La validez lógica y el cleanup físico son independientes. **TTL nunca extiende autoridad.**
+Esto no cambia autoridad: los checks runtime vencen antes y de forma exacta; MongoDB TTL es cleanup eventual.
 
-Ventana de retención de evidencia: 60 minutos después de la expiración o terminalización correspondiente.
+### ClientContactVerification — contrato compartido C1
 
-- `ClientContactVerification`: válida sólo mientras runtime exige `expiresAt > now`; TTL físico `{ expiresAt: 1 }` con `expireAfterSeconds: 3600`.
-- `GuestAppointmentVerificationDelivery`: `purgeAfter = verification.expiresAt + 60 min`; TTL `{ purgeAfter: 1 }`, `expireAfterSeconds: 0`. Esto conserva la evidencia durante toda la vida posible del challenge más la ventana de diagnóstico.
-- `GuestAppointmentCapability`: válida sólo con `expiresAt > now`; TTL físico `{ expiresAt: 1 }` con `expireAfterSeconds: 3600`.
-- `GuestAppointmentVerificationJob`: sólo `delivered|failed` reciben `purgeAfter = terminalAt + 60 min`; `queued|processing|delivering` mantienen `purgeAfter=null` y nunca son candidatos del TTL.
-- `GuestAppointmentIntakeBucket`: TTL propio corto sobre `expiresAt`; no es evidencia de autoridad.
+La retención de `ClientContactVerification` no es exclusiva de C2. C2 materializa la política compartida que C1 había dejado pendiente:
 
-`Appointment.guestContact` **no** se elimina por esta política: es provenance operacional del recurso, no challenge/capability bearer ni artefacto temporal de orquestación.
+```text
+{ expiresAt: 1 }
+expireAfterSeconds: 3600
+```
 
-MongoDB TTL es cleanup eventual; los checks de `expiresAt`, status, generation y ownership siguen siendo la autoridad runtime exacta.
+Aplica sin filtro de purpose a:
 
-## Índices físicos y cutover
+- `contact-control`;
+- `appointment-read-bootstrap`;
+- `appointment-cancel-bootstrap`;
+- `appointment-reschedule-bootstrap`.
 
-Antes de exponer C2 remotamente se ejecuta:
+La autoridad lógica termina exactamente en `expiresAt <= now`; el documento sólo se vuelve elegible para cleanup físico una hora después. El contrato compartido se documenta también en `fase-6.2.5-c1-retention-contract.md`.
 
-`npm run migration:guest-appointment-capability-storage`
+### Resto de la cadena C2
 
-El migrador conecta con `autoIndex:false`, exige replica set o mongos, materializa idempotentemente las colecciones/índices C1+C2 y no hace drop/recreate destructivo.
+- Delivery: `purgeAfter = verification.expiresAt + 60 min`; TTL `{ purgeAfter: 1 }`, `expireAfterSeconds: 0`.
+- Capability: autoridad termina en `expiresAt`; TTL físico `{ expiresAt: 1 }`, `expireAfterSeconds: 3600`.
+- Job: sólo `delivered|failed` reciben `purgeAfter = terminalAt + 60 min`; `queued|processing|delivering` mantienen `purgeAfter=null`.
+- Intake Bucket: TTL corto propio; no es evidencia de autoridad.
+- `Appointment.guestContact`: no se purga por esta política porque es provenance operacional del recurso.
 
-### Identidad física de seguridad
+## Índices físicos — identidad de seguridad
 
-Para cada índice se valida exactamente:
+El cutover valida físicamente:
 
-- key pattern y orden;
+- key pattern y orden exacto;
 - `unique`;
 - `expireAfterSeconds`;
 - `sparse`;
-- `partialFilterExpression` mediante canonicalización estructural determinista;
+- `partialFilterExpression` con canonicalización estructural determinista;
 - `collation`;
-- `hidden` como defensa adicional.
+- `hidden`.
 
-Las opciones no declaradas deben estar ausentes o en su default seguro. Los índices actuales requieren collation simple/default; una collation no-simple es incompatible. Al crear un índice se fuerza semántica simple para no heredar accidentalmente una collation de colección más permisiva.
+Opciones no declaradas deben estar ausentes/default seguro. Los índices actuales exigen collation simple/default; al materializar se fuerza `locale: simple`.
 
-El nombre físico continúa siendo diagnóstico, no identidad de seguridad: un índice con otro nombre es aceptable sólo si **toda** la semántica anterior coincide. Si el nombre esperado ya está ocupado por una forma incompatible, o existe el mismo key pattern con modificadores incompatibles, el cutover falla cerrado.
+El nombre físico es diagnóstico: otro nombre es aceptable sólo con semántica exactamente equivalente. Same-name o same-key incompatible bloquea el cutover; no se hace drop/recreate automático de índices preexistentes.
 
-La topología física incluye C1 Verification, C2 Delivery, Capability, Job e Intake Bucket, incluidos TTLs de retención.
+## Migración operacional en cuatro fases
+
+`npm run migration:guest-appointment-capability-storage` conecta con `autoIndex:false` y exige replica set o mongos.
+
+### Fase 1 — preflight completo read-only
+
+Antes de cualquier `createCollection()` o `createIndex()`:
+
+1. valida topología;
+2. lista colecciones relevantes;
+3. lista todos los índices físicos C1+C2 existentes;
+4. valida same-name y same-key conflicts;
+5. compara todas las opciones de identidad física;
+6. pre-valida cada unique requerido sobre datos existentes.
+
+La prevalidación unique es server-side y acotada:
+
+`$group -> $match count > 1 -> $limit 1`
+
+Se ejecuta con collation simple y no descarga la colección a memoria de la aplicación. No incluye valores duplicados en el error público/operacional; sólo colección e índice esperado.
+
+Si este preflight falla: cero colecciones nuevas, cero índices nuevos, cero TTL nuevos y cero cambios de documentos.
+
+### Fase 2 — índices estructurales/no destructivos
+
+Sólo después del preflight global:
+
+1. crea las colecciones faltantes;
+2. materializa índices no TTL;
+3. revalida unique inmediatamente antes de cada unique `createIndex()` para cerrar carreras de forma fail-closed;
+4. vuelve a `listIndexes()` y exige semántica exacta de toda la topología estructural.
+
+Un fallo aquí puede dejar únicamente estructura no destructiva creada por esta ejecución; **ningún TTL nuevo ha sido activado todavía**.
+
+### Fase 3 — TTL/cleanup al final
+
+Después de verificar todos los índices estructurales, se vuelve a inspeccionar globalmente cada target TTL. Sólo entonces se materializan:
+
+- C1 Verification `{ expiresAt: 1 } + 3600`;
+- C2 Delivery `{ purgeAfter: 1 } + 0`;
+- C2 Capability `{ expiresAt: 1 } + 3600`;
+- C2 Job `{ purgeAfter: 1 } + 0`;
+- Intake Bucket `{ expiresAt: 1 } + 0`.
+
+Así, un conflicto predecible tardío de estructura/unique no puede dejar activada una nueva política destructiva de cleanup.
+
+### Fase 4 — verificación física final
+
+Al terminar se vuelve a inspeccionar la topología C1+C2 completa y el comando sólo informa ready si todos los índices existen con semántica exacta.
+
+La migración sigue siendo idempotente y no modifica automáticamente índices incompatibles.
 
 ## Cutover remoto fail-closed
 
@@ -161,35 +185,33 @@ Runtime remoto requiere:
 
 `GUEST_APPOINTMENT_6_2_5_C2_CUTOVER=GUEST_APPOINTMENT_6_2_5_C2_STORAGE_READY`
 
-Se considera remoto si:
+Se considera remoto si `NODE_ENV` es staging/production o existe cualquier deployment indicator soportado. Un deployment indicator siempre prevalece frente a `NODE_ENV=test`; no existe bypass especial de CI.
 
-- `NODE_ENV` es `staging` o `production`; **o**
-- existe cualquier indicador de deployment soportado (Railway, Vercel, Render, AWS, Fly, etc.).
+El startup sigue:
 
-Un indicador remoto **siempre gana frente a `NODE_ENV=test`**. `NODE_ENV=test` sólo desactiva el gate para un proceso genuinamente local sin indicadores de deployment. No existe excepción especial de CI.
+`connectDB -> availability gate -> C2 storage gate -> app.listen/listening -> socket init -> worker start`
 
-Para un runtime remoto el gate exige, en este orden lógico:
-
-1. confirmation exacta;
-2. topología MongoDB soportada;
-3. todos los índices físicos con semántica exacta.
-
-Sólo después el startup continúa a HTTP.
-
-Orden general:
-
-`connectDB -> availability cutover gate -> C2 storage cutover gate -> app.listen/listening -> socket init -> worker start`
-
-Si un gate o `listen` falla, socket/worker no arrancan. El worker se detiene en `close`.
+Confirmation sin índices exactos falla cerrado. El worker no arranca antes del gate.
 
 ## Evidencia automatizada
 
-- `Server/test/guestAppointmentCapability.test.js`: flujo durable real, provenance, delivery, exact consume, cross-scope, READ single-use, expiry/revoke, worker leases/generation, service coherence y retención terminal.
-- `Server/test/guestAppointmentCapabilityHardening.test.js`: replay sin cargo global, carreras del mismo scope con un único fingerprint, reset terminal sin cargo de storage nuevo y límite de scopes nuevos distintos.
-- `Server/test/guestAppointmentCapabilityStorage.test.js`: `autoIndex:false`, `listIndexes()` físico, idempotencia, partial/sparse/collation/TTL/unique incompatibles, nombre alternativo con semántica exacta, topología y precedencia de deployment indicators sobre `NODE_ENV=test`.
-- `Server/test/unit/guest-appointment-capability.contract.test.js`: authority boundary, secreto derivado, TTL/retención y ausencia de raw resource IDs en el bucket.
-- suites C1, Membership, tenant isolation, Appointment ownership/coherence, availability, payments, WebSocket, API y frontend permanecen en la CI general.
+`Server/test/guestAppointmentCapabilityStorage.test.js` y `Server/test/guestAppointmentCapabilityStorageCutover.test.js` cubren production-like con `autoIndex:false` y MongoDB replica set real, incluyendo:
+
+- DB vacía y preflight read-only;
+- topología parcialmente materializada pero compatible;
+- rerun idempotente;
+- standalone reject / replica set accept;
+- same-name y same-key incompatibles;
+- wrong unique / wrong TTL;
+- partial, sparse, collation y hidden inesperados;
+- alternate physical name sólo con semántica exacta;
+- duplicate data para future unique -> preflight reject;
+- failure injection que demuestra cero nuevos índices/TTL/colecciones y preservación del documento C1 preexistente;
+- retención C1 sin filtro que cubre físicamente `contact-control`;
+- gate remoto, confirmation e indicadores de deployment.
+
+Las suites de capability mantienen provenance, trusted delivery, exact consume, worker fencing, single-use y backpressure. Las suites generales siguen validando Membership, tenant isolation, Appointment ownership/coherence, availability, API, pagos, WebSocket y frontend.
 
 ## Fuera de alcance
 
-C2 no implementa Client account/login/session, User↔CustomerProfile binding, claims, Client history/list/timeline, correlación histórica, CustomerProfile ownership, Appointment.client authority, cambios a `getOrCreateGuestUser()`, Membership Client, OAuth Client, CRM/marketing/loyalty/subscription, SMS, migración histórica, cancel/reschedule end-to-end ni 6.2.5-D.
+C2 no implementa Client account/login/session, User↔CustomerProfile binding, claims, Client history/list/timeline, correlación histórica, CustomerProfile ownership, Appointment.client authority, Membership Client, OAuth Client, SMS, migración histórica, cancel/reschedule end-to-end ni 6.2.5-D.
