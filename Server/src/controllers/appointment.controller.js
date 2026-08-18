@@ -1,5 +1,6 @@
 import * as appointmentService from "../services/appointment.service.js";
 import * as authService from "../services/auth.service.js";
+import { projectPublicAppointmentCreated } from "../services/publicBookingContract.service.js";
 import { ValidationError } from "../utils/appError.js";
 
 export const createAppointment = async (req, res, next) => {
@@ -40,7 +41,11 @@ export const createAppointment = async (req, res, next) => {
       guestContact,
     });
 
-    res.status(201).json({ status: "success", message: "Cita reservada exitosamente", payload: appointment });
+    const payload = req.tenantAuthority
+      ? appointment
+      : projectPublicAppointmentCreated(appointment);
+
+    res.status(201).json({ status: "success", message: "Cita reservada exitosamente", payload });
   } catch (error) { next(error); }
 };
 
