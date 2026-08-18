@@ -3,9 +3,14 @@ const firstString = (value) => {
   return typeof value === "string" ? value : "";
 };
 
+const asId = (value) => {
+  const candidate = value?._id ?? value?.id ?? value;
+  return candidate?.toString?.() || undefined;
+};
+
 const projectAccountClient = (client) => ({
   kind: "account",
-  _id: client?._id?.toString?.() || client?.id?.toString?.() || undefined,
+  _id: asId(client),
   firstName: client?.firstName || "",
   lastName: client?.lastName || "",
   email: firstString(client?.email),
@@ -20,7 +25,7 @@ const projectGuestClient = (guestContact) => ({
   phone: guestContact?.phone || "",
 });
 
-// DTO exclusivo de lecturas internas ya autorizadas. guestContact se usa como
+// DTO exclusivo de respuestas internas ya autorizadas. guestContact se usa como
 // fuente operacional, pero provenance/capturedAt/channel nunca salen del backend.
 export const projectInternalAppointment = (appointment) => {
   if (!appointment) return appointment;
