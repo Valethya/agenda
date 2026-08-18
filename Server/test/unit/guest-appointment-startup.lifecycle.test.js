@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import mongoose from "mongoose";
-import { getConnectedDatabase, startServer } from "../../src/index.js";
+import { getConnectedDatabase, startServerLifecycle } from "../../src/server/startServer.js";
 
 const fakeLogger = { info: () => {}, error: () => {} };
 
@@ -51,14 +51,14 @@ test("6.2.5-C2 failed storage gate blocks listen, socket and worker", async () =
     },
   });
 
-  await assert.rejects(startServer(fixture.options), /C2_STORAGE_BLOCKED/u);
+  await assert.rejects(startServerLifecycle(fixture.options), /C2_STORAGE_BLOCKED/u);
   assert.deepEqual(fixture.calls, ["connect", "availability-gate", "c2-gate"]);
 });
 
 test("6.2.5-C2 listen failure does not initialize socket or worker", async () => {
   const fixture = dependencies();
   fixture.server.listening = false;
-  const start = startServer(fixture.options);
+  const start = startServerLifecycle(fixture.options);
   queueMicrotask(() => fixture.server.emit("error", new Error("EADDRINUSE")));
   await assert.rejects(start, /EADDRINUSE/u);
   assert.deepEqual(fixture.calls, ["connect", "availability-gate", "c2-gate", "listen"]);
@@ -66,7 +66,7 @@ test("6.2.5-C2 listen failure does not initialize socket or worker", async () =>
 
 test("6.2.5-C2 startup opens HTTP only after both gates and stops worker on server close", async () => {
   const fixture = dependencies();
-  const server = await startServer(fixture.options);
+  const server = await startServerLifecycle(fixture.options);
 
   assert.equal(server, fixture.server);
   assert.deepEqual(
