@@ -20,6 +20,7 @@ export const projectPublicService = (service) => {
   const value = asPlainObject(service);
   return {
     id: asId(value),
+    business: asId(value.business),
     name: value.name,
     description: value.description ?? "",
     duration: value.duration,
