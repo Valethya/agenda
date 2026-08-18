@@ -78,3 +78,23 @@ test("6.2.4-B Payment/Webpay queda deny-by-default", async () => {
   assert.match(env, /process\.env\.ENABLE_PAYMENTS\s*===\s*"true"/u);
   assert.match(routes, /if\s*\(paymentRoutesEnabled\)\s*\{[\s\S]*router\.use\("\/payments", paymentRoutes\)/u);
 });
+
+test("6.2.6-A booking guest no correlaciona ni crea User", async () => {
+  const controller = await readSource("controllers/appointment.controller.js");
+  const model = await readSource("db/models/appointment.model.js");
+
+  assert.doesNotMatch(controller, /getOrCreateGuestUser/u);
+  assert.doesNotMatch(controller, /authService/u);
+  assert.match(controller, /bookingSurface\s*===\s*"public"/u);
+  assert.match(controller, /guestContact\s*=\s*\{/u);
+  assert.match(model, /client:[\s\S]*default:\s*null/u);
+  assert.match(model, /client autenticado o guestContact/u);
+});
+
+test("6.2.6-A inicio de Payment no acepta Appointment ID como authority", async () => {
+  const routes = await readSource("routes/payment.routes.js");
+
+  assert.doesNotMatch(routes, /\bstartPayment\b/u);
+  assert.match(routes, /El inicio de pago público requiere una autoridad específica/u);
+  assert.match(routes, /ForbiddenError/u);
+});
