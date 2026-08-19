@@ -1,19 +1,10 @@
 import mongoose from "mongoose";
 import * as businessRepository from "../repositories/business.repository.js";
-import { frontendUrl } from "../config/env.js";
 import { resolveTenantAuthority } from "../services/tenantAuthority.service.js";
+import { assertTrustedAuthenticatedOrigin } from "./trustedAuthenticatedOrigin.middleware.js";
 import { ForbiddenError, NotFoundError, UnauthorizedError, ValidationError } from "../utils/appError.js";
 
 const BUSINESS_NOT_AVAILABLE_MESSAGE = "El negocio especificado no está disponible";
-const INTERNAL_ORIGIN_MESSAGE = "Origen no autorizado para la superficie interna";
-
-const trustedInternalOrigin = (() => {
-  try {
-    return new URL(frontendUrl).origin;
-  } catch {
-    return null;
-  }
-})();
 
 const collectIdentifier = (name, values, normalize = (value) => value) => {
   const provided = values.filter((value) => value !== undefined && value !== null && value !== "");
@@ -75,31 +66,15 @@ const resolveExplicitBusiness = async (req) => {
   return business;
 };
 
-const assertTrustedInternalOrigin = (req) => {
-  const rawOrigin = req.get("origin");
-  if (!rawOrigin) return;
-
-  let requestOrigin = null;
-  try {
-    requestOrigin = new URL(rawOrigin).origin;
-  } catch {
-    throw new ForbiddenError(INTERNAL_ORIGIN_MESSAGE);
-  }
-
-  if (!trustedInternalOrigin || requestOrigin !== trustedInternalOrigin) {
-    throw new ForbiddenError(INTERNAL_ORIGIN_MESSAGE);
-  }
-};
-
 const applyInternalBusinessScope = async (req) => {
   const sessionUser = req.session?.user;
   if (!sessionUser?.id) {
     throw new UnauthorizedError("Debes iniciar sesión para usar la superficie interna");
   }
 
-  // Esta comprobación acota la superficie administrativa del navegador al origen
-  // configurado del panel. No sustituye el hardening CSRF general de una fase futura.
-  assertTrustedInternalOrigin(req);
+  // La frontera de origin autenticado es compartida también por rutas de sesión
+  // y superadmin que no pasan por scopeBusiness. CORS permitido no es authority.
+  assertTrustedAuthenticatedOrigin(req);
 
   if (!sessionUser.businessId) {
     throw new ForbiddenError("No tienes un negocio activo seleccionado");
