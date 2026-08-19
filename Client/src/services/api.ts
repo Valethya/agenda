@@ -97,12 +97,8 @@ export async function apiFetch<T = unknown>(path: string, options: ApiRequestIni
   const headers = new Headers(options.headers);
   let body = options.body;
 
-  // Este cliente pertenece al panel autenticado. La surface se declara de forma
-  // independiente al slug de la URL; callers excepcionales pueden sobrescribirla.
-  if (!headers.has('x-agenda-surface')) {
-    headers.set('x-agenda-surface', 'internal');
-  }
-
+  // El slug transporta contexto/tenant cuando el endpoint lo acepta. La selección
+  // public/internal pertenece al routing del servidor y nunca a un header del cliente.
   if (slug && !headers.has('x-business-slug') && !headers.has('x-business-id')) {
     headers.set('x-business-slug', slug);
   }
@@ -144,7 +140,7 @@ export async function logout() {
 }
 
 export async function getWorkers() {
-  const data = await apiFetch<ApiResponse<Professional[]>>("/users/workers");
+  const data = await apiFetch<ApiResponse<Professional[]>>("/internal/users/workers");
   return data.payload;
 }
 
