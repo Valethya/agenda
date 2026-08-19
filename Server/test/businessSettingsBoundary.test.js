@@ -43,6 +43,7 @@ test("6.2.6-A Business Settings boundary", async (t) => {
     });
     assert.equal(response.status, 401);
     assert.equal(response.headers.get("access-control-allow-origin"), publicOrigin);
+    assert.equal(response.headers.get("access-control-allow-credentials"), null);
     assert.equal(await BusinessConfig.countDocuments({ business: seed.business._id }), 0);
   });
 
@@ -58,22 +59,43 @@ test("6.2.6-A Business Settings boundary", async (t) => {
     });
     assert.equal(response.status, 403);
     assert.equal(response.headers.get("access-control-allow-origin"), publicOrigin);
+    assert.equal(response.headers.get("access-control-allow-credentials"), null);
     assert.equal(await BusinessConfig.countDocuments({ business: seed.business._id }), 0);
   });
 
-  await t.test("Membership vigente desde origin del panel puede cargar config y sólo entonces inicializar defaults", async () => {
+  await t.test("Membership vigente desde panel puede leer defaults sin persistirlos", async () => {
     const cookie = await login("test-admin@example.com", "passwordAdmin");
     const response = await fetch(`${baseUrl}/business-settings`, {
       headers: { Cookie: cookie, Origin: panelOrigin },
     });
     assert.equal(response.status, 200);
+    assert.equal(response.headers.get("access-control-allow-credentials"), "true");
     const body = await response.json();
     assert.equal(body.status, "success");
     assert.ok(body.payload.businessName);
+    assert.equal(body.payload.business.toString(), seed.business._id.toString());
+    assert.equal(await BusinessConfig.countDocuments({ business: seed.business._id }), 0);
+  });
+
+  await t.test("PUT autorizado materializa configuración como comando explícito", async () => {
+    const cookie = await login("test-admin@example.com", "passwordAdmin");
+    const response = await fetch(`${baseUrl}/business-settings`, {
+      method: "PUT",
+      headers: {
+        Cookie: cookie,
+        Origin: panelOrigin,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        appointmentSettings: { bufferTime: 15 },
+      }),
+    });
+    assert.equal(response.status, 200);
 
     const persisted = await BusinessConfig.findOne({ business: seed.business._id });
     assert.ok(persisted);
     assert.equal(persisted.business.toString(), seed.business._id.toString());
+    assert.equal(persisted.appointmentSettings.bufferTime, 15);
     assert.equal(await BusinessConfig.countDocuments({ business: seed.business._id }), 1);
   });
 });
