@@ -94,6 +94,7 @@ export const findActiveOverlapForBusinessWorkerAndDate = async ({
   date,
   startTime,
   endTime,
+  excludeAppointmentId = null,
   session,
 }) => {
   const startOfDay = new Date(date);
@@ -101,14 +102,17 @@ export const findActiveOverlapForBusinessWorkerAndDate = async ({
   const endOfDay = new Date(date);
   endOfDay.setUTCHours(23, 59, 59, 999);
 
-  return await Appointment.findOne({
+  const filter = {
     business: businessId,
     worker: workerId,
     date: { $gte: startOfDay, $lte: endOfDay },
     status: { $in: ACTIVE_BOOKING_STATUSES },
     startTime: { $lt: endTime },
     endTime: { $gt: startTime },
-  }).session(session || null);
+  };
+  if (excludeAppointmentId) filter._id = { $ne: excludeAppointmentId };
+
+  return await Appointment.findOne(filter).session(session || null);
 };
 
 const createWithSession = async (data, session) => {
@@ -164,17 +168,33 @@ export const markPendingPaymentFromLegacyPayment = async (id) => {
   );
 };
 
-export const confirmFromLegacyPayment = async (id, paymentStatus) => {
+export const findBookingTransitionById = async (id, { session = null } = {}) => (
+  Appointment.findById(id).session(session || null)
+);
+
+export const confirmPendingPaymentFromLegacyPayment = async (
+  id,
+  paymentStatus,
+  { session = null } = {},
+) => {
   if (!PAYMENT_SETTLEMENT_STATUSES.has(paymentStatus)) {
     throw new TypeError("Estado de pago de Appointment inválido");
   }
 
-  return await Appointment.findByIdAndUpdate(
-    id,
+  return await Appointment.findOneAndUpdate(
+    { _id: id, status: "pending_payment" },
     { $set: { status: "confirmed", paymentStatus } },
-    { new: true, runValidators: true },
+    { new: true, runValidators: true, session },
   );
 };
+
+export const cancelPendingPaymentForLegacyConflict = async (id, { session = null } = {}) => (
+  Appointment.findOneAndUpdate(
+    { _id: id, status: "pending_payment" },
+    { $set: { status: "cancelled" } },
+    { new: true, runValidators: true, session },
+  )
+);
 
 export const cancelFromRejectedLegacyPayment = async (id) => {
   return await Appointment.findByIdAndUpdate(
