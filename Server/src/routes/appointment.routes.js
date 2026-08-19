@@ -9,22 +9,19 @@ import {
   getAppointmentTimeline,
 } from "../controllers/appointment.controller.js";
 import { isAuthenticated } from "../middleware/auth.middleware.js";
-import { scopeBusiness, scopeHeadlessOrSessionBusiness } from "../middleware/business.middleware.js";
+import { scopeBusiness, scopePublicBusiness } from "../middleware/business.middleware.js";
 import { validate } from "../middleware/validate.middleware.js";
-import { createAppointmentSchema, publicCreateAppointmentSchema } from "../validations/appointment.validation.js";
+import { publicCreateAppointmentSchema } from "../validations/appointment.validation.js";
 import { objectIdParamSchema } from "../validations/common.validation.js";
 
 const router = Router();
 
-// Path compartido, surface explícita. El controller consume bookingInput, nunca
-// req.body raw, para que controles legacy no atraviesen la frontera pública.
+// El path público siempre usa el schema headless strict. isSuggestion,
+// paymentOption y otros controles internos no pueden habilitarse con headers.
 router.post(
   "/",
-  scopeHeadlessOrSessionBusiness,
-  validate(
-    (req) => req.bookingSurface === "public" ? publicCreateAppointmentSchema : createAppointmentSchema,
-    { assignBody: "bookingInput" },
-  ),
+  scopePublicBusiness,
+  validate(publicCreateAppointmentSchema, { assignBody: "bookingInput" }),
   createAppointment,
 );
 
