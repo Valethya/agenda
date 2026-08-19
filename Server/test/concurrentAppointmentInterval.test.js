@@ -180,6 +180,44 @@ test("6.2.6-A interval booking concurrency invariant", async (t) => {
     ].includes(`${persisted[0].startTime}-${persisted[0].endTime}`));
   });
 
+  await t.test("duraciones 120 vs 60 en overlap real concurrente dejan exactamente un ganador", async () => {
+    const date = "2099-06-03";
+    const before = await Appointment.countDocuments({});
+
+    const [longBooking, shortBooking] = await Promise.all([
+      publicBook({
+        businessId: seed.business._id,
+        workerId: seed.worker._id,
+        serviceId: service120._id,
+        date,
+        startTime: "09:00",
+        suffix: 151,
+      }),
+      publicBook({
+        businessId: seed.business._id,
+        workerId: seed.worker._id,
+        serviceId: service60._id,
+        date,
+        startTime: "10:00",
+        suffix: 152,
+      }),
+    ]);
+
+    assert.deepEqual([longBooking.status, shortBooking.status].sort((a, b) => a - b), [201, 409]);
+    const loser = longBooking.status === 409 ? longBooking : shortBooking;
+    const loserBody = await loser.json();
+    assert.equal(loserBody.code, "CONFLICT_ERROR");
+    assert.equal(loserBody.message, "El horario seleccionado ya no se encuentra disponible");
+
+    assert.equal(await Appointment.countDocuments({}), before + 1);
+    const persisted = await activeFor({ businessId: seed.business._id, workerId: seed.worker._id, date });
+    assert.equal(persisted.length, 1);
+    assert.ok([
+      "09:00-11:00",
+      "10:00-11:00",
+    ].includes(`${persisted[0].startTime}-${persisted[0].endTime}`));
+  });
+
   await t.test("intervalos adyacentes 09:00-10:00 y 10:00-11:00 pueden coexistir", async () => {
     const date = "2099-06-02";
     const [first, second] = await Promise.all([
