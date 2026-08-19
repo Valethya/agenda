@@ -21,7 +21,7 @@ const baseUrl = `http://localhost:${server.address().port}/api`;
 const request = (path, { method = "GET", cookie, body, headers = {} } = {}) => fetch(`${baseUrl}${path}`, {
   method,
   headers: {
-    ...(cookie ? { Cookie: cookie, "x-agenda-surface": "internal" } : {}),
+    ...(cookie ? { Cookie: cookie } : {}),
     ...(body ? { "Content-Type": "application/json" } : {}),
     ...headers,
   },
@@ -70,9 +70,9 @@ test("6.2.4-B Appointment ownership enforcement", async (t) => {
     membership.isActive = false;
     await membership.save();
 
-    assert.equal((await request(`/appointments/${appointment._id}`, { cookie })).status, 404);
-    assert.equal((await request(`/appointments/${appointment._id}/cancel`, { method: "PATCH", cookie })).status, 404);
-    assert.equal((await request(`/appointments/${appointment._id}/timeline`, { cookie })).status, 404);
+    assert.equal((await request(`/appointments/${appointment._id}`, { cookie })).status, 403);
+    assert.equal((await request(`/appointments/${appointment._id}/cancel`, { method: "PATCH", cookie })).status, 403);
+    assert.equal((await request(`/appointments/${appointment._id}/timeline`, { cookie })).status, 403);
     assert.equal((await request("/appointments/my", { cookie })).status, 403);
     assert.equal((await Appointment.findById(appointment._id)).status, "pending");
   });
@@ -97,7 +97,7 @@ test("6.2.4-B Appointment ownership enforcement", async (t) => {
     const membership = await Membership.findOne({ user: seed.worker._id, business: seed.business._id });
     membership.isActive = false;
     await membership.save();
-    assert.equal((await request(`/appointments/${appointment._id}`, { cookie: workerCookie })).status, 404);
+    assert.equal((await request(`/appointments/${appointment._id}`, { cookie: workerCookie })).status, 403);
     const persisted = await Appointment.findById(appointment._id);
     assert.equal(persisted.worker.toString(), seed.worker._id.toString());
     assert.equal(persisted.status, "pending");
@@ -121,7 +121,7 @@ test("6.2.4-B Appointment ownership enforcement", async (t) => {
 
     const slots = await request(`/availability/slots?workerId=${seed.admin._id}&serviceId=${service._id}&date=2099-09-01&slug=${seed.business.slug}`);
     assert.equal(slots.status, 200);
-    const booking = await request("/appointments", {
+    const booking = await request("/internal/appointments", {
       method: "POST", cookie: adminCookie,
       headers: { "x-business-slug": seed.business.slug },
       body: {
@@ -207,7 +207,7 @@ test("6.2.4-B Appointment ownership enforcement", async (t) => {
     assert.equal((await request(`/services/${activeService._id}`, { method: "PUT", cookie: adminCookie, body: { isActive: false } })).status, 200);
     assert.ok(await Appointment.findById(historical._id));
     assert.equal((await request(`/availability/slots?workerId=${seed.worker._id}&serviceId=${activeService._id}&date=2099-09-01&slug=${seed.business.slug}`)).status, 404);
-    assert.equal((await request("/appointments", {
+    assert.equal((await request("/internal/appointments", {
       method: "POST", cookie: adminCookie,
       headers: { "x-business-slug": seed.business.slug },
       body: {
