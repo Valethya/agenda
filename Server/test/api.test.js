@@ -105,8 +105,14 @@ test("Servidor Express - Endpoints Básicos", async (t) => {
     assert.ok(!data.message.includes(inactiveBusiness.name));
   });
 
-  await t.test("GET /api/business-settings debería inicializar y retornar la configuración", async () => {
-    const response = await fetch(`${baseUrl}/business-settings?slug=${seed.business.slug}`);
+  await t.test("GET /api/business-settings requiere surface interna y Membership vigente", async () => {
+    const anonymous = await fetch(`${baseUrl}/business-settings?slug=${seed.business.slug}`);
+    assert.strictEqual(anonymous.status, 401);
+
+    const cookie = await loginAs("test-admin@example.com", "passwordAdmin");
+    const response = await fetch(`${baseUrl}/business-settings`, {
+      headers: { Cookie: cookie },
+    });
     assert.strictEqual(response.status, 200);
     const data = await response.json();
     assert.strictEqual(data.status, "success");
