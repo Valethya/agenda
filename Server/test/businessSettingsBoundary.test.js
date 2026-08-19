@@ -69,8 +69,11 @@ test("6.2.6-A Business Settings boundary", async (t) => {
     assert.equal(response.status, 200);
     const body = await response.json();
     assert.equal(body.status, "success");
-    assert.equal(body.payload.business._id, seed.business._id.toString());
     assert.ok(body.payload.businessName);
+
+    const persisted = await BusinessConfig.findOne({ business: seed.business._id });
+    assert.ok(persisted);
+    assert.equal(persisted.business.toString(), seed.business._id.toString());
     assert.equal(await BusinessConfig.countDocuments({ business: seed.business._id }), 1);
   });
 });
