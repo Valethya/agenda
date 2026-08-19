@@ -137,6 +137,100 @@ const getPendingLegacyPayment = async (tokenWs) => {
   return payment;
 };
 
+const settleAuthorizedLegacyPayment = async ({
+  tokenWs,
+  appointment,
+  businessId,
+  paymentStatus,
+  paymentType,
+  amount,
+}) => {
+  const appointmentId = asId(appointment._id);
+  const workerId = asId(appointment.worker);
+
+  return appointmentRepository.withSerializedBookingInterval(
+    { businessId, workerId, date: appointment.date },
+    async (session) => {
+      const currentAppointment = await appointmentRepository.findBookingTransitionById(
+        appointmentId,
+        { session },
+      );
+      if (!currentAppointment || !sameId(currentAppointment.business, businessId)) {
+        throw new ValidationError("La Appointment cambió o dejó de pertenecer al Payment durante el callback");
+      }
+
+      let reconciliationReason = null;
+      if (currentAppointment.status !== "pending_payment") {
+        reconciliationReason = "appointment_state_changed";
+      } else {
+        const overlap = await appointmentRepository.findActiveOverlapForBusinessWorkerAndDate({
+          businessId,
+          workerId: currentAppointment.worker,
+          date: currentAppointment.date,
+          startTime: currentAppointment.startTime,
+          endTime: currentAppointment.endTime,
+          excludeAppointmentId: currentAppointment._id,
+          session,
+        });
+
+        if (overlap) {
+          reconciliationReason = "interval_conflict";
+          const cancelled = await appointmentRepository.cancelPendingPaymentForLegacyConflict(
+            currentAppointment._id,
+            { session },
+          );
+          if (!cancelled) {
+            throw new ValidationError("La Appointment cambió durante la reconciliación de overlap");
+          }
+        }
+      }
+
+      const paymentRecord = await paymentRepository.updatePendingByTransactionId(
+        tokenWs,
+        {
+          $set: {
+            status: "approved",
+            amount,
+            type: paymentType,
+            authorizedAt: new Date(),
+            reconciliationStatus: reconciliationReason ? "required" : "applied",
+            ...(reconciliationReason ? { reconciliationReason } : {}),
+          },
+        },
+        { session },
+      );
+      if (!paymentRecord) {
+        throw new ValidationError("El Payment pendiente cambió durante el callback");
+      }
+
+      if (reconciliationReason) {
+        return {
+          activated: false,
+          reconciliationReason,
+          paymentRecord,
+          appointment: currentAppointment,
+        };
+      }
+
+      const confirmed = await appointmentRepository.confirmPendingPaymentFromLegacyPayment(
+        currentAppointment._id,
+        paymentStatus,
+        { session },
+      );
+      if (!confirmed) {
+        throw new ValidationError("La Appointment dejó de estar pending_payment durante el callback");
+      }
+
+      return {
+        activated: true,
+        reconciliationReason: null,
+        paymentRecord,
+        appointment: confirmed,
+      };
+    },
+  );
+};
+
 // 2. Confirmar un Payment legacy YA EXISTENTE. token_ws fija primero Payment,
 // Appointment y Business localmente. Sólo después de validar ese scope se llama
 // al proveedor; Webpay debe devolver exactamente el buy_order esperado.
@@ -230,17 +324,42 @@ export const confirmPayment = async (tokenWs) => {
         metadata: { authorizationCode: commitResponse.authorization_code, amount: commitResponse.amount }
       });
 
-      const paymentRecord = await paymentRepository.updateByTransactionId(tokenWs, {
-        status: "approved",
+      // El resultado externo no concede authority para reactivar una Appointment.
+      // Después del commit del proveedor se revalida estado + intervalo bajo el mismo
+      // mutex de booking y Payment/Appointment se escriben atómicamente.
+      const settlement = await settleAuthorizedLegacyPayment({
+        tokenWs,
+        appointment,
+        businessId,
+        paymentStatus: isDeposit ? "partially_paid" : "fully_paid",
+        paymentType: isDeposit ? "deposit" : "full",
         amount: commitResponse.amount,
-        type: isDeposit ? "deposit" : "full"
       });
-      if (!paymentRecord) throw new ValidationError("El Payment pendiente dejó de existir durante el callback");
 
-      await appointmentRepository.confirmFromLegacyPayment(
-        appointmentId,
-        isDeposit ? "partially_paid" : "fully_paid",
-      );
+      if (!settlement.activated) {
+        await logEvent({
+          appointmentId,
+          userId,
+          event: "WEBPAY_PAYMENT_RECONCILIATION_REQUIRED",
+          level: "WARN",
+          message: "Webpay autorizó el pago, pero la Appointment no fue reactivada porque su estado/intervalo cambió.",
+          metadata: {
+            paymentId: settlement.paymentRecord._id,
+            reconciliationReason: settlement.reconciliationReason,
+          },
+        });
+
+        return {
+          success: false,
+          paymentAuthorized: true,
+          requiresReconciliation: true,
+          reason: "payment_authorized_reconciliation_required",
+          appointmentId,
+          businessSlug: business.slug,
+          amount: commitResponse.amount,
+          authorizationCode: commitResponse.authorization_code,
+        };
+      }
 
       await logEvent({
         appointmentId,
@@ -248,7 +367,7 @@ export const confirmPayment = async (tokenWs) => {
         event: "APPOINTMENT_CONFIRMED",
         level: "SUCCESS",
         message: "Reserva confirmada exitosamente tras validación de pago.",
-        metadata: { paymentId: paymentRecord._id }
+        metadata: { paymentId: settlement.paymentRecord._id }
       });
 
       const dateStr = new Date(appointment.date).toISOString().split("T")[0];
@@ -291,7 +410,10 @@ export const confirmPayment = async (tokenWs) => {
       metadata: { status: commitResponse.status, responseCode: commitResponse.response_code }
     });
 
-    const rejectedPayment = await paymentRepository.updateByTransactionId(tokenWs, { status: "rejected" });
+    const rejectedPayment = await paymentRepository.updatePendingByTransactionId(
+      tokenWs,
+      { $set: { status: "rejected" } },
+    );
     if (!rejectedPayment) throw new ValidationError("El Payment pendiente dejó de existir durante el callback");
     await appointmentRepository.cancelFromRejectedLegacyPayment(appointmentId);
 
@@ -307,6 +429,7 @@ export const confirmPayment = async (tokenWs) => {
       success: false,
       appointmentId,
       businessSlug: business.slug,
+      reason: "rejected",
       message: "El pago fue rechazado por Transbank",
     };
   } catch (error) {
