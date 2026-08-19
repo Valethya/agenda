@@ -30,13 +30,6 @@ await connectDB();
 await cleanTestData();
 const seed = await seedTestData();
 
-await Membership.create({
-  user: seed.admin._id,
-  business: seed.businessB._id,
-  role: "admin",
-  isActive: true,
-});
-
 await User.create({
   firstName: "Global",
   lastName: "Superadmin",
@@ -93,8 +86,18 @@ const assertPublicOriginBlocked = async (response) => {
 };
 
 test("6.2.6-A trusted authenticated origin boundary", async (t) => {
+  // Login while the ordinary admin has exactly its canonical A Membership so a
+  // real tenant session is created. Add B only afterwards: the ambient cookie is
+  // then genuinely authorized to switch B when the trusted panel asks, making the
+  // public-origin denial an origin-boundary test rather than a Membership denial.
   const adminCookie = await login("test-admin@example.com", "passwordAdmin");
   const superadminCookie = await login("superadmin-origin@example.com", "passwordSuperadmin");
+  await Membership.create({
+    user: seed.admin._id,
+    business: seed.businessB._id,
+    role: "admin",
+    isActive: true,
+  });
 
   await t.test("public origin + admin cookie no puede leer /me", async () => {
     await assertPublicOriginBlocked(await request("/me", { cookie: adminCookie }));
