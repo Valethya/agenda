@@ -89,16 +89,16 @@ export const webpayReturn = async (req, res, next) => {
           slug: result.businessSlug,
         })
       );
-    } else {
-      // Redirección fallida por rechazo bancario
-      return res.redirect(
-        buildFrontendRedirect("/payment-failed", {
-          appointmentId: result.appointmentId,
-          reason: "rejected",
-          slug: result.businessSlug,
-        })
-      );
     }
+
+    return res.redirect(
+      buildFrontendRedirect("/payment-failed", {
+        appointmentId: result.appointmentId,
+        reason: result.reason || "rejected",
+        paymentAuthorized: result.paymentAuthorized ? "true" : undefined,
+        slug: result.businessSlug,
+      })
+    );
   } catch (error) {
     // Redirección por error técnico/servidor
     const token = req.body?.token_ws || req.query?.token_ws || req.body?.TBK_TOKEN || req.query?.TBK_TOKEN;
