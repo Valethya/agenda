@@ -1,6 +1,7 @@
 import mongoose from "mongoose";
 import Appointment from "../db/models/appointment.model.js";
 import AppointmentBookingMutex from "../db/models/appointmentBookingMutex.model.js";
+import { ConflictError } from "../utils/appError.js";
 
 const PAYMENT_SETTLEMENT_STATUSES = new Set(["partially_paid", "fully_paid"]);
 const ACTIVE_BOOKING_STATUSES = Object.freeze(["pending_payment", "pending", "confirmed", "completed"]);
@@ -110,10 +111,46 @@ export const findActiveOverlapForBusinessWorkerAndDate = async ({
   }).session(session || null);
 };
 
-export const create = async (data, { session = null } = {}) => {
-  if (!session) return await Appointment.create(data);
+const createWithSession = async (data, session) => {
   const [created] = await Appointment.create([data], { session });
   return created;
+};
+
+export const create = async (data, { session = null } = {}) => {
+  if (session) return await createWithSession(data, session);
+
+  return await withSerializedBookingInterval(
+    {
+      businessId: data.business,
+      workerId: data.worker,
+      date: data.date,
+    },
+    async (transactionSession) => {
+      const overlap = await findActiveOverlapForBusinessWorkerAndDate({
+        businessId: data.business,
+        workerId: data.worker,
+        date: data.date,
+        startTime: data.startTime,
+        endTime: data.endTime,
+        session: transactionSession,
+      });
+
+      if (overlap) {
+        throw new ConflictError("El horario seleccionado ya no se encuentra disponible");
+      }
+
+      try {
+        return await createWithSession(data, transactionSession);
+      } catch (error) {
+        // Conserva el contrato estable si una fila legacy/no serializada colisiona
+        // con el índice exacto de startTime durante la transición.
+        if (error?.code === 11000) {
+          throw new ConflictError("El horario seleccionado ya no se encuentra disponible");
+        }
+        throw error;
+      }
+    },
+  );
 };
 
 // Legacy Payment-only commands. Payment/Webpay remains deny-by-default; these
@@ -214,7 +251,7 @@ export const findCoherentAllByBusiness = async (businessId, query = {}) => {
   ).sort({ date: 1, startTime: 1 });
 
   // populate(match) returns null for a missing or foreign-tenant Service.
-  // Protected collections omit those structurally incoherentes rather
+  // Protected collections omit those structurally incoherent resources rather
   // than exposing any fields from the foreign Service.
   return appointments.filter((appointment) => Boolean(appointment.service));
 };
