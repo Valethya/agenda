@@ -21,7 +21,7 @@ const baseUrl = `http://localhost:${port}/api`;
 const request = async (path, { method = "GET", cookie, body } = {}) => fetch(`${baseUrl}${path}`, {
   method,
   headers: {
-    ...(cookie ? { Cookie: cookie, "x-agenda-surface": "internal" } : {}),
+    ...(cookie ? { Cookie: cookie } : {}),
     ...(body ? { "Content-Type": "application/json" } : {}),
   },
   ...(body ? { body: JSON.stringify(body) } : {}),
@@ -203,7 +203,7 @@ test("6.2.2-D adversarial tenant resource isolation", async (t) => {
     const publicRead = await request(`/services/${serviceB._id}?slug=${seed.business.slug}`);
     assert.equal(publicRead.status, 404);
 
-    const adminRead = await request(`/services/${serviceB._id}`, { cookie: adminCookie });
+    const adminRead = await request(`/internal/services/${serviceB._id}`, { cookie: adminCookie });
     assert.equal(adminRead.status, 404);
 
     const update = await request(`/services/${serviceB._id}`, {
@@ -232,7 +232,7 @@ test("6.2.2-D adversarial tenant resource isolation", async (t) => {
   });
 
   await t.test("Service A conserva lectura, update, soft delete y hard delete dentro de A", async () => {
-    const read = await request(`/services/${serviceAForSoftDelete._id}`, { cookie: adminCookie });
+    const read = await request(`/internal/services/${serviceAForSoftDelete._id}`, { cookie: adminCookie });
     assert.equal(read.status, 200);
 
     const update = await request(`/services/${serviceAForSoftDelete._id}`, {
