@@ -1,6 +1,9 @@
+import mongoose from "mongoose";
 import Appointment from "../db/models/appointment.model.js";
+import AppointmentBookingMutex from "../db/models/appointmentBookingMutex.model.js";
 
 const PAYMENT_SETTLEMENT_STATUSES = new Set(["partially_paid", "fully_paid"]);
+const ACTIVE_BOOKING_STATUSES = Object.freeze(["pending_payment", "pending", "confirmed", "completed"]);
 
 const populateProtectedTenantRelations = (query, businessId) => query
   // Sólo las lecturas internas protegidas necesitan guestContact para construir
@@ -14,6 +17,57 @@ const populateProtectedTenantRelations = (query, businessId) => query
     select: "name duration price depositAmount workers business isActive",
   })
   .populate("business", "name slug");
+
+const bookingMutexId = (businessId, workerId, date) => {
+  const dateKey = new Date(date).toISOString().slice(0, 10);
+  return `${businessId.toString()}:${workerId.toString()}:${dateKey}`;
+};
+
+const ensureBookingMutex = async (lockId) => {
+  try {
+    await AppointmentBookingMutex.updateOne(
+      { _id: lockId },
+      { $setOnInsert: { version: 0 } },
+      { upsert: true },
+    );
+  } catch (error) {
+    // Dos procesos pueden intentar materializar por primera vez la misma fila.
+    // La unicidad de _id resuelve la carrera; el perdedor puede continuar.
+    if (error?.code !== 11000) throw error;
+  }
+};
+
+export const withSerializedBookingInterval = async (
+  { businessId, workerId, date },
+  work,
+) => {
+  const lockId = bookingMutexId(businessId, workerId, date);
+  await ensureBookingMutex(lockId);
+
+  const session = await mongoose.startSession();
+  let result;
+  try {
+    await session.withTransaction(async () => {
+      // Este write es el punto de serialización cross-process para el worker/día.
+      // No hay lease que pueda expirar: la exclusión existe sólo durante la txn.
+      const lock = await AppointmentBookingMutex.findOneAndUpdate(
+        { _id: lockId },
+        { $inc: { version: 1 } },
+        { new: true, session },
+      );
+      if (!lock) throw new Error("No se pudo adquirir la serialización de booking");
+
+      result = await work(session);
+    }, {
+      readConcern: { level: "snapshot" },
+      writeConcern: { w: "majority" },
+    });
+
+    return result;
+  } finally {
+    await session.endSession();
+  }
+};
 
 export const findByBusinessWorkerAndDate = async (businessId, workerId, date) => {
   const startOfDay = new Date(date);
@@ -33,8 +87,33 @@ export const findByBusinessWorkerAndDate = async (businessId, workerId, date) =>
   });
 };
 
-export const create = async (data) => {
-  return await Appointment.create(data);
+export const findActiveOverlapForBusinessWorkerAndDate = async ({
+  businessId,
+  workerId,
+  date,
+  startTime,
+  endTime,
+  session,
+}) => {
+  const startOfDay = new Date(date);
+  startOfDay.setUTCHours(0, 0, 0, 0);
+  const endOfDay = new Date(date);
+  endOfDay.setUTCHours(23, 59, 59, 999);
+
+  return await Appointment.findOne({
+    business: businessId,
+    worker: workerId,
+    date: { $gte: startOfDay, $lte: endOfDay },
+    status: { $in: ACTIVE_BOOKING_STATUSES },
+    startTime: { $lt: endTime },
+    endTime: { $gt: startTime },
+  }).session(session || null);
+};
+
+export const create = async (data, { session = null } = {}) => {
+  if (!session) return await Appointment.create(data);
+  const [created] = await Appointment.create([data], { session });
+  return created;
 };
 
 // Legacy Payment-only commands. Payment/Webpay remains deny-by-default; these
@@ -135,7 +214,7 @@ export const findCoherentAllByBusiness = async (businessId, query = {}) => {
   ).sort({ date: 1, startTime: 1 });
 
   // populate(match) returns null for a missing or foreign-tenant Service.
-  // Protected collections omit those structurally incoherent resources rather
+  // Protected collections omit those structurally incoherentes rather
   // than exposing any fields from the foreign Service.
   return appointments.filter((appointment) => Boolean(appointment.service));
 };
