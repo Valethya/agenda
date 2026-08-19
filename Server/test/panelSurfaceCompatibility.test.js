@@ -54,6 +54,7 @@ await Membership.create({
 const server = app.listen(0);
 const { port } = server.address();
 const baseUrl = `http://localhost:${port}/api`;
+const panelOrigin = "http://localhost:4321";
 
 const login = async (email, password) => {
   const response = await fetch(`${baseUrl}/login`, {
@@ -67,9 +68,9 @@ const login = async (email, password) => {
 
 const panelHeaders = (cookie, slug = seed.business.slug) => ({
   Cookie: cookie,
-  // Exactamente la intención que produce apiFetch() al cargar /admin?slug=...
+  Origin: panelOrigin,
+  // Igual que /admin?slug=...: el slug viaja como contexto, pero no selecciona surface.
   "x-business-slug": slug,
-  "x-agenda-surface": "internal",
 });
 
 const assertGuestOperationalClient = (client) => {
@@ -85,10 +86,10 @@ const assertGuestOperationalClient = (client) => {
 test("6.2.6-A panel surface compatibility y guest operational projection", async (t) => {
   const adminCookie = await login("test-admin@example.com", "passwordAdmin");
 
-  await t.test("/admin?slug=A carga workers, services, appointments y shifts como surface interna", async () => {
+  await t.test("/admin?slug=A carga workers, services, appointments y shifts por rutas internas del servidor", async () => {
     const headers = panelHeaders(adminCookie);
 
-    const workersResponse = await fetch(`${baseUrl}/users/workers`, { headers });
+    const workersResponse = await fetch(`${baseUrl}/internal/users/workers`, { headers });
     assert.equal(workersResponse.status, 200);
     const workersData = await workersResponse.json();
     assert.ok(workersData.payload.some((worker) => worker._id === seed.worker._id.toString()));
@@ -96,7 +97,7 @@ test("6.2.6-A panel surface compatibility y guest operational projection", async
     assert.ok(worker.email);
     assert.equal(worker.role, "worker");
 
-    const servicesResponse = await fetch(`${baseUrl}/services`, { headers });
+    const servicesResponse = await fetch(`${baseUrl}/internal/services`, { headers });
     assert.equal(servicesResponse.status, 200);
     const servicesData = await servicesResponse.json();
     const service = servicesData.payload.find((entry) => entry._id === seed.service._id.toString());
