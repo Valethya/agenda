@@ -1,11 +1,19 @@
 import mongoose from "mongoose";
 import * as businessRepository from "../repositories/business.repository.js";
-import { findTenantAuthority } from "../services/tenantAuthority.service.js";
+import { frontendUrl } from "../config/env.js";
+import { resolveTenantAuthority } from "../services/tenantAuthority.service.js";
 import { ForbiddenError, NotFoundError, UnauthorizedError, ValidationError } from "../utils/appError.js";
 
 const BUSINESS_NOT_AVAILABLE_MESSAGE = "El negocio especificado no está disponible";
-const BOOKING_SURFACE_HEADER = "x-agenda-surface";
-const BOOKING_SURFACES = new Set(["public", "internal"]);
+const INTERNAL_ORIGIN_MESSAGE = "Origen no autorizado para la superficie interna";
+
+const trustedInternalOrigin = (() => {
+  try {
+    return new URL(frontendUrl).origin;
+  } catch {
+    return null;
+  }
+})();
 
 const collectIdentifier = (name, values, normalize = (value) => value) => {
   const provided = values.filter((value) => value !== undefined && value !== null && value !== "");
@@ -67,49 +75,53 @@ const resolveExplicitBusiness = async (req) => {
   return business;
 };
 
-const readBookingSurface = (req) => {
-  const raw = req.headers[BOOKING_SURFACE_HEADER];
-  if (raw === undefined || raw === null || raw === "") {
-    // Los paths compartidos son públicos por defecto. El panel debe identificarse
-    // explícitamente como internal; una cookie incidental nunca eleva la surface.
-    return "public";
+const assertTrustedInternalOrigin = (req) => {
+  const rawOrigin = req.get("origin");
+  if (!rawOrigin) return;
+
+  let requestOrigin = null;
+  try {
+    requestOrigin = new URL(rawOrigin).origin;
+  } catch {
+    throw new ForbiddenError(INTERNAL_ORIGIN_MESSAGE);
   }
 
-  if (typeof raw !== "string") {
-    throw new ValidationError(`${BOOKING_SURFACE_HEADER} debe ser un texto válido`);
+  if (!trustedInternalOrigin || requestOrigin !== trustedInternalOrigin) {
+    throw new ForbiddenError(INTERNAL_ORIGIN_MESSAGE);
   }
-
-  const normalized = raw.trim().toLowerCase();
-  if (!BOOKING_SURFACES.has(normalized)) {
-    throw new ValidationError(`${BOOKING_SURFACE_HEADER} debe ser public o internal`);
-  }
-
-  return normalized;
 };
 
 const applyInternalBusinessScope = async (req) => {
   const sessionUser = req.session?.user;
-  let business = null;
-
-  if (sessionUser?.businessId) {
-    business = await businessRepository.findById(sessionUser.businessId);
-    if (!business) {
-      throw new NotFoundError("El negocio asociado a tu sesión no existe");
-    }
-
-    if (!business.isActive) {
-      throw new ForbiddenError("El negocio seleccionado no está disponible");
-    }
-  } else {
-    business = await resolveExplicitBusiness(req);
+  if (!sessionUser?.id) {
+    throw new UnauthorizedError("Debes iniciar sesión para usar la superficie interna");
   }
+
+  // Esta comprobación acota la superficie administrativa del navegador al origen
+  // configurado del panel. No sustituye el hardening CSRF general de una fase futura.
+  assertTrustedInternalOrigin(req);
+
+  if (!sessionUser.businessId) {
+    throw new ForbiddenError("No tienes un negocio activo seleccionado");
+  }
+
+  const business = await businessRepository.findById(sessionUser.businessId);
+  if (!business) {
+    throw new NotFoundError("El negocio asociado a tu sesión no existe");
+  }
+
+  if (!business.isActive) {
+    throw new ForbiddenError("El negocio seleccionado no está disponible");
+  }
+
+  // Toda request tenant-interna revalida autoridad vigente desde persistencia.
+  // User.role/User.business y copias de sesión nunca sustituyen Membership activa.
+  const tenantAuthority = await resolveTenantAuthority(sessionUser.id, business._id, { business });
 
   req.business = business;
   req.businessId = business._id;
   req.bookingSurface = "internal";
-  req.tenantAuthority = sessionUser?.id
-    ? await findTenantAuthority(sessionUser.id, business._id, { business })
-    : null;
+  req.tenantAuthority = tenantAuthority;
 };
 
 export const scopeBusiness = async (req, res, next) => {
@@ -137,23 +149,7 @@ export const scopePublicBusiness = async (req, res, next) => {
   }
 };
 
-// Rutas que comparten path entre panel y contrato headless. Surface y tenant son
-// decisiones independientes: x-agenda-surface selecciona la política; businessId/
-// slug sólo seleccionan tenant cuando la surface es public. La surface internal
-// exige una sesión y usa exclusivamente su Membership/contexto tenant.
-export const scopeHeadlessOrSessionBusiness = async (req, res, next) => {
-  try {
-    const surface = readBookingSurface(req);
-    if (surface === "public") {
-      return scopePublicBusiness(req, res, next);
-    }
-
-    if (!req.session?.user) {
-      throw new UnauthorizedError("Debes iniciar sesión para usar la superficie interna");
-    }
-
-    return scopeBusiness(req, res, next);
-  } catch (error) {
-    next(error);
-  }
-};
+// Compatibilidad defensiva para imports históricos: los paths compartidos dejan de
+// aceptar una surface declarada por el cliente. Si algún caller antiguo conserva
+// este middleware, sólo obtiene política pública; "x-agenda-surface" no es authority.
+export const scopeHeadlessOrSessionBusiness = scopePublicBusiness;
