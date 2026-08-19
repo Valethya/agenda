@@ -10,7 +10,7 @@ import handleError from "./middleware/handleError.js";
 import session from "express-session";
 import rateLimit from "express-rate-limit";
 import MongoStore from "connect-mongo";
-import { urlMongo, sessionSecret, corsOrigins, nodeEnv } from "./config/env.js";
+import { urlMongo, sessionSecret, corsOrigins, frontendUrl, nodeEnv } from "./config/env.js";
 // EXPRESS
 
 export const app = express();
@@ -43,19 +43,43 @@ export const sessionMiddleware = session({
 });
 app.use(sessionMiddleware);
 
-// CORS - Whitelist de orígenes permitidos (soporta widgets SaaS embebidos)
-const allowedOrigins = corsOrigins.split(",").map((o) => o.trim());
+const normalizeOrigin = (value) => {
+  if (!value) return null;
+  try {
+    return new URL(value).origin;
+  } catch {
+    return null;
+  }
+};
+
+// CORS público y authority de sesión son conceptos distintos. CORS_ORIGINS puede
+// contener consumidores headless, pero sólo FRONTEND_URL recibe permiso explícito
+// para respuestas credentialed del navegador. Las rutas de sesión/superadmin
+// además aplican su propia frontera server-controlled.
+const trustedPanelOrigin = normalizeOrigin(frontendUrl);
+const allowedOrigins = new Set(
+  [
+    ...corsOrigins.split(",").map((origin) => normalizeOrigin(origin.trim())),
+    trustedPanelOrigin,
+  ].filter(Boolean),
+);
+
 app.use(
-  cors({
-    credentials: true,
-    origin: (origin, callback) => {
-      // Permitir requests sin origin (ej: apps móviles, Postman, server-to-server)
-      if (!origin) return callback(null, true);
-      if (allowedOrigins.includes(origin)) {
-        return callback(null, true);
-      }
-      return callback(new Error(`Origin ${origin} no permitido por CORS`));
-    },
+  cors((req, callback) => {
+    const rawOrigin = req.get("origin");
+    if (!rawOrigin) {
+      return callback(null, { origin: false, credentials: false });
+    }
+
+    const requestOrigin = normalizeOrigin(rawOrigin);
+    if (!requestOrigin || !allowedOrigins.has(requestOrigin)) {
+      return callback(new Error(`Origin ${rawOrigin} no permitido por CORS`));
+    }
+
+    return callback(null, {
+      origin: true,
+      credentials: Boolean(trustedPanelOrigin && requestOrigin === trustedPanelOrigin),
+    });
   }),
 );
 
