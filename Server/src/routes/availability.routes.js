@@ -8,16 +8,17 @@ import {
 } from "../controllers/availability.controller.js";
 import { isAuthenticated } from "../middleware/auth.middleware.js";
 import { isWorkerOrAdmin } from "../middleware/role.middleware.js";
-import { scopeBusiness, scopeHeadlessOrSessionBusiness } from "../middleware/business.middleware.js";
+import { scopeBusiness, scopePublicBusiness } from "../middleware/business.middleware.js";
 import { validate } from "../middleware/validate.middleware.js";
 import { availabilityQuerySchema, createBlockSchema } from "../validations/appointment.validation.js";
 import { saveShiftSchema, objectIdParamSchema, workerIdParamSchema } from "../validations/common.validation.js";
 
 const router = Router();
 
-router.get("/slots", scopeHeadlessOrSessionBusiness, validate(availabilityQuerySchema), getSlots);
+// Slots pertenece al contrato headless y permanece público aunque exista una
+// cookie ambiente. Shift raw y Blocks continúan exclusivamente internos.
+router.get("/slots", scopePublicBusiness, validate(availabilityQuerySchema), getSlots);
 
-// Shift es estado operativo interno; el contrato guest consume exclusivamente slots.
 router.get(
   "/shifts/:workerId",
   scopeBusiness,
