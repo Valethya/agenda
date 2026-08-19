@@ -13,9 +13,10 @@ import { updateBusinessConfigSchema } from "../validations/common.validation.js"
 
 const router = Router();
 
-// BusinessConfig es estado operacional del panel, no parte del contrato headless
-// mínimo. Un GET anónimo nunca alcanza getOrInitializeConfig(), por lo que no puede
-// crear defaults como side effect de una lectura pública.
+// BusinessConfig es estado operacional del panel, no parte del contrato headless.
+// GET es internal-only y semánticamente read-only: si no existe configuración,
+// devuelve defaults calculados sin materializar un documento. La persistencia
+// sólo ocurre mediante comandos explícitos como PUT.
 router.get("/", scopeBusiness, isAuthenticated, getBusinessConfig);
 
 // Configuración, métricas y analíticas: sesión + Membership admin vigente.
