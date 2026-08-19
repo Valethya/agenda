@@ -1,7 +1,7 @@
 import * as businessConfigService from "../services/businessConfig.service.js";
 import * as superadminService from "../services/superadmin.service.js";
 
-// Obtener la configuración actual del negocio (Público)
+// Obtener la configuración operacional actual del negocio (surface interna)
 export const getBusinessConfig = async (req, res, next) => {
   try {
     const config = await businessConfigService.getOrInitializeConfig(req.businessId);
