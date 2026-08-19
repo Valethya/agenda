@@ -58,11 +58,24 @@ const createDefaults = (businessName = "Agenda") => {
   };
 };
 
+// GET/read path: devuelve una proyección de defaults si aún no existe documento,
+// pero no materializa BusinessConfig. La persistencia sólo ocurre en un comando.
+export const getConfigOrDefaults = async (businessId) => {
+  const config = await businessConfigRepository.getConfig(businessId);
+  if (config) return config;
+
+  const business = await businessRepository.findById(businessId);
+  return {
+    ...createDefaults(business?.name),
+    business: businessId,
+  };
+};
+
 export const getOrInitializeConfig = async (businessId) => {
   let config = await businessConfigRepository.getConfig(businessId);
   
   if (!config) {
-    // Inicialización automática si es la primera ejecución
+    // Inicialización explícita desde un comando que realmente necesita persistencia.
     const business = await businessRepository.findById(businessId);
     const defaults = createDefaults(business?.name);
     defaults.business = businessId; // Asociar con el negocio específico
