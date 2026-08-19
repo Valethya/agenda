@@ -42,6 +42,23 @@ const paymentSchema = new mongoose.Schema(
       enum: ["deposit", "full", "remaining"],
       required: [true, "El tipo de pago es obligatorio"],
     },
+    // Resultado local de aplicar un pago autorizado a la Appointment. Un Payment
+    // approved registra el hecho externo; este campo evita inferir que eso concede
+    // authority para reactivar una Appointment que cambió mientras Webpay respondía.
+    reconciliationStatus: {
+      type: String,
+      enum: ["applied", "required"],
+      default: undefined,
+    },
+    reconciliationReason: {
+      type: String,
+      enum: ["appointment_state_changed", "interval_conflict"],
+      default: undefined,
+    },
+    authorizedAt: {
+      type: Date,
+      default: undefined,
+    },
   },
   {
     timestamps: true,
