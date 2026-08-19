@@ -27,15 +27,20 @@ const publicServiceB = await Service.create({
 const server = app.listen(0);
 const { port } = server.address();
 const baseUrl = `http://localhost:${port}/api`;
+const sessionCookies = new Map();
 
 const loginAs = async (email, password) => {
+  if (sessionCookies.has(email)) return sessionCookies.get(email);
+
   const response = await fetch(`${baseUrl}/login`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ email, password }),
   });
   assert.ok(response.status === 200 || response.status === 201);
-  return response.headers.get("set-cookie");
+  const cookie = response.headers.get("set-cookie");
+  sessionCookies.set(email, cookie);
+  return cookie;
 };
 
 const assertPublicServiceProjection = (service, businessId) => {
