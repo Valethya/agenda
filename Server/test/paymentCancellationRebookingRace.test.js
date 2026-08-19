@@ -4,12 +4,27 @@ process.env.ENABLE_PAYMENTS = "true";
 import test from "node:test";
 import assert from "node:assert/strict";
 import pkg from "transbank-sdk";
-import { connectDB } from "../src/db/db.js";
-import { seedTestData, cleanTestData, teardown } from "./fixtures.js";
-import Appointment from "../src/db/models/appointment.model.js";
-import Payment from "../src/db/models/payment.model.js";
-import Service from "../src/db/models/service.model.js";
 
+// Local application modules are intentionally dynamic: ENABLE_PAYMENTS must be
+// set before config/env.js is evaluated. This makes the legacy callback test
+// independent from ESM static-import evaluation order.
+const [
+  { default: app, sessionStore },
+  { connectDB },
+  fixtures,
+  { default: Appointment },
+  { default: Payment },
+  { default: Service },
+] = await Promise.all([
+  import("../src/app.js"),
+  import("../src/db/db.js"),
+  import("./fixtures.js"),
+  import("../src/db/models/appointment.model.js"),
+  import("../src/db/models/payment.model.js"),
+  import("../src/db/models/service.model.js"),
+]);
+
+const { seedTestData, cleanTestData, teardown } = fixtures;
 const { WebpayPlus } = pkg;
 
 const gatewayState = {
@@ -36,8 +51,6 @@ WebpayPlus.Transaction.prototype.commit = async function () {
     authorization_code: gatewayState.authorizationCode,
   };
 };
-
-const { default: app, sessionStore } = await import("../src/app.js");
 
 await connectDB();
 await cleanTestData();
@@ -134,6 +147,17 @@ const activeOverlaps = async ({ date, startTime, endTime }) => {
   });
 };
 
+const withBarrierDeadline = (promise) => Promise.race([
+  promise,
+  new Promise((_, reject) => {
+    const timer = setTimeout(
+      () => reject(new Error("Webpay commit stub no fue alcanzado después de la lectura local inicial")),
+      5000,
+    );
+    timer.unref?.();
+  }),
+]);
+
 test("6.2.6-A Webpay legacy no puede resucitar una Appointment cancelada", async (t) => {
   const adminCookie = await loginAdmin();
 
@@ -154,7 +178,7 @@ test("6.2.6-A Webpay legacy no puede resucitar una Appointment cancelada", async
     gatewayState.blockCommit = true;
 
     const callbackPromise = callReturn("legacy-race-authorized");
-    await commitStarted;
+    await withBarrierDeadline(commitStarted);
     assert.equal(gatewayState.commitCount, 1);
 
     const cancel = await fetch(`${baseUrl}/appointments/${appointmentA._id}/cancel`, {
