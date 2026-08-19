@@ -1,10 +1,18 @@
 import './setup.js';
 import test from "node:test";
 import assert from "node:assert/strict";
-import app, { sessionStore } from "../src/app.js";
-import { connectDB } from "../src/db/db.js";
-import { seedTestData, cleanTestData, teardown } from "./fixtures.js";
-import BusinessConfig from "../src/db/models/businessConfig.model.js";
+
+process.env.FRONTEND_URL = "http://panel.example";
+process.env.CORS_ORIGINS = "http://panel.example,http://public.example";
+
+const [{ default: app, sessionStore }, { connectDB }, fixtures, { default: BusinessConfig }] = await Promise.all([
+  import("../src/app.js"),
+  import("../src/db/db.js"),
+  import("./fixtures.js"),
+  import("../src/db/models/businessConfig.model.js"),
+]);
+
+const { seedTestData, cleanTestData, teardown } = fixtures;
 
 await connectDB();
 await cleanTestData();
@@ -13,11 +21,13 @@ const seed = await seedTestData();
 const server = app.listen(0);
 const { port } = server.address();
 const baseUrl = `http://localhost:${port}/api`;
+const panelOrigin = "http://panel.example";
+const publicOrigin = "http://public.example";
 
 const login = async (email, password) => {
   const response = await fetch(`${baseUrl}/login`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", Origin: panelOrigin },
     body: JSON.stringify({ email, password }),
   });
   assert.ok(response.status === 200 || response.status === 201);
@@ -28,29 +38,33 @@ test("6.2.6-A Business Settings boundary", async (t) => {
   await t.test("GET público/anónimo no expone BusinessConfig ni crea defaults", async () => {
     assert.equal(await BusinessConfig.countDocuments({ business: seed.business._id }), 0);
 
-    const response = await fetch(`${baseUrl}/business-settings?businessId=${seed.business._id}`);
+    const response = await fetch(`${baseUrl}/business-settings?businessId=${seed.business._id}`, {
+      headers: { Origin: publicOrigin },
+    });
     assert.equal(response.status, 401);
+    assert.equal(response.headers.get("access-control-allow-origin"), publicOrigin);
     assert.equal(await BusinessConfig.countDocuments({ business: seed.business._id }), 0);
   });
 
-  await t.test("origin público con cookie admin no puede provocar inicialización", async () => {
+  await t.test("origin público permitido por CORS + cookie admin no puede provocar inicialización", async () => {
     const cookie = await login("test-admin@example.com", "passwordAdmin");
     assert.equal(await BusinessConfig.countDocuments({ business: seed.business._id }), 0);
 
     const response = await fetch(`${baseUrl}/business-settings`, {
       headers: {
         Cookie: cookie,
-        Origin: "https://public-headless.example",
+        Origin: publicOrigin,
       },
     });
     assert.equal(response.status, 403);
+    assert.equal(response.headers.get("access-control-allow-origin"), publicOrigin);
     assert.equal(await BusinessConfig.countDocuments({ business: seed.business._id }), 0);
   });
 
-  await t.test("Membership vigente puede cargar config interna y sólo entonces inicializar defaults", async () => {
+  await t.test("Membership vigente desde origin del panel puede cargar config y sólo entonces inicializar defaults", async () => {
     const cookie = await login("test-admin@example.com", "passwordAdmin");
     const response = await fetch(`${baseUrl}/business-settings`, {
-      headers: { Cookie: cookie },
+      headers: { Cookie: cookie, Origin: panelOrigin },
     });
     assert.equal(response.status, 200);
     const body = await response.json();
