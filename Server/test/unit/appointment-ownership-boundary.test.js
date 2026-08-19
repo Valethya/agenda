@@ -28,10 +28,14 @@ test("6.2.4-B Appointment sólo expone mutaciones purpose-specific", async () =>
   assert.doesNotMatch(repository, /export const \w*update\w*\s*=\s*async\s*\(\s*id\s*,\s*(?:data|updateData)\b/ui);
   assert.match(repository, /export const transitionStatusByBusiness/u);
   assert.match(repository, /export const markPendingPaymentFromLegacyPayment/u);
-  assert.match(repository, /export const confirmFromLegacyPayment/u);
+  assert.match(repository, /export const confirmPendingPaymentFromLegacyPayment/u);
+  assert.match(repository, /\{ _id: id, status: "pending_payment" \}/u);
+  assert.match(repository, /export const cancelPendingPaymentForLegacyConflict/u);
   assert.match(repository, /export const cancelFromRejectedLegacyPayment/u);
+  assert.doesNotMatch(repository, /export const confirmFromLegacyPayment/u);
   assert.doesNotMatch(service, /appointmentRepository\.update(?:ByIdAndBusiness)?\s*\(/u);
   assert.doesNotMatch(payment, /appointmentRepository\.update\s*\(/u);
+  assert.match(payment, /withSerializedBookingInterval/u);
 });
 
 test("6.2.4-B Service update no acepta passthrough abierto ni business mutable", async () => {
