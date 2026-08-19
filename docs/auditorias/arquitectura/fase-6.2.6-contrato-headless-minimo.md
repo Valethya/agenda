@@ -1,6 +1,6 @@
 # Fase 6.2.6-A — Contrato headless público mínimo
 
-**Estado:** hardening de nueva revisión implementado; pendiente CI final y nueva revisión adversarial  
+**Estado:** hardening del prompt adversarial completo implementado; pendiente nueva revisión adversarial  
 **Fecha:** 19 de agosto de 2026  
 **Baseline verificada:** `master@3f2ab734d412828f5a77ec72b778a8d575a14cd4`  
 **Precedente:** PR #29 / 6.2.5-C2 merged en esa baseline  
@@ -8,16 +8,16 @@
 
 ## 1. Objetivo
 
-Agenda expone un dominio headless mínimo para que una web pública pueda:
+6.2.6-A formaliza el dominio headless mínimo para que una web pública pueda:
 
 1. listar Services públicos/activos de un Business;
 2. listar profesionales realmente elegibles para un Service;
 3. consultar slots de disponibilidad;
 4. crear una Appointment guest.
 
-El dominio no depende de cantidad de pasos, páginas, modales, componentes Astro/React, orden de preguntas, marca, rubro ni estructura visual. Dos webs distintas deben poder consumir las mismas reglas de dominio.
+El contrato no depende de una web, marca, framework, cantidad de pantallas ni recorrido visual concreto.
 
-6.2.6-A no inicia 6.2.6-B ni 6.3 y no implementa Client accounts, OAuth Client, history, nuevas Appointment capabilities, cancel/reschedule capabilities ni payment capability.
+Esta subfase **no** implementa Client accounts, OAuth Client, nuevas Appointment capabilities, cancel/reschedule capabilities, payment capability, 6.2.6-B ni 6.3.
 
 ## 2. Fronteras de autoridad preservadas
 
@@ -27,11 +27,11 @@ Continúan vigentes ADR-001, ADR-002, APT-CLIENT-01, C1 y C2:
 - `User.role`, `User.business` y `Business.owner` no conceden autoridad tenant;
 - `Appointment.business` expresa pertenencia tenant del recurso;
 - `Appointment.client` es una relación operacional opcional, **no** ownership ni Client authority;
-- para guest, `Appointment.client = null`;
-- `Appointment.guestContact` es provenance operacional de una única Appointment y permanece `select:false`;
-- email, teléfono o contact matching no conceden binding ni autoridad;
-- CustomerProfile no es autoridad;
-- una C2 READ capability autoriza exactamente `Business X + Appointment X + READ`.
+- en guest booking, `Appointment.client = null`;
+- `Appointment.guestContact` es provenance operacional Appointment-scoped y permanece `select:false`;
+- email, phone, contact matching y CustomerProfile no conceden binding ni authority;
+- C1 prueba control de contacto dentro de su purpose;
+- C2 entrega una capability bearer limitada exactamente a `Business X + Appointment X + READ`.
 
 Regla contractual:
 
@@ -42,35 +42,29 @@ READ capability
 != PAYMENT authority
 ```
 
-No se implementan esas capabilities futuras en este PR.
-
-## 3. Tenant y surface son decisiones independientes
+## 3. Tenant y surface son decisiones distintas
 
 ### 3.1 Tenant público explícito
 
-Las operaciones headless requieren un Business explícito mediante:
+Las operaciones headless usan un Business explícito por `businessId` o `slug`.
 
-- `businessId` válido; o
-- `slug` válido.
+El resolver público admite los selectores compatibles existentes en query/body o `x-business-id` / `x-business-slug`, pero nunca hace fallback a otro Business.
 
-El resolver público acepta los selectores ya compatibles en query/body o `x-business-id` / `x-business-slug`. Se recomienda que un consumidor use una única forma de manera consistente.
-
-Reglas públicas:
+Reglas:
 
 - tenant ausente: `400 VALIDATION_ERROR`;
-- ObjectId malformado: `400 VALIDATION_ERROR`;
-- valores contradictorios para un mismo identificador: `400 VALIDATION_ERROR`;
-- `businessId` y `slug` de Businesses distintos: `400 VALIDATION_ERROR`;
-- Business inexistente o inactivo: `404 NOT_FOUND` genérico;
-- jamás hay fallback al primer Business ni a otro tenant.
+- ObjectId mal formado: `400 VALIDATION_ERROR`;
+- selectores contradictorios: `400 VALIDATION_ERROR`;
+- Business inexistente/inactivo: `404 NOT_FOUND` genérico;
+- una cookie de otro tenant no cambia el Business público solicitado.
 
-### 3.2 La surface la fija el servidor, no el caller
+### 3.2 Surface controlada por servidor
 
-`businessId`, `slug`, `x-business-id` y `x-business-slug` seleccionan tenant en el contrato público cuando corresponda. **No seleccionan surface.**
+`businessId`, `slug`, `x-business-id` y `x-business-slug` seleccionan tenant cuando corresponde. **No seleccionan surface.**
 
-Del mismo modo, una cookie ambiente no convierte una request pública en interna.
+`x-agenda-surface` tampoco es prueba de surface ni authority.
 
-La separación se fija mediante routing/policy del servidor:
+La clasificación deriva del routing/policy montado por el servidor.
 
 #### Paths públicos
 
@@ -80,12 +74,11 @@ GET  /api/services/:id
 GET  /api/users/workers
 GET  /api/availability/slots
 POST /api/appointments
-GET  /api/business-settings
 ```
 
-Estos paths permanecen públicos aunque el navegador transporte una cookie administrativa. Sus schemas y proyecciones siguen siendo públicos.
+Estos paths permanecen públicos aunque exista cookie administrativa o el caller envíe `x-agenda-surface: internal`.
 
-#### Paths internos introducidos para lecturas/creación antes compartidas
+#### Mounts internos explícitos
 
 ```text
 GET  /api/internal/services
@@ -94,95 +87,85 @@ GET  /api/internal/users/workers
 POST /api/internal/appointments
 ```
 
-Las operaciones que ya eran inequívocamente administrativas conservan sus paths existentes, por ejemplo:
+Además continúan siendo internas las operaciones administrativas existentes, entre ellas:
 
 ```text
 GET/PATCH /api/appointments/...
 GET/POST/DELETE /api/availability/shifts|blocks/...
 POST/PUT/DELETE /api/services/...
 POST/DELETE /api/users/workers/...
-PUT/GET /api/business-settings (configuración/métricas/analytics protegidas)
+GET/PUT /api/business-settings
+GET /api/business-settings/metrics
+GET /api/business-settings/analytics
 ```
 
-La decisión de surface deriva de la ruta y método montados por el servidor, no de un dato enviado por el navegador.
+`apiFetch()` del panel no emite `x-agenda-surface`.
 
-### 3.3 `x-agenda-surface` no es una frontera de confianza
+### 3.3 Cookie incidental no eleva el contrato público
 
-`x-agenda-surface: public|internal` deja de formar parte de la política de autoridad.
+Una cookie de admin de Business A que consume un path público para Business B:
 
-Reglas:
+- opera sólo sobre B;
+- recibe la proyección pública de B;
+- no obtiene datos internos de A;
+- no convierte Membership A en authority dentro de B;
+- no eleva el schema de `POST /api/appointments`.
 
-- una ruta pública no se vuelve interna aunque reciba `x-agenda-surface: internal`;
-- una ruta interna no se habilita por recibir ese header;
-- `apiFetch()` del panel no emite ese header;
-- el alias defensivo histórico del middleware, si algún import residual lo usa, aplica únicamente política pública;
-- no debe introducirse lógica futura que trate ese header como prueba de surface o authority.
+### 3.4 Origin del panel
 
-### 3.4 Cookie A + contrato público B
+CORS puede permitir credentials y más de un origin. Por ello, “origin permitido por CORS” no equivale a “origin administrativo”.
 
-Una cookie autenticada de Business A que llama el contrato público para Business B:
+Cuando una request interna de navegador contiene `Origin`, `scopeBusiness` exige que coincida con el origin configurado en `FRONTEND_URL`.
 
-- resuelve exclusivamente B desde el tenant público explícito;
-- nunca devuelve datos internos de A;
-- nunca eleva la respuesta a proyección administrativa;
-- no adquiere Membership ni autoridad en B por ese hecho.
+Así:
 
-Una Membership de A tampoco eleva una proyección pública de A: los paths públicos conservan siempre su allowlist pública.
+```text
+origin público permitido por CORS
++ cookie admin válida
++ x-agenda-surface: internal
+!= surface interna
+```
 
-### 3.5 Origen del panel en superficies internas de navegador
+El origin público puede consumir la API pública, pero no reutilizar una cookie ambiente para acceder a mounts internos.
 
-Producción utiliza cookies con credenciales y puede permitir más de un origen mediante CORS. Por ello, CORS por sí solo no define qué origen puede usar la superficie administrativa.
+Una request interna sin `Origin` continúa siendo posible para same-origin/non-browser/server tooling, pero exige igualmente sesión y autoridad tenant vigente.
 
-Para una request interna que contiene `Origin`, `scopeBusiness` exige que el origen coincida con el origen configurado en `FRONTEND_URL` para el panel.
+Esta guarda es específica de la frontera de 6.2.6-A y **no sustituye** un diseño CSRF general futuro.
 
-Consecuencias:
+## 4. Toda surface tenant-interna exige Membership vigente
 
-- un origin headless permitido por CORS puede consumir la API pública;
-- ese origin no puede reutilizar una cookie administrativa ambiente para entrar a una ruta interna;
-- que CORS emita `Access-Control-Allow-Origin` y `Access-Control-Allow-Credentials` para un origin público **no** lo convierte en origen administrativo;
-- una request interna sin `Origin` puede seguir existiendo para same-origin/non-browser/server tooling, pero continúa requiriendo sesión y autoridad tenant vigente.
+La sesión no congela authority.
 
-Esta comprobación acota la surface administrativa en 6.2.6-A. **No sustituye el diseño CSRF general pendiente de una fase posterior.**
-
-La configuración operativa debe mantener `FRONTEND_URL` como origen confiable del panel y no reutilizarlo como un origen de terceros no confiable.
-
-## 4. Toda surface interna exige autoridad tenant vigente
-
-La sesión no congela autoridad.
-
-Cada request interna tenant-scoped debe resolver nuevamente desde persistencia:
+Cada request interna revalida desde persistencia:
 
 ```text
 session user id
--> User vigente y activo
+-> User existente y activo
 -> Business de sesión existente y activo
--> Membership (User + Business) existente y activa
--> Membership.role vigente en {admin, worker}
--> tenantAuthority no-null
+-> Membership(User, Business) existente y activa
+-> Membership.role en {admin, worker}
+-> tenantAuthority vigente
 ```
 
-Si cualquiera de estas condiciones deja de cumplirse después del login, la request interna falla antes de ejecutar la política del recurso.
+Si cualquiera deja de cumplirse después del login, la request interna falla cerrado.
 
 En particular:
 
 - Membership revocada/inactiva: `403`;
 - User desactivado: `403`;
 - Business desactivado: `403`;
-- rol Membership no reconocido como autoridad tenant: `403`;
-- `User.role` o `User.business` legacy no recuperan autoridad;
-- email, phone, `Appointment.client`, `guestContact` o CustomerProfile no recuperan autoridad.
+- role Membership inválido: `403`;
+- `User.role`, `User.business`, `Business.owner` o copias de role de sesión no recuperan authority.
 
-Las rutas internas no continúan con `req.tenantAuthority === null`.
+El Business interno procede del contexto tenant autorizado de sesión. Selectores tenant del caller no desplazan silenciosamente la operación a otro Business.
 
-El Business interno proviene del contexto de sesión autorizado. Un `businessId`, slug o header tenant enviado por el caller no puede mover silenciosamente una operación administrativa a otro tenant.
+La política global especial de superadmin permanece separada: no se fabrica una Membership tenant para representar privilegio de plataforma.
 
-## 5. Operaciones públicas incluidas
+## 5. Services públicos
 
-### 5.1 Services
+### `GET /api/services`
 
-#### `GET /api/services`
-
-Tenant explícito obligatorio. Sólo lista Services activos del Business.
+Sólo lista Services activos del Business público explícito.
 
 Proyección pública:
 
@@ -198,39 +181,26 @@ Proyección pública:
 }
 ```
 
-No expone:
+No expone `workers`, `isActive`, timestamps ni metadata administrativa.
 
-- `workers`;
-- `isActive`;
-- timestamps;
-- metadata administrativa/persistencia interna.
+### `GET /api/services/:id`
 
-#### `GET /api/services/:id`
+Misma proyección y mismo tenant scope. Un Service de B dentro de A falla cerrado.
 
-Mismas reglas. Un Service de B presentado dentro de A se trata como no disponible.
+El panel utiliza `/api/internal/services[/...]` cuando necesita la representación administrativa.
 
-El panel usa `/api/internal/services[/...]` cuando necesita la representación administrativa.
+## 6. Professional discovery público
 
-### 5.2 Profesionales
+### `GET /api/users/workers?serviceId=:serviceId`
 
-#### `GET /api/users/workers?serviceId=:serviceId`
-
-Tenant explícito y `serviceId` ObjectId obligatorios.
-
-El Service debe:
-
-- existir en el Business;
-- estar activo;
-- contener al profesional en `Service.workers`.
+Requiere tenant explícito y Service válido/activo del mismo Business.
 
 Cada profesional retornado debe:
 
-- tener User activo;
-- tener Membership activa del mismo Business;
-- tener rol tenant participante vigente (`admin|worker`);
-- seguir incluido en la allowlist del Service.
-
-`User.role` y `User.business` legacy no son autoridad.
+- ser User activo;
+- tener Membership activa del Business;
+- tener role tenant vigente `admin|worker`;
+- estar incluido en `Service.workers`.
 
 Proyección pública:
 
@@ -242,69 +212,44 @@ Proyección pública:
 }
 ```
 
-Nunca expone email, phone, role, business legacy, Membership, credenciales ni timestamps.
+Nunca expone email, phone, `User.role`, `User.business`, Membership, credenciales ni timestamps.
 
-Un profesional individual inelegible/revocado se omite. Sólo la inelegibilidad esperada se absorbe; un error de repositorio, base de datos o infraestructura se propaga y no se degrada silenciosamente a un array parcial con `200`.
+La inelegibilidad esperada de un profesional puede omitirlo; errores de repositorio/DB/infraestructura se propagan y no se convierten silenciosamente en `200` parcial.
 
-El panel usa `/api/internal/users/workers` para su lista operativa autorizada.
+El panel usa `/api/internal/users/workers` para la proyección operacional autorizada.
 
-### 5.3 Disponibilidad
+## 7. Disponibilidad
 
-#### `GET /api/availability/slots`
+### `GET /api/availability/slots`
 
-Input público:
+Input:
 
 - tenant explícito;
-- `workerId` ObjectId;
-- `serviceId` ObjectId;
-- `date` en `YYYY-MM-DD` y fecha Gregoriana real.
+- `workerId`;
+- `serviceId`;
+- `date` estricta `YYYY-MM-DD` y fecha Gregoriana real.
 
-Ejemplo inválido:
+Ejemplo:
 
 ```text
-2026-02-31 => 400 VALIDATION_ERROR
+2026-02-31 -> 400 VALIDATION_ERROR
 ```
 
-Coherencia requerida:
+La consulta mantiene coherencia de Business + Service + worker + Shift + Block + Appointment.
 
-- Service activo del Business;
-- worker con Membership activa del mismo Business;
-- worker incluido en `Service.workers`;
-- Shift consultado por `Business + worker`;
-- Block consultado por `Business + worker`;
-- Appointment que ocupa slot consultada por `Business + worker + date`.
+`slotDuration` define la grilla de slots presentada, mientras `Service.duration` define la duración real de cada cita.
 
-Una Appointment de B no ocupa disponibilidad de A.
+### Shift raw
 
-Proyección de slot:
+`GET /api/availability/shifts/:workerId` es interno y exige sesión + Membership tenant vigente + role compatible. No forma parte del contrato guest.
 
-```json
-{
-  "startTime": "09:00",
-  "endTime": "10:00",
-  "available": true
-}
-```
+## 8. Crear Appointment guest
 
-#### Shift raw NO es guest
+### `POST /api/appointments`
 
-`GET /api/availability/shifts/:workerId` es estado operativo interno y requiere:
+El path es siempre público/headless.
 
-- sesión autenticada;
-- Business de sesión válido;
-- Membership activa vigente;
-- rol `admin|worker` compatible;
-- origen de panel válido cuando el navegador envía `Origin`.
-
-La superficie pública debe consumir `/availability/slots`, no Shift raw.
-
-### 5.4 Crear Appointment guest
-
-#### `POST /api/appointments`
-
-Este path es siempre público/headless. Una cookie o `x-agenda-surface: internal` no cambia el schema.
-
-Input contractual permitido:
+Input permitido:
 
 ```json
 {
@@ -322,61 +267,48 @@ Input contractual permitido:
 }
 ```
 
-`businessId`/`slug` se aceptan únicamente como selectores tenant compatibles con el resolver público.
+El schema es `strict`. El controller consume únicamente el body validado/transformado.
 
-#### Allowlist de input público
-
-El schema público es `strict` y el controller consume exclusivamente el body parseado/transformado. No reutiliza `req.body` raw para controles del service layer.
-
-La superficie pública no acepta:
+No se aceptan públicamente:
 
 - `isSuggestion`;
 - `paymentOption`;
-- overrides administrativos;
-- campos desconocidos/control fields no documentados.
+- campos administrativos;
+- campos desconocidos/control fields.
 
-Esos campos fallan con `400 VALIDATION_ERROR` antes de llamar `bookAppointment()`.
+Todos fallan con `400 VALIDATION_ERROR` antes de llegar al service layer.
 
-Consecuencias:
+La variante administrativa legacy que realmente necesita controles internos vive en `POST /api/internal/appointments` y exige la frontera tenant-interna completa.
 
-- `isSuggestion=true` no puede saltarse revalidación de disponibilidad;
-- no puede crear solapamientos públicos;
-- `paymentOption=local` no puede alterar status, pago ni auto-confirmación;
-- enviar `x-agenda-surface: internal` no habilita ninguno de esos knobs.
-
-La creación administrativa legacy que realmente requiere esos controles vive en `POST /api/internal/appointments`, bajo la frontera interna completa.
-
-#### Validación de `clientInfo`
+### 8.1 Validación de `clientInfo`
 
 Antes de Mongoose:
 
-- `firstName` y `lastName` se trimean;
+- nombres se trimean;
 - whitespace-only falla;
-- nombres: máximo 120 caracteres;
-- email: máximo 320 caracteres y formato válido;
-- dominio del email se normaliza a lowercase conservando el local-part;
-- phone se trimea y debe cumplir formato E.164-like `+?[1-9][0-9]{6,14}`;
-- campos desconocidos en `clientInfo` fallan cerrado.
+- nombres máximo 120 caracteres;
+- email máximo 320 y formato válido;
+- dominio del email se normaliza a lowercase conservando local-part;
+- phone se trimea y usa formato E.164-like `+?[1-9][0-9]{6,14}`;
+- campos desconocidos fallan cerrado.
 
-Errores de estos inputs producen `400 VALIDATION_ERROR`.
+### 8.2 Invariantes guest
 
-#### Reglas de identidad y persistencia
+El booking guest:
 
-1. Service y worker se validan dentro del Business;
-2. `date` debe ser una fecha Gregoriana real;
-3. disponibilidad se revalida antes de crear una reserva pública normal;
-4. un guest no necesita login;
-5. `clientInfo` se transforma sólo en `Appointment.guestContact` Appointment-scoped/select:false;
-6. el flujo guest no busca User por email ni teléfono;
-7. no añade datos declarados a un User existente;
-8. no crea User ni contraseña aleatoria;
-9. `Appointment.client` queda `null`;
-10. booking fallido no deja side effects de identidad global;
-11. `guestContact`, `Appointment.client`, CustomerProfile o coincidencia de contacto no conceden authority.
+1. valida Service/worker dentro del Business;
+2. valida fecha Gregoriana;
+3. no requiere login;
+4. no busca User por email o teléfono;
+5. no modifica User existente;
+6. no crea User;
+7. no crea password aleatoria;
+8. persiste `Appointment.client = null`;
+9. persiste únicamente un snapshot `guestContact` Appointment-scoped/select:false;
+10. un fallo de booking no deja side effects de identidad global;
+11. `guestContact`, email, phone, CustomerProfile o `Appointment.client` no conceden authority.
 
-Las notificaciones guest utilizan el snapshot persistido en `Appointment.guestContact`; no dependen de correlacionar un User global.
-
-Output público:
+Output público mínimo:
 
 ```json
 {
@@ -391,18 +323,102 @@ Output público:
 }
 ```
 
-No incluye `client`, `guestContact`, notes, paymentStatus, CustomerProfile, Verification, Membership ni timestamps internos.
+No expone `client`, `guestContact`, notes, paymentStatus, CustomerProfile, Verification ni Membership.
 
-## 6. DTO operacional interno de Appointment guest
+## 9. Exclusión concurrente de intervalos
 
-Persistencia segura:
+La consulta inicial de disponibilidad es útil para UX, pero **no es la garantía de integridad**, porque por sí sola tendría una carrera TOCTOU.
+
+La garantía física se aplica en la capa de persistencia para toda creación runtime que utiliza `appointmentRepository.create()`.
+
+### 9.1 Clave de serialización
+
+Existe un registro de coordinación `AppointmentBookingMutex` con `_id` determinístico:
+
+```text
+BusinessId : WorkerId : YYYY-MM-DD
+```
+
+Por tanto:
+
+- distintos Businesses no comparten exclusión;
+- distintos workers no comparten exclusión;
+- citas del mismo worker/día se serializan aunque tengan distinta hora o duración.
+
+El registro no es authority, ownership, capability ni “reserva” del slot.
+
+### 9.2 Transacción
+
+Para crear una Appointment:
+
+```text
+materializar mutex row si no existe
+-> iniciar MongoDB transaction
+-> write sobre mutex Business+worker+date
+-> consultar overlap activo dentro de la misma transaction
+-> si overlap: abort + 409 CONFLICT_ERROR
+-> si no overlap: insertar Appointment en la misma transaction
+-> commit
+```
+
+El write del mutex es el punto de serialización cross-process. Dos transacciones para el mismo Business+worker+date no pueden confirmar basándose en snapshots independientes sin resolver antes el conflicto de escritura.
+
+`withTransaction()` permite al driver reintentar errores transitorios. Un retry obtiene un snapshot actualizado y vuelve a comprobar overlap después del ganador.
+
+### 9.3 Definición de overlap
+
+Para estados activos:
+
+```text
+existing.startTime < new.endTime
+AND
+existing.endTime > new.startTime
+```
+
+Estados ocupantes:
+
+```text
+pending_payment
+pending
+confirmed
+completed
+```
+
+`cancelled` no ocupa intervalo.
+
+Consecuencias:
+
+- `09:00-11:00` y `10:00-12:00` no pueden coexistir;
+- `09:00-10:00` y `10:00-11:00` sí pueden coexistir;
+- funciona con Services de distinta duración;
+- usa `startTime/endTime` reales, no sólo `slotDuration`;
+- cancelar libera funcionalmente el intervalo para una reserva posterior.
+
+El índice único existente `{business, worker, date, startTime}` permanece como defensa adicional para comienzos idénticos, pero **no** es la garantía principal de no-overlap.
+
+### 9.4 Semántica del mutex persistente
+
+No existe TTL, lease ni lock lógico que deba “liberarse”.
+
+La fila puede permanecer después de una reserva o cancelación. Sólo produce exclusión mientras una transacción está escribiendo sobre ella. Por tanto:
+
+- no existe riesgo de lock expirado mientras un writer sigue vivo;
+- no hay ownership de lease que recuperar;
+- una fila antigua no impide reservar;
+- la ocupación real deriva exclusivamente de Appointments activas.
+
+Si MongoDB no soporta transactions, el booking falla en vez de degradarse a una inserción no serializada. El gate oficial usa un replica set real.
+
+## 10. DTO operacional interno de guest
+
+Persistencia:
 
 ```text
 Appointment.client = null
-Appointment.guestContact = datos declarados Appointment-scoped/select:false
+Appointment.guestContact = Appointment-scoped/select:false
 ```
 
-Sólo después de superar la frontera tenant y la autorización de Appointment, las lecturas internas pueden seleccionar `guestContact` y transformarlo a:
+Sólo después de superar tenant scope + autorización de Appointment, una lectura interna puede transformar el snapshot a:
 
 ```json
 {
@@ -416,77 +432,83 @@ Sólo después de superar la frontera tenant y la autorización de Appointment, 
 }
 ```
 
-Para una identidad autenticable real, el mismo DTO puede usar `kind: "account"` y su `_id`.
+Nunca serializa `guestContact` raw, provenance, capturedAt, channel, Verification, CustomerProfile, bindings ni Membership.
 
-Es representación operacional, no ownership.
+Admin del Business y profesional realmente asignado pueden recibir el DTO. Worker no asignado y otro Business no adquieren acceso.
 
-Nunca se serializan en ese DTO:
+C2 READ mantiene su query/proyección separada y no recibe este DTO ampliado.
 
-- `guestContact` raw;
-- `provenance`;
-- `capturedAt`;
-- `channel`;
-- Verification;
-- CustomerProfile;
-- bindings;
-- Membership;
-- otros Appointments del contacto.
+## 11. Business Settings
 
-Admin del Business y profesional realmente autorizado/asignado pueden recibirlo. Worker no asignado y otro Business no adquieren acceso por conocer el contacto.
+### Decisión: internal-only
 
-C2 conserva consulta/proyección independiente y no recibe este DTO ampliado.
+`BusinessConfig` no forma parte del contrato headless mínimo de 6.2.6-A.
 
-## 7. Operaciones fuera del contrato base
+`GET /api/business-settings` exige:
 
-Conocer `businessId + appointmentId` no concede:
+- sesión;
+- User vigente;
+- Business vigente;
+- Membership tenant vigente;
+- trusted panel origin cuando la request de navegador incluye `Origin`.
 
-- detalle sensible;
-- history/list de cliente;
-- timeline;
-- cancelación;
-- reprogramación;
-- confirmación;
-- inicio de pago;
-- CustomerProfile ownership;
-- User binding;
-- Membership;
-- Client session.
+Esto evita exponer raw BusinessConfig, que contiene datos operacionales como working hours, cancellation/payment/email/UI settings.
 
-Las acciones administrativas existentes continúan bajo sesión + Membership tenant vigente.
+### Sin side effects públicos
 
-## 8. Payment: inicio fail-closed y callback legacy acotado
+`getOrInitializeConfig()` puede crear defaults cuando un actor interno autorizado abre por primera vez la configuración del Business.
+
+Pero una request pública/anónima se detiene **antes** del controller:
+
+```text
+GET público /api/business-settings
+-> 401/403
+-> no BusinessConfig read
+-> no default initialization
+-> cero writes
+```
+
+Un origin público permitido por CORS con una cookie admin ambiente también falla antes de la inicialización.
+
+El panel conserva el mismo endpoint `/api/business-settings`; no necesita migración de path para esta lectura.
+
+## 12. Payment
 
 6.2.6-A no implementa payment capability.
 
-Aun con `ENABLE_PAYMENTS=true`, `POST /api/payments/initiate` no permite iniciar pago sólo con Business + Appointment ID y falla cerrado con `403 FORBIDDEN_ERROR` hasta que exista una autoridad purpose-specific futura.
+Incluso con `ENABLE_PAYMENTS=true`:
 
-### Callback Webpay legacy preservado
+```text
+POST /api/payments/initiate
+-> 403 FORBIDDEN_ERROR
+```
 
-`/api/payments/webpay-return` se conserva únicamente para transacciones legacy ya iniciadas.
+Appointment ID no concede payment authority.
 
-Orden fail-closed:
+### Callback Webpay legacy
+
+`/api/payments/webpay-return` sólo preserva transacciones ya iniciadas:
 
 ```text
 token_ws
--> Payment existente status=pending
--> Payment.appointment + Payment.business fijan scope local
--> Appointment existe
--> Appointment.business == Payment.business
--> Appointment.status == pending_payment
--> Business y Service asociados existen
+-> Payment existente pending
+-> Appointment fijada por Payment
+-> Business coherente
+-> Appointment pending_payment
+-> Business/Service coherentes
 -> commit Transbank
 -> buy_order == Payment.appointment
--> monto/status proveedor válido
+-> amount/status válidos
 -> transición aprobada o rechazada
 ```
 
-Una incoherencia local Payment/Appointment/Business falla antes del `commit` externo. Un `buy_order` incorrecto sólo puede detectarse después del commit del proveedor, pero no produce transición local.
+Payment/Appointment cross-Business falla antes del commit externo. `buy_order` mismatch no produce transición local.
 
-El gate prepara fixtures `Payment pending + Appointment pending_payment`; no reabre `/payments/initiate` para fabricarlos.
+No se introduce nuevo flujo de inicio, ownership de pago por Client ni matching User/contact.
 
-## 9. C2 preservado
+## 13. C2 preservado
 
-El flujo aprobado continúa separado:
+El flujo sigue separado:
 
 ```text
 challenge durable
@@ -495,132 +517,89 @@ challenge durable
 -> Business + Appointment + READ capability
 ```
 
-La capability C2:
+La capability continúa siendo single-Business, single-Appointment, single-purpose READ y single-use. No concede history/list, cancel/reschedule/payment ni authority derivada de email, phone, client o guestContact.
 
-- es bearer purpose/action scoped;
-- es single-Appointment y single-Business;
-- no equivale a cuenta/sesión/ownership;
-- no enumera otros Appointments;
-- no concede cancel, reschedule ni payment;
-- no obtiene authority de email, phone, `Appointment.client` o `guestContact`.
+## 14. Appointment ID no es authority
 
-## 10. Errores públicos
+Conocer `businessId + appointmentId` no concede detalle sensible, timeline/history, cancelación, reprogramación, confirmación, pago, User binding, CustomerProfile ownership ni Membership.
 
-El contrato utiliza errores genéricos/estables y no expone mensajes de driver o detalles de authority:
+## 15. Idempotencia y retries
 
-- `400 VALIDATION_ERROR` — input/tenant contradictorio o inválido;
-- `404 NOT_FOUND` — recurso público no disponible dentro del scope;
-- `409 CONFLICT_ERROR` — slot/estado incompatible;
-- `429 RATE_LIMITED` — rate limit.
+La exclusión transaccional evita **overlap**, no convierte automáticamente el endpoint en una API idempotente.
 
-Las superficies internas pueden responder `401/403` para sesión/authority ausente o revocada, sin transformar una coincidencia de contacto en oracle de acceso.
+El índice único de startTime y la serialización impiden duplicados/overlaps activos incompatibles, pero un timeout posterior a un commit exitoso puede seguir dejando al caller sin saber si su operación confirmó.
 
-## 11. Reintentos e idempotencia mínima
+Una `Idempotency-Key` genérica sigue fuera de 6.2.6-A hasta que exista una necesidad de producto/integración concreta.
 
-6.2.6-A no añade una plataforma genérica de `Idempotency-Key`.
+## 16. Rate limiting
 
-El índice único físico para Appointments activas por Business + worker + date + startTime evita duplicados activos equivalentes. Un retry después de una creación ya confirmada recibe conflicto en lugar de crear una segunda reserva.
+Se conserva el limiter global, el limiter de autenticación y los guards específicos C2. Los tests no elevan límites para obtener verde; reutilizan sesiones cuando corresponde.
 
-Un timeout posterior al commit puede seguir siendo ambiguo. Resolver replay determinista mediante idempotency key queda para cuando exista una necesidad real de integración/producto; no se simula dentro de esta fase.
-
-## 12. Rate limiting
-
-Se conserva:
-
-- limiter global: 200 requests / 15 minutos / IP;
-- respuesta estable `429 RATE_LIMITED`;
-- C2 challenge/verify/read y su intake durable mantienen sus guards específicos existentes.
-
-Rate limiting reduce abuso; no concede authority y no sustituye Membership/capability.
-
-## 13. Compatibilidad/versionado
-
-No se introduce `/v1` sin una necesidad de ruptura real.
-
-Cambios compatibles pueden añadir información opcional sin alterar semántica/autorización.
-
-Son breaking, entre otros:
-
-- remover/renombrar campos;
-- cambiar tipos;
-- exigir inputs nuevos;
-- cambiar significado de códigos HTTP/error;
-- relajar tenant scope;
-- ampliar una capability/authority;
-- convertir un path público en proyección interna o viceversa sin migración explícita.
-
-La introducción de `/api/internal/...` en este hardening no versiona el contrato público: preserva los paths públicos existentes y separa la superficie administrativa que antes compartía path.
-
-## 14. websiteUrl / bookingUrl y trusted origins
-
-`BusinessConfig` todavía no persiste `websiteUrl`/`bookingUrl` verificadas y no existe infraestructura completa de domain verification.
-
-No se inventa esa infraestructura en 6.2.6-A.
-
-C2 conserva `GUEST_APPOINTMENT_ACCESS_ORIGIN` HTTPS server-side como trusted origin para enlaces sensibles.
-
-La surface administrativa usa el origen configurado `FRONTEND_URL` como guard específico cuando una request interna de navegador trae `Origin`.
-
-Nunca debe utilizarse un Host/Origin/query/body arbitrario del caller para construir un bearer link o para conferir authority.
-
-## 15. Holiday
+## 17. Holiday
 
 Decisión actual de producto/modelo:
 
 - Holiday continúa global;
-- una misma fecha aplica a todos los Businesses;
-- no se tenantiza dentro de 6.2.6-A.
+- la misma fecha afecta a todos los Businesses;
+- no se tenantiza en 6.2.6-A.
 
-Esto se documenta como comportamiento global deliberado, **no** como garantía de aislamiento tenant.
+Es una semántica global deliberada, **no** una garantía de aislamiento tenant.
 
-Shift, Block y Appointment sí continúan tenant-scoped.
+Shift, Block y Appointment sí permanecen tenant-scoped.
 
-## 16. Matriz mínima de regresión de 6.2.6-A
+## 18. Matriz adversarial mínima
 
-El gate debe demostrar al menos:
+El gate demuestra al menos:
 
-1. dos Businesses consumen las mismas proyecciones públicas;
-2. tenant ausente/contradictorio falla cerrado;
-3. Service/worker cross-tenant no atraviesa scope;
-4. Shift raw no es guest y slots sí;
-5. guest booking no crea ni muta User;
-6. `Appointment.client = null` y `guestContact` permanece interno;
-7. public Appointment input rechaza `isSuggestion`, `paymentOption` y campos desconocidos;
-8. cookie A + public B opera sólo sobre B;
-9. origin público permitido por CORS + cookie admin + `x-agenda-surface: internal` sigue obteniendo únicamente Services/Workers públicos;
-10. ese origin no puede activar schema interno de Appointment;
-11. ese origin no puede acceder `/api/internal/...` ni Shift/Appointment administrativos;
-12. el panel confiable conserva `workers + services + appointments + shifts`;
-13. Membership revocada después del login invalida inmediatamente toda surface interna;
-14. User inactivo, Business inactivo o rol Membership inválido también fallan cerrado;
-15. DTO guest operacional sólo aparece a admin/profesional autorizado;
-16. worker no asignado/Business B no obtiene guest data;
-17. C2 READ no amplía su proyección;
-18. Appointment ID no concede detail/cancel/payment;
-19. Payment initiate continúa fail-closed;
-20. callback Webpay legacy conserva approved/rejected y coherencia Payment/Appointment/Business/buy_order;
-21. professional discovery propaga infraestructura;
-22. fechas Gregorianas imposibles fallan;
-23. Holiday global afecta deliberadamente a A y B;
-24. WebSocket continúa aislado por Membership/Business;
-25. frontend policy falla si `apiFetch` vuelve a emitir `x-agenda-surface` como selector interno.
+1. cookie A + contrato público B opera sólo sobre B;
+2. origin público permitido + cookie admin + `x-agenda-surface: internal` no eleva Services/Workers/Appointment;
+3. public workers nunca exponen email/phone;
+4. panel real conserva workers + services + appointments + shifts;
+5. Membership revocada después de login invalida surface interna inmediatamente;
+6. User/Business inactivos y role Membership inválido fallan cerrado;
+7. guest booking no crea ni muta User ni password;
+8. `Appointment.client = null` para guest;
+9. guestContact no es authority ni se serializa raw;
+10. worker no asignado y Business B no obtienen contacto guest;
+11. schema público rechaza `isSuggestion`, `paymentOption` y campos desconocidos;
+12. clientInfo inválido falla antes de Mongoose;
+13. dos POST paralelos `09:00-11:00` vs `10:00-12:00` dejan exactamente un ganador y un `409 CONFLICT_ERROR`;
+14. ambos requests de esa carrera pueden superar la lectura inicial de disponibilidad sin romper la invariante transaccional;
+15. `09:00-10:00` y `10:00-11:00` pueden coexistir;
+16. Business A/B a la misma hora no comparten exclusión;
+17. worker A/B a la misma hora no comparten exclusión;
+18. cancelación permite rebooking posterior del intervalo;
+19. Business Settings público no lee ni inicializa defaults;
+20. origin público permitido + cookie no inicializa Business Settings;
+21. Membership válida desde panel puede leer/inicializar Business Settings;
+22. Shift raw sigue interno y slots público;
+23. professional discovery propaga fallos de infraestructura;
+24. fechas Gregorianas imposibles fallan;
+25. C1 no se amplía;
+26. C2 READ no se amplía;
+27. Appointment ID no concede detail/cancel/reschedule/payment;
+28. Payment initiate permanece fail-closed;
+29. callback Webpay legacy mantiene approved/rejected/cross-Business/buy_order mismatch;
+30. Holiday global afecta deliberadamente a A y B;
+31. WebSocket continúa revalidando Membership/tenant.
 
-## 17. Riesgos/deudas explícitamente pendientes
+## 19. Deudas explícitas fuera de alcance
 
-Quedan fuera de esta subfase:
+Permanecen fuera de esta subfase:
 
-- verificación de dominios website/booking por Business;
 - Client account/login;
 - OAuth Client;
 - User↔CustomerProfile binding;
 - Client history/timeline;
 - nuevas capabilities cancel/reschedule/payment;
-- inicio Webpay futuro con autoridad purpose-specific;
-- rediseño CSRF/sesiones general;
+- nuevo inicio Webpay con authority purpose-specific;
 - idempotency key genérica;
+- rediseño CSRF/sesiones general;
+- verificación de websiteUrl/bookingUrl por Business;
 - tenantización de Holiday;
+- limpieza operativa opcional de mutex rows antiguas —no necesaria para correctness—;
 - 6.2.6-B;
 - 6.3;
 - 6.4.
 
-La finalidad de 6.2.6-A es hacer verificable la frontera pública mínima **sin permitir que el caller se autodeclare interno y sin conservar lecturas tenant-internas cuando Membership ya no es vigente**, manteniendo las garantías de identidad, C1/C2 y Payment ya endurecidas.
+La finalidad de 6.2.6-A es dejar una frontera headless mínima verificable, con identidad guest no autoritativa, surface interna controlada por servidor, Membership vigente obligatoria y una invariante concurrente real que impida Appointments activas solapadas.
