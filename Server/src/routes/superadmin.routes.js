@@ -9,13 +9,15 @@ import {
 } from "../controllers/superadmin.controller.js";
 import { isAuthenticated } from "../middleware/auth.middleware.js";
 import { isSuperadmin } from "../middleware/role.middleware.js";
+import { requireTrustedAuthenticatedOrigin } from "../middleware/trustedAuthenticatedOrigin.middleware.js";
 import { validate } from "../middleware/validate.middleware.js";
 import { createBusinessSchema, objectIdParamSchema } from "../validations/common.validation.js";
 
 const router = Router();
 
-// Proteger todas las rutas de superadmin
-router.use(isAuthenticated, isSuperadmin);
+// CORS público no concede capacidad de reutilizar una cookie superadmin ambiente.
+// Esta frontera aplica aunque la ruta no sea tenant-scoped y no use scopeBusiness.
+router.use(requireTrustedAuthenticatedOrigin, isAuthenticated, isSuperadmin);
 
 router.get("/metrics", getPlatformMetrics);
 router.get("/analytics", getAdvancedPlatformAnalytics);
