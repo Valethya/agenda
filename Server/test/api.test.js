@@ -131,7 +131,7 @@ test("Servidor Express - Endpoints Básicos", async (t) => {
   await t.test("Admin autenticado de A + tenant B explícito usa contrato público de B", async () => {
     const cookie = await loginAs("test-admin@example.com", "passwordAdmin");
     const response = await fetch(`${baseUrl}/services?slug=${seed.businessB.slug}`, {
-      headers: { Cookie: cookie, "x-agenda-surface": "public" },
+      headers: { Cookie: cookie },
     });
     assert.strictEqual(response.status, 200);
     const data = await response.json();
@@ -140,13 +140,12 @@ test("Servidor Express - Endpoints Básicos", async (t) => {
     data.payload.forEach((service) => assertPublicServiceProjection(service, seed.businessB._id));
   });
 
-  await t.test("Worker autenticado de A + header B explícito usa contrato público de B", async () => {
+  await t.test("Worker autenticado de A + header tenant B explícito usa contrato público de B", async () => {
     const cookie = await loginAs("test-worker@example.com", "passwordWorker");
     const response = await fetch(`${baseUrl}/services`, {
       headers: {
         Cookie: cookie,
         "x-business-slug": seed.businessB.slug,
-        "x-agenda-surface": "public",
       },
     });
     assert.strictEqual(response.status, 200);
@@ -156,13 +155,13 @@ test("Servidor Express - Endpoints Básicos", async (t) => {
     data.payload.forEach((service) => assertPublicServiceProjection(service, seed.businessB._id));
   });
 
-  await t.test("Miembro autenticado de un negocio inactivo debería recibir 403", async () => {
+  await t.test("Miembro autenticado de un negocio inactivo debería recibir 403 en surface interna", async () => {
     const cookie = await loginAs("test-admin@example.com", "passwordAdmin");
     await Business.findByIdAndUpdate(seed.business._id, { isActive: false });
 
     try {
-      const response = await fetch(`${baseUrl}/services`, {
-        headers: { Cookie: cookie, "x-agenda-surface": "internal" },
+      const response = await fetch(`${baseUrl}/internal/services`, {
+        headers: { Cookie: cookie },
       });
       assert.strictEqual(response.status, 403);
     } finally {
@@ -189,7 +188,6 @@ test("Servidor Express - Endpoints Básicos", async (t) => {
       headers: {
         "Content-Type": "application/json",
         "x-business-slug": seed.business.slug,
-        "x-agenda-surface": "public",
       },
       body: JSON.stringify({
         worker: seed.workerB._id,
@@ -214,13 +212,12 @@ test("Servidor Express - Endpoints Básicos", async (t) => {
     const cookie = await loginAs("test-admin@example.com", "passwordAdmin");
     const guestEmail = "cross-tenant-worker@example.com";
     const appointmentCountBefore = await Appointment.countDocuments({});
-    const response = await fetch(`${baseUrl}/appointments`, {
+    const response = await fetch(`${baseUrl}/internal/appointments`, {
       method: "POST",
       headers: {
         Cookie: cookie,
         "Content-Type": "application/json",
         "x-business-slug": seed.business.slug,
-        "x-agenda-surface": "internal",
       },
       body: JSON.stringify({
         worker: seed.workerB._id,
@@ -245,7 +242,6 @@ test("Servidor Express - Endpoints Básicos", async (t) => {
   await t.test("Disponibilidad pública debería rechazar un profesional de otro tenant", async () => {
     const response = await fetch(
       `${baseUrl}/availability/slots?workerId=${seed.workerB._id}&serviceId=${seed.service._id}&date=2099-01-05&slug=${seed.business.slug}`,
-      { headers: { "x-agenda-surface": "public" } },
     );
     assert.strictEqual(response.status, 404);
   });
@@ -263,12 +259,12 @@ test("Servidor Express - Endpoints Básicos", async (t) => {
     const cookie = await loginAs("superadmin-scope@example.com", "passwordSuperadmin");
 
     const missingResponse = await fetch(`${baseUrl}/services`, {
-      headers: { Cookie: cookie, "x-agenda-surface": "public" },
+      headers: { Cookie: cookie },
     });
     assert.strictEqual(missingResponse.status, 400);
 
     const invalidResponse = await fetch(`${baseUrl}/services?slug=no-existe`, {
-      headers: { Cookie: cookie, "x-agenda-surface": "public" },
+      headers: { Cookie: cookie },
     });
     assert.strictEqual(invalidResponse.status, 404);
   });
