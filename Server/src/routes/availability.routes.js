@@ -9,15 +9,16 @@ import {
 import { isAuthenticated } from "../middleware/auth.middleware.js";
 import { isWorkerOrAdmin } from "../middleware/role.middleware.js";
 import { scopeBusiness, scopePublicBusiness } from "../middleware/business.middleware.js";
+import { bindResolvedPublicBusinessOrigin } from "../middleware/publicWebBrowserBinding.middleware.js";
 import { validate } from "../middleware/validate.middleware.js";
 import { availabilityQuerySchema, createBlockSchema } from "../validations/appointment.validation.js";
 import { saveShiftSchema, objectIdParamSchema, workerIdParamSchema } from "../validations/common.validation.js";
 
 const router = Router();
 
-// Slots pertenece al contrato headless y permanece público aunque exista una
-// cookie ambiente. Shift raw y Blocks continúan exclusivamente internos.
-router.get("/slots", scopePublicBusiness, validate(availabilityQuerySchema), getSlots);
+// Slots pertenece al contrato headless y permanece público para callers sin
+// Origin. Navegadores además deben bindear su Origin al Business resuelto.
+router.get("/slots", scopePublicBusiness, bindResolvedPublicBusinessOrigin, validate(availabilityQuerySchema), getSlots);
 
 router.get(
   "/shifts/:workerId",
