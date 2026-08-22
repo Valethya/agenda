@@ -11,6 +11,8 @@ import session from "express-session";
 import rateLimit from "express-rate-limit";
 import MongoStore from "connect-mongo";
 import { urlMongo, sessionSecret, corsOrigins, frontendUrl, nodeEnv } from "./config/env.js";
+import { publicOriginHasFreshTrust } from "./services/publicWeb.service.js";
+import { AppError } from "./utils/appError.js";
 // EXPRESS
 
 export const app = express();
@@ -52,12 +54,40 @@ const normalizeOrigin = (value) => {
   }
 };
 
-// CORS público y authority de sesión son conceptos distintos. CORS_ORIGINS puede
-// contener consumidores headless, pero sólo FRONTEND_URL recibe permiso explícito
-// para respuestas credentialed del navegador. Las rutas de sesión/superadmin
-// además aplican su propia frontera server-controlled.
+const normalizePath = (value = "") => {
+  if (value.length > 1 && value.endsWith("/")) return value.slice(0, -1);
+  return value;
+};
+
+// Public route classification is server-owned and method-sensitive. For OPTIONS
+// we use Access-Control-Request-Method only; neither body nor future custom-header
+// values participate in preflight eligibility.
+const isDynamicPublicHeadlessRoute = (req) => {
+  const pathName = normalizePath(req.path || new URL(req.originalUrl || "/", "http://local").pathname);
+  const requestedMethod = req.method === "OPTIONS"
+    ? (req.get("access-control-request-method") || "").toUpperCase()
+    : req.method.toUpperCase();
+
+  if (requestedMethod === "GET" && /^\/api\/services(?:\/[^/]+)?$/u.test(pathName)) return true;
+  if (requestedMethod === "GET" && pathName === "/api/users/workers") return true;
+  if (requestedMethod === "GET" && pathName === "/api/availability/slots") return true;
+  if (requestedMethod === "POST" && pathName === "/api/appointments") return true;
+  if (requestedMethod === "POST" && /^\/api\/guest-appointments\/read(?:\/challenge|\/verify)?$/u.test(pathName)) return true;
+  return false;
+};
+
+const corsDenied = () => new AppError(
+  "Origin no permitido por CORS",
+  403,
+  "CORS_ORIGIN_DENIED",
+);
+
+// CORS público y authority de sesión son conceptos distintos. CORS_ORIGINS keeps
+// its compatibility role for non-public surfaces, while the 6.2.6-B public
+// browser surface is admitted dynamically from fresh publicWeb trust. Only
+// FRONTEND_URL can receive credentials, by the independent panel policy.
 const trustedPanelOrigin = normalizeOrigin(frontendUrl);
-const allowedOrigins = new Set(
+const compatibilityOrigins = new Set(
   [
     ...corsOrigins.split(",").map((origin) => normalizeOrigin(origin.trim())),
     trustedPanelOrigin,
@@ -72,14 +102,30 @@ app.use(
     }
 
     const requestOrigin = normalizeOrigin(rawOrigin);
-    if (!requestOrigin || !allowedOrigins.has(requestOrigin)) {
-      return callback(new Error(`Origin ${rawOrigin} no permitido por CORS`));
+    if (!requestOrigin) {
+      return callback(corsDenied());
     }
 
-    return callback(null, {
-      origin: true,
-      credentials: Boolean(trustedPanelOrigin && requestOrigin === trustedPanelOrigin),
-    });
+    // Authenticated panel origin remains an independent, server-controlled
+    // credentialed policy even when the target route is also public/headless.
+    if (trustedPanelOrigin && requestOrigin === trustedPanelOrigin) {
+      return callback(null, { origin: true, credentials: true });
+    }
+
+    if (isDynamicPublicHeadlessRoute(req)) {
+      return publicOriginHasFreshTrust({ origin: requestOrigin })
+        .then((eligible) => {
+          if (!eligible) return callback(corsDenied());
+          return callback(null, { origin: true, credentials: false });
+        })
+        .catch(() => callback(corsDenied()));
+    }
+
+    if (!compatibilityOrigins.has(requestOrigin)) {
+      return callback(corsDenied());
+    }
+
+    return callback(null, { origin: true, credentials: false });
   }),
 );
 

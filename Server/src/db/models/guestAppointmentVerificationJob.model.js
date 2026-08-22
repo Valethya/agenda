@@ -44,6 +44,17 @@ const guestAppointmentVerificationJobSchema = new mongoose.Schema(
       default: 1,
       required: true,
     },
+    // Snapshot attached only after the worker resolves a fresh tenant-scoped
+    // publicWeb trust. Queued intents deliberately carry no implicit fallback.
+    publicWebTrustGeneration: {
+      type: Number,
+      min: 1,
+      default: null,
+    },
+    trustedOrigin: {
+      type: String,
+      default: null,
+    },
     nextEligibleAt: {
       type: Date,
       required: true,

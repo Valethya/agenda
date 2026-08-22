@@ -10,6 +10,7 @@ import {
   GUEST_APPOINTMENT_IMPLEMENTED_PURPOSE_TO_ACTION,
 } from "../security/guestAppointmentCapability.constants.js";
 import { GUEST_APPOINTMENT_ARTIFACT_RETENTION_MS } from "../security/guestAppointmentArtifactRetention.constants.js";
+import { normalizePublicWebsiteUrl } from "../security/publicWebOrigin.js";
 
 const OBJECT_ID_HEX_PATTERN = /^[0-9a-fA-F]{24}$/u;
 
@@ -53,6 +54,11 @@ const requireGeneration = (value) => {
   return value;
 };
 
+const requirePublicWebGeneration = (value) => {
+  if (!Number.isInteger(value) || value < 1) throw new TypeError("publicWebTrustGeneration inválido");
+  return value;
+};
+
 const scope = ({ verificationId, jobId, jobGeneration, businessId, appointmentId, purpose, action }) => {
   const scopedPurpose = requirePurpose(purpose);
   const scopedAction = requireAction(action);
@@ -68,8 +74,20 @@ const scope = ({ verificationId, jobId, jobGeneration, businessId, appointmentId
   };
 };
 
-export const createPending = async ({ verificationId, jobId, jobGeneration, businessId, appointmentId, purpose, action }) => {
+export const createPending = async ({
+  verificationId,
+  jobId,
+  jobGeneration,
+  publicWebTrustGeneration,
+  trustedOrigin,
+  businessId,
+  appointmentId,
+  purpose,
+  action,
+}) => {
   const scoped = scope({ verificationId, jobId, jobGeneration, businessId, appointmentId, purpose, action });
+  const trustGeneration = requirePublicWebGeneration(publicWebTrustGeneration);
+  const origin = normalizePublicWebsiteUrl(trustedOrigin);
   const [appointmentExists, verification, jobExists] = await Promise.all([
     Appointment.exists({ _id: scoped.appointment, business: scoped.business }),
     ClientContactVerification.findOne({
@@ -87,6 +105,8 @@ export const createPending = async ({ verificationId, jobId, jobGeneration, busi
       action: scoped.action,
       status: "processing",
       verification: scoped.verification,
+      publicWebTrustGeneration: trustGeneration,
+      trustedOrigin: origin,
     }),
   ]);
   if (!appointmentExists || !verification || !jobExists) throw new ReferenceError("Delivery scope no disponible");
@@ -94,6 +114,8 @@ export const createPending = async ({ verificationId, jobId, jobGeneration, busi
   const verificationExpiresAt = requireDate(verification.expiresAt, "verification.expiresAt");
   return GuestAppointmentVerificationDelivery.create({
     ...scoped,
+    publicWebTrustGeneration: trustGeneration,
+    trustedOrigin: origin,
     status: "pending",
     deliveredAt: null,
     failedAt: null,

@@ -24,7 +24,6 @@ import {
   guestAppointmentReadExchangeSchema,
 } from "../../src/validations/guestAppointmentCapability.validation.js";
 
-const originalOrigin = process.env.GUEST_APPOINTMENT_ACCESS_ORIGIN;
 const indexByName = (model, name) => model.schema.indexes().find(([, options]) => options.name === name);
 
 test("6.2.5-C2 capability contract", async (t) => {
@@ -50,6 +49,11 @@ test("6.2.5-C2 capability contract", async (t) => {
     assert.equal(GuestAppointmentCapability.schema.path("secret"), undefined);
     assert.equal(GuestAppointmentVerificationDelivery.schema.path("destination"), undefined);
     assert.equal(ClientContactVerification.schema.path("appointment"), undefined);
+
+    assert.equal(GuestAppointmentVerificationDelivery.schema.path("publicWebTrustGeneration").options.required, true);
+    assert.equal(GuestAppointmentVerificationDelivery.schema.path("trustedOrigin").options.required, true);
+    assert.ok(GuestAppointmentVerificationJob.schema.path("publicWebTrustGeneration"));
+    assert.ok(GuestAppointmentVerificationJob.schema.path("trustedOrigin"));
   });
 
   await t.test("C1/C2 proof artifacts have bounded physical retention without changing logical expiry", () => {
@@ -90,7 +94,7 @@ test("6.2.5-C2 capability contract", async (t) => {
     assert.equal(bucketTtl[1].expireAfterSeconds, 0);
   });
 
-  await t.test("sensitive URL origin must be explicit HTTPS without credentials/path/query/hash", () => {
+  await t.test("C2 URL origin is explicit tenant trust and never falls back to environment state", () => {
     for (const value of [
       undefined,
       "http://guest.example.test",
@@ -98,27 +102,32 @@ test("6.2.5-C2 capability contract", async (t) => {
       "https://guest.example.test/path",
       "https://guest.example.test?x=1",
       "https://guest.example.test/#x",
-      " https://guest.example.test",
+      "https://guest.example.test:8443",
     ]) {
-      if (value === undefined) delete process.env.GUEST_APPOINTMENT_ACCESS_ORIGIN;
-      else process.env.GUEST_APPOINTMENT_ACCESS_ORIGIN = value;
-      assert.throws(() => getTrustedGuestAppointmentOrigin(), /Configuración de acceso guest no válida/u);
+      assert.throws(() => getTrustedGuestAppointmentOrigin(value), /Configuración de acceso guest no válida/u);
     }
 
-    process.env.GUEST_APPOINTMENT_ACCESS_ORIGIN = "https://guest.example.test";
-    assert.equal(getTrustedGuestAppointmentOrigin(), "https://guest.example.test");
+    assert.equal(getTrustedGuestAppointmentOrigin("https://guest.example.test:443"), "https://guest.example.test");
 
-    const url = buildGuestAppointmentVerificationUrl({
-      businessId: new mongoose.Types.ObjectId(),
-      appointmentId: new mongoose.Types.ObjectId(),
-      verificationId: new mongoose.Types.ObjectId(),
-      purpose: "appointment-read-bootstrap",
-      challengeSecret: "a".repeat(43),
-    });
-    const parsed = new URL(url);
-    assert.equal(parsed.origin, "https://guest.example.test");
-    assert.equal(parsed.search, "");
-    assert.ok(parsed.hash.includes("challenge="));
+    const previous = process.env.GUEST_APPOINTMENT_ACCESS_ORIGIN;
+    process.env.GUEST_APPOINTMENT_ACCESS_ORIGIN = "https://attacker.example.test";
+    try {
+      const url = buildGuestAppointmentVerificationUrl({
+        trustedOrigin: "https://tenant.example.test",
+        businessId: new mongoose.Types.ObjectId(),
+        appointmentId: new mongoose.Types.ObjectId(),
+        verificationId: new mongoose.Types.ObjectId(),
+        purpose: "appointment-read-bootstrap",
+        challengeSecret: "a".repeat(43),
+      });
+      const parsed = new URL(url);
+      assert.equal(parsed.origin, "https://tenant.example.test");
+      assert.equal(parsed.search, "");
+      assert.ok(parsed.hash.includes("challenge="));
+    } finally {
+      if (previous === undefined) delete process.env.GUEST_APPOINTMENT_ACCESS_ORIGIN;
+      else process.env.GUEST_APPOINTMENT_ACCESS_ORIGIN = previous;
+    }
   });
 
   await t.test("HTTP schemas require explicit businessId and reject authority/destination injection", () => {
@@ -144,9 +153,4 @@ test("6.2.5-C2 capability contract", async (t) => {
       params: {},
     }).success, false);
   });
-});
-
-test.after(() => {
-  if (originalOrigin === undefined) delete process.env.GUEST_APPOINTMENT_ACCESS_ORIGIN;
-  else process.env.GUEST_APPOINTMENT_ACCESS_ORIGIN = originalOrigin;
 });

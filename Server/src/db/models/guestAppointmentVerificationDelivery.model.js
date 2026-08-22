@@ -25,6 +25,15 @@ const guestAppointmentVerificationDeliverySchema = new mongoose.Schema(
       min: 1,
       required: true,
     },
+    publicWebTrustGeneration: {
+      type: Number,
+      min: 1,
+      required: true,
+    },
+    trustedOrigin: {
+      type: String,
+      required: true,
+    },
     business: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Business",
@@ -60,8 +69,7 @@ const guestAppointmentVerificationDeliverySchema = new mongoose.Schema(
       default: null,
     },
     // Cleanup deadline derived from the C1 Verification expiry. It is not an
-    // authority deadline; pending/delivered/failed delivery state remains
-    // available through the entire challenge lifetime plus retention window.
+    // authority deadline; publicWeb freshness/generation is always revalidated.
     purgeAfter: {
       type: Date,
       required: true,

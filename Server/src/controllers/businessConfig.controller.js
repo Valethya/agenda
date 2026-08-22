@@ -1,4 +1,5 @@
 import * as businessConfigService from "../services/businessConfig.service.js";
+import * as publicWebService from "../services/publicWeb.service.js";
 import * as superadminService from "../services/superadmin.service.js";
 
 // Obtener la configuración operacional actual del negocio (surface interna).
@@ -26,6 +27,60 @@ export const updateBusinessConfig = async (req, res, next) => {
       message: "Configuración del negocio actualizada exitosamente",
       payload: updatedConfig,
     });
+  } catch (error) {
+    next(error);
+  }
+};
+
+const publicWebResponse = (res, publicWeb) => res.status(200).json({
+  status: "success",
+  payload: { publicWeb },
+});
+
+export const configurePublicWeb = async (req, res, next) => {
+  try {
+    const publicWeb = await publicWebService.configurePublicWeb({
+      businessId: req.businessId,
+      websiteUrl: req.publicWebInput.websiteUrl,
+      bookingUrl: req.publicWebInput.bookingUrl,
+    });
+    publicWebResponse(res, publicWeb);
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const verifyPublicWeb = async (req, res, next) => {
+  try {
+    const publicWeb = await publicWebService.verifyPublicWeb({ businessId: req.businessId });
+    publicWebResponse(res, publicWeb);
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const reverifyPublicWeb = async (req, res, next) => {
+  try {
+    const publicWeb = await publicWebService.reverifyPublicWeb({ businessId: req.businessId });
+    publicWebResponse(res, publicWeb);
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const rotatePublicWebChallenge = async (req, res, next) => {
+  try {
+    const publicWeb = await publicWebService.rotatePublicWebChallenge({ businessId: req.businessId });
+    publicWebResponse(res, publicWeb);
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const deletePublicWeb = async (req, res, next) => {
+  try {
+    const publicWeb = await publicWebService.deletePublicWeb({ businessId: req.businessId });
+    publicWebResponse(res, publicWeb);
   } catch (error) {
     next(error);
   }
