@@ -3,10 +3,17 @@ import logger from "../config/logger.js";
 import * as appointmentRepository from "../repositories/appointment.repository.js";
 import * as deliveryRepository from "../repositories/guestAppointmentVerificationDelivery.repository.js";
 import * as jobRepository from "../repositories/guestAppointmentVerificationJob.repository.js";
+import * as publicWebJobRepository from "../repositories/guestAppointmentPublicWeb.repository.js";
 import {
   issueVerificationForBusiness,
   revokeVerificationForBusiness,
 } from "./clientContactVerification.service.js";
+import {
+  acquirePublicWebSendFence,
+  confirmPublicWebSendFence,
+  releasePublicWebSendFence,
+  resolveFreshPublicWebTrust,
+} from "./publicWeb.service.js";
 import { sendGuestAppointmentVerificationEmail } from "./email/emailService.js";
 import { buildGuestAppointmentVerificationUrl } from "../security/guestAppointmentAccessUrl.js";
 import {
@@ -79,6 +86,17 @@ const cleanupStaleArtifacts = async ({ job, now }) => {
   await revokeQuietly({ verificationId: job.verification, businessId: job.business });
 };
 
+const failJob = async ({ job, workerId, now }) => {
+  try {
+    await jobRepository.markFailed({
+      jobId: job._id,
+      generation: job.generation,
+      workerId,
+      now,
+    });
+  } catch {}
+};
+
 const reconcileOneUnknownDelivery = async (now) => {
   const stale = await jobRepository.failOneStaleDelivery({ now });
   if (!stale) return false;
@@ -91,6 +109,8 @@ export const processNextGuestAppointmentVerificationJob = async ({
   workerId,
   deliverVerification = sendGuestAppointmentVerificationEmail,
   now = new Date(),
+  beforeSendAuthorization = null,
+  beforeExternalSend = null,
 }) => {
   await reconcileOneUnknownDelivery(now);
 
@@ -106,7 +126,25 @@ export const processNextGuestAppointmentVerificationJob = async ({
 
   let issued = null;
   let delivery = null;
+  let fence = null;
   try {
+    // 6.2.6-B cutover: no C1 artifact is issued until the Business itself owns
+    // a fresh verified publicWeb trust. No environment fallback exists.
+    const trust = await resolveFreshPublicWebTrust({ businessId: job.business, now });
+    if (!trust) {
+      await failJob({ job, workerId, now: new Date() });
+      return { status: "failed", jobId: job._id };
+    }
+
+    const trustAttached = await publicWebJobRepository.attachPublicWebTrust({
+      jobId: job._id,
+      jobGeneration: job.generation,
+      workerId,
+      publicWebTrustGeneration: trust.trustGeneration,
+      trustedOrigin: trust.origin,
+    });
+    if (!trustAttached) throw new Error("JOB_OWNERSHIP_LOST");
+
     const appointment = await appointmentRepository.findGuestCapabilityBootstrapByIdAndBusiness(
       job.appointment,
       job.business,
@@ -116,13 +154,8 @@ export const processNextGuestAppointmentVerificationJob = async ({
       : null;
 
     if (!destination) {
-      await jobRepository.markFailed({
-        jobId: job._id,
-        generation: job.generation,
-        workerId,
-        now: new Date(),
-      });
-      return { status: "failed" };
+      await failJob({ job, workerId, now: new Date() });
+      return { status: "failed", jobId: job._id };
     }
 
     issued = await issueVerificationForBusiness({
@@ -144,6 +177,8 @@ export const processNextGuestAppointmentVerificationJob = async ({
       verificationId: issued.verificationId,
       jobId: job._id,
       jobGeneration: job.generation,
+      publicWebTrustGeneration: trust.trustGeneration,
+      trustedOrigin: trust.origin,
       businessId: job.business,
       appointmentId: job.appointment,
       purpose: PURPOSE,
@@ -160,6 +195,7 @@ export const processNextGuestAppointmentVerificationJob = async ({
     if (!deliveryAttached) throw new Error("JOB_OWNERSHIP_LOST");
 
     const accessUrl = buildGuestAppointmentVerificationUrl({
+      trustedOrigin: trust.origin,
       businessId: job.business,
       appointmentId: job.appointment,
       verificationId: issued.verificationId,
@@ -177,11 +213,40 @@ export const processNextGuestAppointmentVerificationJob = async ({
     });
     if (!delivering) throw new Error("JOB_OWNERSHIP_LOST");
 
-    const accepted = await deliverVerification({
-      destination: issued.destination,
+    // Tests can pause here to prove that a revocation that linearizes before the
+    // fence is acquired prevents any outbound side effect.
+    if (beforeSendAuthorization) await beforeSendAuthorization({ job, trust, delivery });
+
+    fence = await acquirePublicWebSendFence({
       businessId: job.business,
-      accessUrl,
+      trust,
+      now: new Date(),
     });
+    if (!fence) throw new Error("PUBLIC_WEB_SEND_FENCE_UNAVAILABLE");
+
+    if (beforeExternalSend) await beforeExternalSend({ job, trust, delivery, fence });
+
+    // This is the exact send authorization boundary. Admin revocations require
+    // absence/expiry of this persisted fence, so once confirmed they cannot
+    // linearize until the outbound call has begun or the fence is released.
+    const sendAuthorized = await confirmPublicWebSendFence({
+      businessId: job.business,
+      fence,
+      now: new Date(),
+    });
+    if (!sendAuthorized) throw new Error("PUBLIC_WEB_SEND_AUTHORITY_LOST");
+
+    let accepted;
+    try {
+      accepted = await deliverVerification({
+        destination: issued.destination,
+        businessId: job.business,
+        accessUrl,
+      });
+    } finally {
+      await releasePublicWebSendFence({ businessId: job.business, fence });
+      fence = null;
+    }
     if (!accepted) throw new Error("DELIVERY_REJECTED");
 
     const deliveredAt = new Date();
@@ -213,6 +278,9 @@ export const processNextGuestAppointmentVerificationJob = async ({
 
     return { status: "delivered", jobId: job._id };
   } catch {
+    if (fence) {
+      try { await releasePublicWebSendFence({ businessId: job.business, fence }); } catch {}
+    }
     const failedAt = new Date();
     await failDeliveryQuietly({
       job,
@@ -221,14 +289,7 @@ export const processNextGuestAppointmentVerificationJob = async ({
       now: failedAt,
     });
     await revokeQuietly({ verificationId: issued?.verificationId, businessId: job.business });
-    try {
-      await jobRepository.markFailed({
-        jobId: job._id,
-        generation: job.generation,
-        workerId,
-        now: failedAt,
-      });
-    } catch {}
+    await failJob({ job, workerId, now: failedAt });
     logger.warn("Guest appointment verification job failed closed.");
     return { status: "failed", jobId: job._id };
   }
