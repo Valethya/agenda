@@ -18,6 +18,13 @@ const paymentSchema = new mongoose.Schema(
       required: [true, "El monto del pago es obligatorio"],
       min: [1, "El monto mínimo es de 1"],
     },
+    // Snapshot reportado por el gateway cuando existe una autorización externa.
+    // Nunca reemplaza `amount`, que conserva el monto esperado de la transacción local.
+    authorizedAmount: {
+      type: Number,
+      min: [1, "El monto autorizado mínimo es de 1"],
+      default: undefined,
+    },
     currency: {
       type: String,
       default: "CLP",
@@ -52,7 +59,7 @@ const paymentSchema = new mongoose.Schema(
     },
     reconciliationReason: {
       type: String,
-      enum: ["appointment_state_changed", "interval_conflict"],
+      enum: ["appointment_state_changed", "interval_conflict", "amount_mismatch"],
       default: undefined,
     },
     authorizedAt: {
