@@ -6,7 +6,12 @@ import * as capabilityRepository from "../repositories/guestAppointmentCapabilit
 import * as jobRepository from "../repositories/guestAppointmentVerificationJob.repository.js";
 import * as publicWebJobRepository from "../repositories/guestAppointmentPublicWeb.repository.js";
 import { consumeExactVerificationForBusiness } from "./clientContactVerification.service.js";
-import { resolveFreshPublicWebTrust } from "./publicWeb.service.js";
+import {
+  acquirePublicWebSendFence,
+  confirmPublicWebSendFence,
+  releasePublicWebSendFence,
+  resolveFreshPublicWebTrust,
+} from "./publicWeb.service.js";
 import {
   GUEST_APPOINTMENT_IMPLEMENTED_PURPOSE_TO_ACTION,
   GUEST_APPOINTMENT_PURPOSES,
@@ -76,15 +81,15 @@ export const requestGuestAppointmentReadChallenge = async ({ businessId, appoint
   return ACCEPTED;
 };
 
-const deliveryHasCurrentPublicWebTrust = async ({ delivered, business, appointment }) => {
+const resolveDeliveryPublicWebTrust = async ({ delivered, business, appointment }) => {
   const trust = await resolveFreshPublicWebTrust({ businessId: business, now: new Date() });
   if (
     !trust
     || delivered.publicWebTrustGeneration !== trust.trustGeneration
     || delivered.trustedOrigin !== trust.origin
-  ) return false;
+  ) return null;
 
-  return publicWebJobRepository.deliveredJobTrustMatches({
+  const jobMatches = await publicWebJobRepository.deliveredJobTrustMatches({
     jobId: delivered.job,
     jobGeneration: delivered.jobGeneration,
     businessId: business,
@@ -92,6 +97,7 @@ const deliveryHasCurrentPublicWebTrust = async ({ delivered, business, appointme
     publicWebTrustGeneration: delivered.publicWebTrustGeneration,
     trustedOrigin: delivered.trustedOrigin,
   });
+  return jobMatches ? trust : null;
 };
 
 export const exchangeGuestAppointmentReadChallenge = async ({
@@ -127,7 +133,7 @@ export const exchangeGuestAppointmentReadChallenge = async ({
   if (!trustedJob) throw invalidProof();
 
   // First publicWeb check is before consuming the single-use C1 proof.
-  if (!await deliveryHasCurrentPublicWebTrust({ delivered, business, appointment })) {
+  if (!await resolveDeliveryPublicWebTrust({ delivered, business, appointment })) {
     throw invalidProof();
   }
 
@@ -142,16 +148,29 @@ export const exchangeGuestAppointmentReadChallenge = async ({
     throw invalidProof();
   }
 
-  // Re-read immediately before capability creation. Expiry, delete, reverify or
-  // origin/generation change between the two boundaries fails closed with the
-  // same guest-facing invalid-proof code.
-  if (!await deliveryHasCurrentPublicWebTrust({ delivered, business, appointment })) {
-    throw invalidProof();
-  }
+  // Re-read before mint and acquire the same persisted authority fence used by
+  // delivery. This closes the revocation TOCTOU between the second read and the
+  // capability insert: a revocation cannot confirm while the fence is current.
+  const currentTrust = await resolveDeliveryPublicWebTrust({ delivered, business, appointment });
+  if (!currentTrust) throw invalidProof();
+
+  const fence = await acquirePublicWebSendFence({
+    businessId: business,
+    trust: currentTrust,
+    now: new Date(),
+  });
+  if (!fence) throw invalidProof();
 
   const secret = crypto.randomBytes(32).toString("base64url");
   const expiresAt = new Date(Date.now() + CAPABILITY_TTL_MS);
   try {
+    const stillAuthorized = await confirmPublicWebSendFence({
+      businessId: business,
+      fence,
+      now: new Date(),
+    });
+    if (!stillAuthorized) throw invalidProof();
+
     const capability = await capabilityRepository.createActiveForScope({
       businessId: business,
       appointmentId: appointment,
@@ -171,6 +190,8 @@ export const exchangeGuestAppointmentReadChallenge = async ({
     };
   } catch {
     throw invalidProof();
+  } finally {
+    try { await releasePublicWebSendFence({ businessId: business, fence }); } catch {}
   }
 };
 
