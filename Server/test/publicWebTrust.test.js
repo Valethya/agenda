@@ -61,13 +61,22 @@ const assertCode = async (promise, code) => assert.rejects(
   (error) => error?.code === code,
 );
 
+// Reuse successful sessions inside this mixed-boundary suite so authLimiter is
+// not accidentally the object under test. Failed login attempts are never cached.
+// The superadmin case runs in its own process/suite with the real limiter intact.
+const successfulLogins = new Map();
 const login = async (email, password) => {
+  const key = `${email}\0${password}`;
+  if (successfulLogins.has(key)) return successfulLogins.get(key);
+
   const response = await fetch(`${baseUrl}/login`, {
     method: "POST",
     headers: { "Content-Type": "application/json", Origin: panelOrigin },
     body: JSON.stringify({ email, password }),
   });
-  return { response, cookie: response.headers.get("set-cookie") };
+  const result = { response, cookie: response.headers.get("set-cookie") };
+  if ([200, 201].includes(response.status)) successfulLogins.set(key, result);
+  return result;
 };
 
 const configureHttp = async (cookie, body, origin = panelOrigin) => fetch(`${baseUrl}/business-settings/public-web`, {
@@ -327,7 +336,7 @@ test("6.2.6-B public web trust lifecycle and browser boundary", async (t) => {
     assert.equal(repeatedDeleteAgain.trustGeneration, repeatedDelete.trustGeneration);
   });
 
-  await t.test("HTTP authority is Membership-admin + trusted panel origin, not legacy owner/role/superadmin", async () => {
+  await t.test("HTTP authority is Membership-admin + trusted panel origin, not legacy owner/role", async () => {
     await ensureUnconfigured(seed.business._id);
     await ensureUnconfigured(seed.businessB._id);
 
@@ -378,24 +387,6 @@ test("6.2.6-B public web trust lifecycle and browser boundary", async (t) => {
     await seed.business.updateOne({ $set: { owner: owner._id } });
     const ownerLogin = await login(owner.email[0], "owner-no-membership");
     assert.equal(ownerLogin.response.status, 401);
-
-    const superPassword = await createHash("super-no-membership");
-    const superadmin = await User.create({
-      firstName: "Super",
-      lastName: "NoMembership",
-      email: [`super-no-membership-${Date.now()}@example.test`],
-      phone: [],
-      password: superPassword,
-      role: "superadmin",
-      isActive: true,
-    });
-    const superLogin = await login(superadmin.email[0], "super-no-membership");
-    assert.ok([200, 201].includes(superLogin.response.status));
-    const superDenied = await configureHttp(superLogin.cookie, {
-      websiteUrl: "https://superadmin-is-not-tenant-admin.example.test",
-      bookingUrl: "https://superadmin-is-not-tenant-admin.example.test/reservar",
-    });
-    assert.equal(superDenied.status, 403);
   });
 
   await t.test("preflight eligibility is credentialless and independent of future tenant values", async () => {
@@ -438,14 +429,14 @@ test("6.2.6-B public web trust lifecycle and browser boundary", async (t) => {
     });
     assert.equal(responseA.status, 200);
     const bodyA = await responseA.json();
-    assert.ok(bodyA.payload.some((service) => service._id === seed.service._id.toString()));
+    assert.ok(bodyA.payload.some((service) => service.id === seed.service._id.toString()));
 
     const responseB = await fetch(`${baseUrl}/services?businessId=${seed.businessB._id}`, {
       headers: { Origin: sharedOrigin },
     });
     assert.equal(responseB.status, 200);
     const bodyB = await responseB.json();
-    assert.equal(bodyB.payload.some((service) => service._id === seed.service._id.toString()), false);
+    assert.equal(bodyB.payload.some((service) => service.id === seed.service._id.toString()), false);
   });
 
   await t.test("preflight grant never substitutes actual Business binding and mismatch mutates nothing", async () => {
