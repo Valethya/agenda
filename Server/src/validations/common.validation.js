@@ -195,5 +195,5 @@ export const configurePublicWebSchema = z.object({
 });
 
 export const emptyPublicWebCommandSchema = z.object({
-  body: z.object({}).strict(),
+  body: z.object({}).strict().optional().default({}),
 });
