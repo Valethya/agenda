@@ -2,6 +2,7 @@ import * as businessConfigRepository from "../repositories/businessConfig.reposi
 import * as businessRepository from "../repositories/business.repository.js";
 import { DEFAULT_SLOT_DURATION_MINUTES } from "../config/businessConfig.defaults.js";
 import { NotFoundError } from "../utils/appError.js";
+import { serializePublicWebState } from "../security/publicWebState.js";
 
 // Datos por defecto para inicializar la configuración si la DB está vacía.
 // slotDuration se comparte con schema + Availability mediante un único default.
@@ -59,6 +60,7 @@ const createDefaults = (businessName = "Agenda") => {
       professionalRoleLabelPlural: "Profesionales",
       enabledNavItems: ["calendario", "horarios", "clientes", "servicios", "equipo", "reportes"],
     },
+    publicWeb: null,
   };
 };
 
@@ -84,6 +86,8 @@ const serializeWorkingHours = (workingHours = []) => workingHours.map((entry) =>
 
 // GET /business-settings devuelve siempre este DTO estable; detalles físicos de
 // Mongoose (_id de subdocs, timestamps, existencia del documento) no cambian la forma.
+// publicWeb expone sólo la proyección operacional segura: nunca challengeHash,
+// raw secret, attemptGeneration ni authorityFence.
 const serializeConfigPayload = (config) => ({
   businessName: config.businessName,
   business: asBusinessSummary(config.business),
@@ -115,6 +119,7 @@ const serializeConfigPayload = (config) => ({
     enabledNavItems: config.uiSettings?.enabledNavItems
       ?? ["calendario", "horarios", "clientes", "servicios", "equipo", "reportes"],
   },
+  publicWeb: serializePublicWebState(config.publicWeb),
 });
 
 // GET/read path: devuelve una proyección de defaults si aún no existe documento,
