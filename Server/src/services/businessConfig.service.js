@@ -60,7 +60,6 @@ const createDefaults = (businessName = "Agenda") => {
       professionalRoleLabelPlural: "Profesionales",
       enabledNavItems: ["calendario", "horarios", "clientes", "servicios", "equipo", "reportes"],
     },
-    publicWeb: null,
   };
 };
 
