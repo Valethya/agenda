@@ -1,6 +1,6 @@
 # Fase 6.2.6-A — Contrato headless público mínimo
 
-**Estado:** hardening de la revisión adversarial implementado; pendiente nueva revisión adversarial  
+**Estado:** revisión adversarial completada; HEAD técnico `e85a00d361d60df349030bc43a274c2433dd4e0a` aprobado; CI #286 `success`; 6.2.6-A técnicamente cerrada; PR #30 Ready y pendiente únicamente de autorización explícita de merge  
 **Fecha:** 22 de agosto de 2026  
 **Baseline verificada:** `master@3f2ab734d412828f5a77ec72b778a8d575a14cd4`  
 **Precedente:** PR #29 / 6.2.5-C2 merged en esa baseline  
@@ -399,6 +399,6 @@ Permanece fuera de 6.2.6-A:
 
 ## 15. Estado de cierre de este PR
 
-El PR debe permanecer **Draft** hasta una nueva revisión adversarial.
+La revisión adversarial de 6.2.6-A está completada sobre el HEAD técnico aprobado `e85a00d361d60df349030bc43a274c2433dd4e0a`, con CI #286 `success`. 6.2.6-A queda técnicamente cerrada y PR #30 permanece Ready, pendiente únicamente de autorización explícita de merge.
 
-Este documento describe exclusivamente 6.2.6-A y **no declara cerrada toda 6.2.6**.
+Este documento describe exclusivamente 6.2.6-A y **no declara cerrada toda 6.2.6**. No se inicia 6.2.6-B ni 6.3; la deuda de la sección 14 permanece fuera de alcance.
