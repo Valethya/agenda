@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import mongoose from "mongoose";
 import { connectDB } from "../src/db/db.js";
 import Business from "../src/db/models/business.model.js";
+import BusinessConfig from "../src/db/models/businessConfig.model.js";
 import User from "../src/db/models/user.model.js";
 import Service from "../src/db/models/service.model.js";
 import Appointment from "../src/db/models/appointment.model.js";
@@ -15,6 +16,7 @@ import GuestAppointmentCapability from "../src/db/models/guestAppointmentCapabil
 import * as deliveryRepository from "../src/repositories/guestAppointmentVerificationDelivery.repository.js";
 import * as capabilityRepository from "../src/repositories/guestAppointmentCapability.repository.js";
 import * as jobRepository from "../src/repositories/guestAppointmentVerificationJob.repository.js";
+import * as publicWebJobRepository from "../src/repositories/guestAppointmentPublicWeb.repository.js";
 import {
   consumeGuestAppointmentReadCapability,
   exchangeGuestAppointmentReadChallenge,
@@ -23,12 +25,44 @@ import {
 import { processNextGuestAppointmentVerificationJob } from "../src/services/guestAppointmentVerification.worker.js";
 import { issueVerificationForBusiness } from "../src/services/clientContactVerification.service.js";
 
-process.env.GUEST_APPOINTMENT_ACCESS_ORIGIN = "https://guest-access.example.test";
 await connectDB();
 
 const suffix = `${Date.now()}-${process.pid}`;
 const businessA = await Business.create({ name: `C2 A ${suffix}`, slug: `c2-a-${suffix}` });
 const businessB = await Business.create({ name: `C2 B ${suffix}`, slug: `c2-b-${suffix}` });
+const originA = "https://guest-a.example.test";
+const originB = "https://guest-b.example.test";
+const trustValidUntil = new Date("2200-01-01T00:00:00.000Z");
+await BusinessConfig.create([
+  {
+    business: businessA._id,
+    businessName: businessA.name,
+    publicWeb: {
+      websiteUrl: originA,
+      bookingUrl: `${originA}/reservar`,
+      verificationStatus: "verified",
+      verifiedOrigin: originA,
+      verifiedAt: new Date("2026-01-01T00:00:00.000Z"),
+      verificationValidUntil: trustValidUntil,
+      trustGeneration: 1,
+      verificationAttemptGeneration: 1,
+    },
+  },
+  {
+    business: businessB._id,
+    businessName: businessB.name,
+    publicWeb: {
+      websiteUrl: originB,
+      bookingUrl: `${originB}/reservar`,
+      verificationStatus: "verified",
+      verifiedOrigin: originB,
+      verifiedAt: new Date("2026-01-01T00:00:00.000Z"),
+      verificationValidUntil: trustValidUntil,
+      trustGeneration: 1,
+      verificationAttemptGeneration: 1,
+    },
+  },
+]);
 const clientA = await User.create({
   firstName: "Guest",
   lastName: "A",
@@ -234,7 +268,7 @@ test("6.2.5-C2 verified guest Appointment READ capability uses durable delivery"
 
     const { transportPayload, fragment, url } = await deliveredProof(appointment);
     assert.equal(transportPayload.destination, snapshotDestination);
-    assert.equal(url.origin, process.env.GUEST_APPOINTMENT_ACCESS_ORIGIN);
+    assert.equal(url.origin, originA);
     assert.equal(url.search, "");
     assert.equal(fragment.get("businessId"), businessA._id.toString());
     assert.equal(fragment.get("appointmentId"), appointment._id.toString());
@@ -251,6 +285,10 @@ test("6.2.5-C2 verified guest Appointment READ capability uses durable delivery"
     assert.notEqual(persisted.secretHash, challenge);
     assert.equal(delivery.status, "delivered");
     assert.equal(delivery.jobGeneration, job.generation);
+    assert.equal(delivery.publicWebTrustGeneration, 1);
+    assert.equal(delivery.trustedOrigin, originA);
+    assert.equal(job.publicWebTrustGeneration, 1);
+    assert.equal(job.trustedOrigin, originA);
     assert.equal(job.status, "delivered");
     assert.ok(job.purgeAfter instanceof Date);
     assert.ok(job.purgeAfter.getTime() >= job.nextEligibleAt.getTime());
@@ -482,7 +520,16 @@ test("6.2.5-C2 verified guest Appointment READ capability uses durable delivery"
       action: "read",
       now: start,
     });
-    const job = await jobRepository.claimNext({ workerId: `deliver-owner-${suffix}`, now: start, leaseMs: 1000 });
+    const deliveryOwner = `deliver-owner-${suffix}`;
+    const job = await jobRepository.claimNext({ workerId: deliveryOwner, now: start, leaseMs: 1000 });
+    const trustAttached = await publicWebJobRepository.attachPublicWebTrust({
+      jobId: job._id,
+      jobGeneration: job.generation,
+      workerId: deliveryOwner,
+      publicWebTrustGeneration: 1,
+      trustedOrigin: originA,
+    });
+    assert.ok(trustAttached);
     const issued = await issueVerificationForBusiness({
       businessId: businessA._id,
       destination: `stale-delivery-${suffix}@example.com`,
@@ -491,13 +538,15 @@ test("6.2.5-C2 verified guest Appointment READ capability uses durable delivery"
     await jobRepository.attachVerification({
       jobId: job._id,
       generation: job.generation,
-      workerId: `deliver-owner-${suffix}`,
+      workerId: deliveryOwner,
       verificationId: issued.verificationId,
     });
     const delivery = await deliveryRepository.createPending({
       verificationId: issued.verificationId,
       jobId: job._id,
       jobGeneration: job.generation,
+      publicWebTrustGeneration: 1,
+      trustedOrigin: originA,
       businessId: businessA._id,
       appointmentId: deliveringAppointment._id,
       purpose: "appointment-read-bootstrap",
@@ -506,14 +555,14 @@ test("6.2.5-C2 verified guest Appointment READ capability uses durable delivery"
     await jobRepository.attachDelivery({
       jobId: job._id,
       generation: job.generation,
-      workerId: `deliver-owner-${suffix}`,
+      workerId: deliveryOwner,
       verificationId: issued.verificationId,
       deliveryId: delivery._id,
     });
     await jobRepository.beginDelivery({
       jobId: job._id,
       generation: job.generation,
-      workerId: `deliver-owner-${suffix}`,
+      workerId: deliveryOwner,
       verificationId: issued.verificationId,
       deliveryId: delivery._id,
       now: start,
@@ -666,6 +715,7 @@ test.after(async () => {
   await GuestAppointmentIntakeBucket.deleteMany({ _id: /^guest-appointment-read:/u });
   await Appointment.deleteMany({ business: { $in: [businessA._id, businessB._id] } });
   await Service.deleteMany({ business: { $in: [businessA._id, businessB._id] } });
+  await BusinessConfig.deleteMany({ business: { $in: [businessA._id, businessB._id] } });
   await User.deleteMany({ _id: { $in: [clientA._id, clientB._id, workerA._id, workerB._id] } });
   await Business.deleteMany({ _id: { $in: [businessA._id, businessB._id] } });
   await mongoose.disconnect();
