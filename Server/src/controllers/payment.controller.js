@@ -100,13 +100,13 @@ export const webpayReturn = async (req, res, next) => {
       })
     );
   } catch (error) {
-    // Redirección por error técnico/servidor
+    // Los detalles técnicos quedan exclusivamente en logs internos de paymentService.
+    // El navegador recibe un reason estable y no controlado por error.message.
     const token = req.body?.token_ws || req.query?.token_ws || req.body?.TBK_TOKEN || req.query?.TBK_TOKEN;
     const businessSlug = await resolveBusinessSlug(token);
     return res.redirect(
       buildFrontendRedirect("/payment-failed", {
         reason: "server_error",
-        message: error.message,
         slug: businessSlug,
       })
     );
