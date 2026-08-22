@@ -2,8 +2,13 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import BusinessConfig from "../../src/db/models/businessConfig.model.js";
 import {
+  PUBLIC_WEB_AUTHORITY_FENCE_TTL_MS,
   PUBLIC_WEB_CHALLENGE_TTL_MS,
+  PUBLIC_WEB_CORS_LOOKUP_RATE_LIMIT,
+  PUBLIC_WEB_CORS_LOOKUP_RATE_WINDOW_MS,
   PUBLIC_WEB_DNS_TIMEOUT_MS,
+  PUBLIC_WEB_VERIFICATION_RATE_LIMIT,
+  PUBLIC_WEB_VERIFICATION_RATE_WINDOW_MS,
   PUBLIC_WEB_VERIFIED_TRUST_TTL_MS,
 } from "../../src/config/publicWeb.constants.js";
 import {
@@ -13,6 +18,7 @@ import {
   normalizePublicWebPair,
 } from "../../src/security/publicWebOrigin.js";
 import { serializePublicWebState } from "../../src/security/publicWebState.js";
+import { buildFreshTrustForOriginPipeline } from "../../src/repositories/businessConfig.repository.js";
 import {
   configurePublicWebSchema,
   emptyPublicWebCommandSchema,
@@ -20,10 +26,15 @@ import {
 } from "../../src/validations/common.validation.js";
 
 test("6.2.6-B public web contract", async (t) => {
-  await t.test("TTL domains remain explicit and distinct", () => {
+  await t.test("TTL, timeout, rate and fence domains remain explicit and distinct", () => {
     assert.equal(PUBLIC_WEB_CHALLENGE_TTL_MS, 15 * 60 * 1000);
     assert.equal(PUBLIC_WEB_VERIFIED_TRUST_TTL_MS, 30 * 24 * 60 * 60 * 1000);
     assert.equal(PUBLIC_WEB_DNS_TIMEOUT_MS, 3000);
+    assert.equal(PUBLIC_WEB_VERIFICATION_RATE_WINDOW_MS, 15 * 60 * 1000);
+    assert.equal(PUBLIC_WEB_VERIFICATION_RATE_LIMIT, 20);
+    assert.equal(PUBLIC_WEB_CORS_LOOKUP_RATE_WINDOW_MS, 15 * 60 * 1000);
+    assert.equal(PUBLIC_WEB_CORS_LOOKUP_RATE_LIMIT, 200);
+    assert.equal(PUBLIC_WEB_AUTHORITY_FENCE_TTL_MS, 2 * 60 * 1000);
     assert.notEqual(PUBLIC_WEB_CHALLENGE_TTL_MS, PUBLIC_WEB_VERIFIED_TRUST_TTL_MS);
   });
 
@@ -103,6 +114,20 @@ test("6.2.6-B public web contract", async (t) => {
     const originIndex = BusinessConfig.schema.indexes().find(([fields]) => fields["publicWeb.verifiedOrigin"] === 1);
     assert.ok(originIndex);
     assert.notEqual(originIndex[1].unique, true);
+  });
+
+  await t.test("fresh-origin preflight lookup is existence-oriented and bounded to one result", () => {
+    const now = new Date("2035-01-01T00:00:00.000Z");
+    const pipeline = buildFreshTrustForOriginPipeline({
+      origin: "https://shared.example.test",
+      now,
+    });
+    const limitStage = pipeline.find((stage) => Object.hasOwn(stage, "$limit"));
+    assert.deepEqual(limitStage, { $limit: 1 });
+    assert.equal(pipeline.some((stage) => Object.hasOwn(stage, "$lookup")), true);
+    assert.equal(pipeline.some((stage) => stage.$match?.["activeBusiness.isActive"] === true), true);
+    assert.equal(pipeline[0].$match["publicWeb.verifiedOrigin"], "https://shared.example.test");
+    assert.deepEqual(pipeline[0].$match["publicWeb.verificationValidUntil"], { $gt: now });
   });
 
   await t.test("read projection never exposes challenge hash, attempt generation or fence", () => {
