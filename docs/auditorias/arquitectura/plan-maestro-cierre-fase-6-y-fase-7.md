@@ -1,10 +1,10 @@
 # Plan maestro de cierre de Fase 6 y estado de Fase 7
 
 **Proyecto:** ATMÓSFERA Agenda
-**Estado del documento:** Plan histórico vigente; 6.2.6-A está fusionada y 6.2.6-B está implementada funcionalmente en PR #32 Draft, con correcciones adversariales y CI de runtime verde. Permanece pendiente una nueva revisión adversarial independiente y no se declara 6.2.6 completa cerrada.
+**Estado del documento:** Plan histórico vigente; esta revisión registra que 6.2.6-A fue fusionada mediante PR #30, que el contrato 6.2.6-B fue fusionado mediante PR #31 y que la implementación funcional permanece en PR #32 Draft, corregida tras revisión adversarial y pendiente de una nueva revisión independiente. 6.2.6 completa continúa abierta.
 **Fecha original:** 21 de julio de 2026
 **Última revisión:** 22 de agosto de 2026
-**Base funcional 6.2.6-B:** `master@ed7acfd5fed91b03cd65becd2af154f93dad027b`, merge aprobado de PR #31 / contrato documental 6.2.6-B
+**Base de contraste funcional 6.2.6-B:** `master@ed7acfd5fed91b03cd65becd2af154f93dad027b`, merge aprobado de PR #31 / contrato documental 6.2.6-B
 **Alcance:** Backend, multitenencia, seguridad, pagos, impersonación, frontend, pruebas y operación
 
 ## 1. Objetivo
@@ -34,27 +34,37 @@ No se considerará terminada una tarea solamente porque el código compile. Cada
 | P0 | Autoridad de roles y membresías | `User.role`/`User.business` y `Membership` compiten como fuentes de permisos. |
 | P0 | Impersonación | La sesión principal se reemplaza, todas las pestañas comparten el cambio y la atribución de auditoría es incompleta. |
 | P0 | Pagos y propiedad de citas | El inicio de pago es público y las transiciones distribuidas no son atómicas ni completamente idempotentes. |
-| Cerrado | Pruebas y CI | La etapa 6.1 dejó pruebas de backend, checks de frontend, build y escaneo de secretos como barreras obligatorias de `master`. |
+| Cerrado | Pruebas y CI | La etapa 6.1 dejó 95 pruebas de backend, checks de frontend, build y escaneo de secretos como barreras obligatorias de `master`. |
 | P1 | Sesiones y CSRF | Las cookies cross-site requieren protección explícita para operaciones mutables. |
 | P1 | Dependencias | La auditoría encontró vulnerabilidades conocidas en dependencias directas y transitivas. |
 | Cerrado | Tipado frontend | El PR #15 cerró 7.10 con TypeScript estricto, 0 usos productivos de `any`, checks y build en CI. |
 | Aplazado | Responsive 7.8 | Se retomará después de estabilizar arquitectura, multitenencia y datos. |
 
-### Estado consolidado
+### Estado consolidado después del PR #20
 
 - 6.1 está cerrada y protegida por CI.
 - 6.2.1 está cerrada mediante los PR #5, #6 y #7.
-- 6.2.2-A está cerrada mediante el PR #16. 6.2.2-B tiene su implementación read-only cerrada mediante los PR #17 y #19; su ejecución operativa permanece pendiente sobre la nueva baseline.
-- No existen datos productivos. Las bases ficticias `agenda-dev` y `agenda` fueron eliminadas manualmente por la operadora el 31 de julio de 2026; `agenda_test` permanece como base de pruebas, sin asumir que sea el destino utilizado por cada ejecución de CI.
-- La eliminación manual constituye una atestación de la operadora realizada fuera del repositorio. GitHub no demuestra el contenido previo de las bases y no almacenará capturas, URI, credenciales ni evidencia sensible; cualquier registro operativo adicional permanecerá fuera del código y sin secretos.
-- 6.2.2-C se redefine para establecer una baseline preproductiva limpia de Atmósfera y DAM. El PR #20 fusionó el bootstrap fail-closed original; el PR #21 permanece Draft y adapta la definición a dos propietarios y añade el asistente local endurecido. El corte de autoridad sigue pendiente.
+- 6.2.2-A está cerrada mediante el PR #16. 6.2.2-B tiene su implementación
+  read-only cerrada mediante los PR #17 y #19; su ejecución operativa permanece
+  pendiente sobre la nueva baseline.
+- No existen datos productivos. Las bases ficticias `agenda-dev` y `agenda`
+  fueron eliminadas manualmente por la operadora el 31 de julio de 2026;
+  `agenda_test` permanece como base de pruebas, sin asumir que sea el destino
+  utilizado por cada ejecución de CI.
+- La eliminación manual constituye una atestación de la operadora realizada
+  fuera del repositorio. GitHub no demuestra el contenido previo de las bases y
+  no almacenará capturas, URI, credenciales ni evidencia sensible; cualquier
+  registro operativo adicional permanecerá fuera del código y sin secretos.
+- 6.2.2-C se redefine para establecer una baseline preproductiva limpia de
+  Atmósfera y DAM. El PR #20 fusionó el bootstrap fail-closed original; el PR
+  #21 permanece Draft y adapta la definición a dos propietarios y añade el
+  asistente local endurecido. El corte de autoridad sigue pendiente.
 - 7.7 está cerrada mediante el PR #13.
 - 7.9 está cerrada mediante el PR #14.
 - 7.10 está cerrada mediante el PR #15.
 - 7.1–7.6 también están fusionadas según el registro de cada etapa.
 - 7.8 está aplazada por decisión de producto.
-- PR #30 cerró 6.2.6-A. PR #31 fusionó el contrato documental 6.2.6-B en `master@ed7acfd5fed91b03cd65becd2af154f93dad027b`.
-- PR #32 permanece Draft e implementa funcionalmente 6.2.6-B: publicWeb tenant-scoped, DNS TXT/freshness/generations, CORS browser binding, C2 cutover, persisted fence, storage gate e índices. Los bloqueantes adversariales conocidos fueron corregidos y CI #326 fue verde sobre el runtime corregido; el HEAD documental final requiere su propio CI verde y una revisión adversarial independiente antes de Ready/merge.
+- El registro anterior se conserva como fotografía histórica. Para 6.2.6-B la fuente de verdad funcional es `master@ed7acfd5fed91b03cd65becd2af154f93dad027b`, que contiene el merge aprobado de PR #31. PR #32 permanece Draft con la implementación funcional y las correcciones adversariales conocidas. CI #326 quedó verde sobre el runtime corregido; el HEAD documental final todavía debe demostrar CI verde y pasar una nueva revisión adversarial antes de Ready/merge.
 
 ## 4. Etapa 6.1 — Base verificable
 
@@ -72,7 +82,7 @@ No se considerará terminada una tarea solamente porque el código compile. Cada
 
 **Por qué es necesario**
 
-La suite oficial debe incluir todas las fronteras relevantes. Las pruebas que quedan fuera del comando principal permiten que una regresión pase inadvertida aunque el comando termine correctamente.
+Actualmente `npm test` solamente ejecuta `api.test.js` e `integration.test.js`. Las pruebas de pagos, seguridad WebSocket y varias pruebas unitarias quedan fuera del resultado oficial. Esto permite que una regresión pase inadvertida aunque el comando principal termine correctamente.
 
 **Criterio de aceptación**
 
@@ -84,7 +94,7 @@ La suite oficial debe incluir todas las fronteras relevantes. Las pruebas que qu
 
 **Cambio necesario**
 
-- Corregir fixtures que asignen permisos incoherentes.
+- Corregir el fixture que asigna al cliente una membresía con rol `worker`.
 - Crear negocios, administradores, trabajadores y clientes con relaciones que representen el modelo real.
 - Incorporar fixtures específicos para usuarios con múltiples membresías.
 
@@ -147,7 +157,7 @@ Una instalación que funciona solamente por paquetes presentes localmente no pue
 
 **Por qué es necesario**
 
-Los fallbacks silenciosos pueden iniciar el servidor con una configuración insegura o inconsistente.
+Los fallbacks silenciosos pueden iniciar el servidor con una configuración insegura o inconsistente. El controlador de pagos, por ejemplo, utiliza un puerto frontend distinto al módulo central.
 
 **Criterio de aceptación**
 
@@ -160,7 +170,8 @@ Los fallbacks silenciosos pueden iniciar el servidor con una configuración inse
 
 ### 6.2.1 Eliminar la selección implícita del primer negocio
 
-**Estado:** cerrada. Contrato fusionado mediante el PR #5; coherencia de reserva y disponibilidad mediante el PR #6; smoke productivo documentado en el PR #7.
+**Estado:** cerrada. Contrato fusionado mediante el PR #5; coherencia de reserva
+y disponibilidad mediante el PR #6; smoke productivo documentado en el PR #7.
 
 **Cambio necesario**
 
@@ -171,7 +182,7 @@ Los fallbacks silenciosos pueden iniciar el servidor con una configuración inse
 
 **Por qué es necesario**
 
-Seleccionar el primer negocio activo convierte una petición incompleta en una operación válida sobre un tenant no elegido por el usuario.
+Seleccionar el primer negocio activo convierte una petición incompleta en una operación válida sobre un tenant no elegido por el usuario. También hace que el comportamiento dependa del orden de los documentos en la base de datos.
 
 **Criterio de aceptación**
 
@@ -180,19 +191,90 @@ Seleccionar el primer negocio activo convierte una petición incompleta en una o
 
 ### 6.2.2 Hacer que `Membership` sea la autoridad de acceso
 
-**Estado:** contrato documental cerrado mediante el PR #16. 6.2.2-B tiene su implementación read-only cerrada mediante los PR #17 y #19; su ejecución operativa permanece pendiente sobre la nueva baseline. La rebaseline del PR #18 registra que no existe información productiva que migrar y sustituye el backfill actual por un bootstrap limpio. La estrategia de datos y corte se define en [`fase-6.2.2-migracion-autoridad-membership.md`](./fase-6.2.2-migracion-autoridad-membership.md).
+**Estado:** contrato documental cerrado mediante el PR #16. 6.2.2-B tiene su
+implementación read-only cerrada mediante los PR #17 y #19; su ejecución operativa
+permanece pendiente sobre la nueva baseline. La rebaseline del PR #18 registra
+que no existe información productiva que migrar y sustituye el backfill actual
+por un bootstrap limpio. La estrategia de datos y corte se define en
+[`fase-6.2.2-migracion-autoridad-membership.md`](./fase-6.2.2-migracion-autoridad-membership.md).
+Las bases ficticias anteriores fueron eliminadas manualmente fuera del
+repositorio según la atestación operativa de la operadora. Ningún PR ejecutó
+borrados o migraciones sobre MongoDB, y GitHub no constituye evidencia del
+contenido previo de esas bases.
 
-Las bases ficticias anteriores fueron eliminadas manualmente fuera del repositorio según la atestación operativa de la operadora. Ningún PR ejecutó borrados o migraciones sobre MongoDB, y GitHub no constituye evidencia del contenido previo de esas bases.
+El auditor exige las tres colecciones físicas, confirma el entorno, registra
+procedencia sanitizada, valida estados e identificadores sin inferir valores y
+sólo puede garantizar una vista temporal mediante sesión snapshot. La doble
+lectura completa es diagnóstico bloqueante y nunca habilita `safeToApply`.
+Estas guardas no sustituyen respaldo, remediación, ensayo ni autorización
+operativa.
 
-El auditor exige las tres colecciones físicas, confirma el entorno, registra procedencia sanitizada, valida estados e identificadores sin inferir valores y sólo puede garantizar una vista temporal mediante sesión snapshot. La doble lectura completa es diagnóstico bloqueante y nunca habilita `safeToApply`.
+El PR #19 integró la corrección que sólo admite BSON `ObjectId` físicos:
+referencias string, representaciones `$oid` y objetos meramente convertibles
+son bloqueantes y no participan en correlaciones. Esta garantía no formó parte
+del PR #17 original; conserva `CANONICAL_SCHEMA_VERSION = 4` y
+`MEMBERSHIP_AUTHORITY_AUDITOR_VERSION = "1.3.0"`. La ejecución operativa del
+auditor sobre la nueva baseline y la normalización de sus seeds y fixtures para
+producir BSON `ObjectId` reales continúan pendientes. Ningún PR ha creado la
+nueva base, ejecutado el bootstrap o realizado el corte de autoridad.
 
-El PR #19 integró la corrección que sólo admite BSON `ObjectId` físicos: referencias string, representaciones `$oid` y objetos meramente convertibles son bloqueantes y no participan en correlaciones. Esta garantía conserva `CANONICAL_SCHEMA_VERSION = 4` y `MEMBERSHIP_AUTHORITY_AUDITOR_VERSION = "1.3.0"`.
+El PR #20 fusionó el comando separado de 6.2.2-C para la
+baseline de autoridad de Atmósfera y DAM con modos `plan` y `apply`. Exige
+fingerprint del destino, nombre de base, credenciales suministradas fuera del
+repositorio y confirmación literal para escribir. El PR #21, todavía Draft,
+exige además que `NODE_ENV` sea literalmente `development` o `test`, coincida
+con el entorno solicitado, no existan indicadores de Railway, Vercel u otra
+plataforma de despliegue y la base termine en `_dev` o `_test` según
+corresponda. Conecta con `autoIndex: false` y no se ejecuta desde `start`,
+`dev`, Railway, Vercel o el despliegue.
 
-El PR #20 fusionó el comando separado de 6.2.2-C para la baseline de autoridad de Atmósfera y DAM con modos `plan` y `apply`. Exige fingerprint del destino, nombre de base, credenciales suministradas fuera del repositorio y confirmación literal para escribir.
+El bootstrap crea exclusivamente dos negocios, dos usuarios propietarios y dos
+Memberships administrativas activas con BSON `ObjectId` físicos. No crea una
+identidad `worker` separada para cada negocio porque las personas propietarias
+también prestan servicios. La capacidad de ser profesional agendable continúa
+pendiente de una representación explícita que no duplique usuarios ni vulnere
+el índice único de Membership. Detecta una base vacía, una baseline completa o
+un estado parcial; el estado parcial, las referencias de tipo incorrecto y las
+contradicciones bloquean antes de escribir. Una
+repetición sobre la baseline exacta es un no-op sólo cuando las credenciales
+declaradas verifican contra los hashes almacenados. Una contraseña distinta,
+un hash inválido o un fallo de verificación produce un estado `partial`; no se
+rotan contraseñas automáticamente.
 
-El PR #21 añade un asistente local separado cuya API controla el bind exclusivamente a `127.0.0.1` y verifica socket, `Host` y `Origin` sin confiar en cabeceras de proxy. Recibe en memoria los datos de las dos personas propietarias, aplica JSON estricto, CSRF, límite de 32 KiB, timeouts y errores públicos estables. No persiste, registra ni devuelve credenciales y no se conecta al arranque normal, a Railway, Vercel ni al despliegue.
+Las ejecuciones `apply` se serializan dentro de una transacción MongoDB sobre
+replica set. La clave estable del lock, su propietario, las lecturas de datos,
+las colecciones, el índice, los documentos, la verificación y la liberación
+comparten la misma sesión y número de transacción, que actúan como fence. El
+catálogo se relee después de adquirir el fence mediante comandos read-only que
+MongoDB no permite dentro de una transacción; cualquier cambio concurrente hace
+fallar el flujo de forma cerrada. Si el proceso cae o la transacción expira,
+MongoDB revierte la unidad completa y libera el conflicto; el propietario
+anterior no puede confirmar ninguna escritura al reanudarse. MongoDB standalone
+se rechaza antes de mutar. Si un commit o cierre queda incierto, no declara
+éxito ni compensa a ciegas: informa `unknown` y exige ejecutar `plan` antes de
+reintentar. Una baseline completa se denomina `ready`; no existe un estado
+redundante `existing`. Los seeds destructivos anteriores de Atmósfera y DAM
+quedan desactivados.
 
-La ejecución operativa del bootstrap/auditor y el corte de autoridad siguen sujetos a su plan específico; este documento no los declara realizados.
+El PR #21 añade un asistente local separado cuya API controla el bind
+exclusivamente a `127.0.0.1` y verifica socket, `Host` y `Origin` sin confiar en
+cabeceras de proxy. Recibe en memoria los datos de las dos personas
+propietarias, aplica JSON estricto, CSRF, límite de 32 KiB, timeouts y errores
+públicos estables. Exige un `plan` seguro antes de habilitar `apply`; el token
+es aleatorio, de un solo uso y sólo existe en memoria. Un intento de `apply`
+con token identificable lo consume antes de validar el resto del payload, por
+lo que cualquier alteración invalida la aprobación. Los request-targets
+malformados, absolutos o ambiguos se rechazan sin terminar el servidor. El token
+vence con `expiresAt <= now`. No persiste, registra ni devuelve
+credenciales y no se conecta al arranque normal, a Railway, Vercel ni al
+despliegue. `MONGO_URI` continúa siendo un secreto local de conexión; los datos
+de los propietarios no necesitan almacenarse en `.env` cuando se utiliza el
+asistente.
+
+Esta implementación todavía no ha creado la nueva base, no ha aplicado el
+bootstrap en un entorno externo, no ha verificado operativamente el índice y
+no ha ejecutado el auditor sobre la nueva baseline. Servicios, turnos,
+configuración funcional y corte de autoridad permanecen fuera de este PR.
 
 **Cambio necesario**
 
@@ -200,8 +282,12 @@ La ejecución operativa del bootstrap/auditor y el corte de autoridad siguen suj
 - Reservar el rol global del usuario para privilegios de plataforma, como `superadmin`.
 - Dejar de autorizar mediante `User.business` y roles heredados.
 - Planificar una migración antes de eliminar campos antiguos.
-- Revalidar la membresía activa al seleccionar tenant y antes de autorizar una operación.
-- Mantener `superadmin` como privilegio global; seleccionar un negocio no concede automáticamente role tenant.
+- Revalidar la membresía activa al seleccionar tenant y antes de autorizar una
+  operación, sin confiar en el rol copiado en la sesión.
+- Mantener `superadmin` como privilegio global del plano de plataforma. La
+  selección de un negocio sólo aporta contexto y no concede automáticamente un
+  rol tenant ni autoriza mutaciones. Cualquier inspección global de sólo lectura
+  requiere una política de plataforma explícita y está denegada por defecto.
 
 **Por qué es necesario**
 
@@ -212,7 +298,8 @@ Dos fuentes de autoridad pueden entregar resultados diferentes para la misma per
 - Toda autorización tenant-scoped obtiene rol y negocio desde una membresía activa.
 - Desactivar una membresía revoca el acceso sin modificar al usuario global.
 - `User.role = admin|worker` sin una membresía activa no concede acceso.
-- Un `superadmin` necesita una membresía activa o una futura sesión de soporte acotada para ejecutar acciones que requieran rol tenant.
+- Un `superadmin` necesita una membresía activa o una futura sesión de soporte
+  acotada para ejecutar acciones que requieran rol tenant.
 
 ### 6.2.3 Añadir negocio a turnos y bloqueos
 
@@ -225,7 +312,7 @@ Dos fuentes de autoridad pueden entregar resultados diferentes para la misma per
 
 **Por qué es necesario**
 
-El horario de un profesional puede variar por negocio. Con un modelo global, un trabajador con múltiples membresías compartiría horario y bloqueos fuera de la frontera tenant.
+El horario de un profesional puede variar por negocio. Con el modelo actual, un trabajador con múltiples membresías comparte un único horario global y sus bloqueos no poseen frontera tenant.
 
 **Criterio de aceptación**
 
@@ -242,7 +329,7 @@ El horario de un profesional puede variar por negocio. Con un modelo global, un 
 
 **Por qué es necesario**
 
-Comprobar solamente que el usuario es administrador no demuestra que el recurso pertenezca a su negocio.
+Comprobar solamente que el usuario es administrador no demuestra que el recurso pertenezca a su negocio. El filtro debe formar parte de la consulta, evitando lecturas y escrituras cruzadas por ID.
 
 **Criterio de aceptación**
 
@@ -267,6 +354,18 @@ En el MVP:
 
 La verificación por correo será opcional para reservar y obligatoria cuando sea necesario demostrar posesión del contacto, recuperar acceso, consultar historial o fusionar identidades. SMS no forma parte del MVP. WhatsApp se reserva para una etapa posterior como canal operativo.
 
+**Problemas que deben resolverse**
+
+- `/register` crea cuentas sin membresía, pero el login las rechaza.
+- Los clientes invitados reciben una contraseña aleatoria que no conocen.
+- Google puede crear usuarios sin membresía.
+- La asociación automática por teléfono puede unir identidades por error.
+- Una coincidencia de contacto no verificado no demuestra identidad ni autoriza acceso a citas anteriores.
+
+**Por qué es necesario**
+
+Sin esta decisión no es posible definir correctamente login, historial de citas, privacidad ni deduplicación de usuarios.
+
 **Criterio de aceptación**
 
 - El registro, Google, reserva como invitado y consulta de citas siguen un contrato documentado y coherente.
@@ -279,77 +378,65 @@ La verificación por correo será opcional para reservar y obligatoria cuando se
 
 **Decisión aprobada**
 
-ATMÓSFERA Agenda funciona como infraestructura de reservas headless según el [ADR-002](./adr-002-agenda-headless-gestion-publica.md). La API centraliza servicios, profesionales, disponibilidad, citas, pagos, reglas y comunicaciones, pero no impone una interfaz pública única.
+ATMÓSFERA Agenda funcionará como infraestructura de reservas headless según el [ADR-002](./adr-002-agenda-headless-gestion-publica.md). La API centralizará servicios, profesionales, disponibilidad, citas, pagos, reglas y comunicaciones, pero no impondrá una interfaz pública única.
 
-Las webs construidas por ATMÓSFERA son la interfaz del negocio y consumen la API para recorridos personalizados.
+Las webs construidas por ATMÓSFERA serán la interfaz del negocio y consumirán la API para crear recorridos completamente personalizados. En el futuro, el mismo contrato podrá ofrecerse a páginas de terceros sin modificar el dominio central.
 
 **Estado 6.2.6-A**
 
 - PR #30 fue fusionado en `master@ea43c0da9a11355811b5bf0c52210af86fdac335`;
-- la implementación y revisión adversarial quedaron cerradas sobre el HEAD técnico aprobado y cierre documental;
-- [`fase-6.2.6-contrato-headless-minimo.md`](./fase-6.2.6-contrato-headless-minimo.md) mantiene la especificación versionable;
-- tenant público se selecciona explícitamente y falla cerrado si falta/es contradictorio;
-- Services/workers/availability/booking exponen proyecciones mínimas tenant-scoped;
-- guest booking usa `Appointment.guestContact` sin crear identidad global;
-- C2 permanece READ exact-scope y no concede cancel/reschedule/payment authority.
+- la implementación y revisión adversarial de 6.2.6-A quedaron cerradas sobre el HEAD técnico aprobado `e85a00d361d60df349030bc43a274c2433dd4e0a` y el cierre documental posterior del PR;
+- se añadió la especificación versionable [`fase-6.2.6-contrato-headless-minimo.md`](./fase-6.2.6-contrato-headless-minimo.md);
+- servicios públicos usan una proyección allowlist mínima;
+- profesionales públicos se resuelven para un Service activo concreto mediante Membership vigente + `Service.workers`, sin usar `User.role`/`User.business` como authority;
+- disponibilidad conserva Business + Service + worker + Shift + Block + Appointment tenant-scoped;
+- la creación guest conserva `Appointment.guestContact` internamente pero devuelve una proyección mínima que no expone `Appointment.client` ni contacto;
+- tenant ausente/contradictorio continúa fail-closed y no existe fallback;
+- el error del limiter global se estabiliza como `429 RATE_LIMITED`;
+- la creación no añade una plataforma genérica de idempotency keys: el índice único tenant-scoped existente evita el duplicado activo equivalente, mientras un timeout post-commit permanece explícitamente ambiguo;
+- C2 READ permanece action-scoped y no concede cancel, reschedule ni payment authority;
+- la suite contractual se incorpora al comando oficial de integración.
 
-**Estado 6.2.6-B — implementación funcional en Draft**
+**Estado 6.2.6-B — implementación funcional en PR #32 Draft**
 
-El contrato aprobado está en [`fase-6.2.6-b-verified-business-public-origins.md`](./fase-6.2.6-b-verified-business-public-origins.md), fusionado mediante PR #31. PR #32 implementa el contrato sobre `master@ed7acfd5fed91b03cd65becd2af154f93dad027b`.
-
-Implementado en PR #32:
-
-- `BusinessConfig.publicWeb` tenant-scoped con lifecycle unconfigured/pending/verified/effective-expired;
-- HTTPS/443 y `websiteUrl`/`bookingUrl` exact same-origin;
-- DNS TXT server-side, raw one-time hash-only, timeout 3 s;
-- challenge TTL 15 min y verified trust TTL 30 días;
-- `verificationAttemptGeneration` y `trustGeneration` separados y monotónicos;
-- explicit reverify/rotate/delete y anti-ABA;
-- Membership admin + trusted panel Origin para comandos;
-- CORS public/headless credentialless con preflight separado del binding de request real;
-- shared origins sin índice unique;
-- limiter específico 200/IP/15 min antes del lookup MongoDB público;
-- lookup existence-oriented bounded con `$limit:1`;
-- índice físico no unique `business_config_public_web_origin_fresh`, migración no destructiva `migration:public-web-storage` y startup gate remoto con `autoIndex:false` production-like;
-- C2 cutover sin fallback a `GUEST_APPOINTMENT_ACCESS_ORIGIN`;
-- Job/Delivery ligados a `publicWebTrustGeneration` + `trustedOrigin`;
-- persisted authority fence de 2 min contra revocación concurrente;
-- exchange revalida publicWeb antes de consumir C1 y antes del mint;
-- `/read/challenge` y `/read/verify` siguen fresh-trust-bound para browser callers;
-- `/read` ya bearer-authorized queda credentialless y no acorta una READ capability mintada antes de una revocación publicWeb.
-
-**Evidencia actual**
-
-- el HEAD adversarial de entrada `1a3654d209200737507c4022cc438ce6efb276a7` tenía CI #307 roja por fixtures, no por una decisión de seguridad aprobada;
-- los tests shared-origin fueron corregidos para validar el DTO público real `id` y no reintroducir `_id`;
-- el caso superadmin se aisló en un proceso propio sin tocar el auth limiter ni conceder Membership;
-- se añadieron pruebas de capability-after-revocation HTTP, bounded CORS lookup y storage `autoIndex:false`;
-- CI #326 fue `success` sobre `db270dbf2c046d76fd14547b1edf352bdd9f66cf`, después de reconciliar una fixture histórica 6.2.6-A con un publicWeb origin realmente verificado;
-- el HEAD documental final del PR debe tener igualmente CI verde antes de revisión adversarial.
+- el contrato aprobado está en [`fase-6.2.6-b-verified-business-public-origins.md`](./fase-6.2.6-b-verified-business-public-origins.md) y fue fusionado mediante PR #31 en `master@ed7acfd5fed91b03cd65becd2af154f93dad027b`;
+- PR #32 implementa `BusinessConfig.publicWeb`, DNS TXT server-side, challenge hash-only, freshness, `verificationAttemptGeneration`, `trustGeneration`, reverify/rotate/delete, CORS dinámico credentialless y C2 tenant-scoped;
+- `GUEST_APPOINTMENT_ACCESS_ORIGIN` dejó de ser trust root runtime C2 y no existe fallback implícito;
+- Job/Delivery C2 conservan publicWeb generation + trusted origin y el worker/exchange usan un persisted authority fence frente a revocación concurrente;
+- shared origins permanecen válidos y `verifiedOrigin` no es unique global;
+- el preflight dinámico está protegido por admisión 200/IP/15 min antes del lookup MongoDB, y el lookup es existence-oriented con `$limit:1`;
+- el índice físico no unique `business_config_public_web_origin_fresh` se materializa/verifica mediante migración no destructiva con evidencia `autoIndex:false` y gate remoto antes de `listen()`;
+- `/read/challenge` y `/read/verify` siguen ligados a fresh publicWeb trust para browser callers; `/read` consume una capability ya emitida y conserva su lifetime C2 aunque publicWeb se revoque posteriormente, siempre con CORS credentialless;
+- parámetros físicos: challenge 15 min, verified trust 30 días, DNS timeout 3 s, verification rate 20/IP/15 min, public CORS lookup 200/IP/15 min y authority fence 2 min;
+- el HEAD adversarial de entrada `1a3654d209200737507c4022cc438ce6efb276a7` tenía CI #307 roja por fixtures; el DTO público `id`, auth limiter y arquitectura de autoridad se preservaron;
+- CI #326 quedó `success` sobre `db270dbf2c046d76fd14547b1edf352bdd9f66cf`, incluyendo unit, integration, frontend y secret scan. El HEAD documental final debe volver a demostrar CI verde.
 
 **Pendiente / no cerrado todavía**
 
-No queda pendiente funcionalidad contractual conocida dentro de los cuatro bloqueantes de esta corrección, pero PR #32 sigue Draft y 6.2.6-B no se declara cerrada hasta completar CI del HEAD exacto final y una nueva revisión adversarial independiente. Las capabilities CANCEL/RESCHEDULE/PAYMENT, reconciliation/refund, 6.3 y 6.4 continúan fuera de alcance.
+No se declara 6.2.6-B cerrada ni lista para merge desde esta corrección. PR #32 debe permanecer Draft hasta que el HEAD exacto final tenga CI verde y una nueva revisión adversarial independiente apruebe código, tests, storage cutover y documentación. CANCEL/RESCHEDULE/PAYMENT, reconciliation/refund, monitoring DNS periódico, 6.3 y 6.4 permanecen fuera de alcance.
 
 **Cambio necesario**
 
-- ~~Definir una versión inicial mínima para servicios, profesionales, disponibilidad y creación de citas.~~ **Cerrado en 6.2.6-A.**
+- ~~Definir una versión inicial mínima para servicios, profesionales, disponibilidad y creación de citas.~~ **Implementado y cerrado en 6.2.6-A.**
 - Reservar confirmación, reprogramación y cancelación públicas para operaciones separadas con credenciales de acción. **READ existe en C2; las capabilities futuras continúan fuera de alcance.**
-- ~~Exigir Business explícito y ownership backend en operaciones públicas.~~ **Preservado por 6.2.6-A.**
-- ~~Registrar por negocio `websiteUrl`/`bookingUrl` HTTPS verificados.~~ **Implementado en PR #32; pendiente aprobación adversarial.**
-- ~~Construir enlaces C2 sólo desde publicWeb trust fresh del mismo Business.~~ **Implementado en PR #32 sin fallback global; pendiente aprobación adversarial.**
-- ~~Separar CORS preflight de tenant binding y proteger su lookup público.~~ **Implementado con limiter pre-lookup, query bounded e índice físico verificado; pendiente aprobación adversarial.**
+- ~~Exigir `businessId` o slug válido en todas las operaciones públicas y aplicar ownership en el backend.~~ **Preservado y cubierto contractualmente por 6.2.6-A.**
+- ~~Evitar que la API dependa del orden visual, cantidad de pasos o estructura del formulario consumidor.~~ **Formalizado en 6.2.6-A.**
+- ~~Registrar por negocio una `websiteUrl` y una `bookingUrl` HTTPS cuyos origins hayan sido verificados.~~ **Implementado en PR #32; pendiente aprobación adversarial.**
+- ~~Construir enlaces operativos exclusivamente desde configuración persistida y verificada del mismo Business.~~ **Implementado en PR #32 sin fallback global; pendiente aprobación adversarial.**
+- ~~Separar preflight CORS de tenant binding real y acotar el lookup público.~~ **Implementado en PR #32 con limiter pre-lookup, consulta bounded e índice físico explícito; pendiente aprobación adversarial.**
+- ~~Definir estados, códigos de error, idempotencia, límites de frecuencia y reglas de compatibilidad para el contrato headless mínimo.~~ **Formalizado en 6.2.6-A y 6.2.6-B.**
 
 **Criterio de aceptación**
 
-- Dos webs pueden implementar recorridos visuales distintos sobre los mismos contratos.
-- Business inexistente, recurso cross-tenant u Origin browser incoherente fallan determinísticamente.
-- Shared Origin no comparte datos ni authority entre Businesses.
-- Server-to-server sin Origin conserva el contrato headless.
-- C2 stale Delivery/challenge falla `INVALID_PROOF` tras revocación.
-- Una READ capability ya canjeada conserva su lifetime C2 existente aunque publicWeb se revoque después.
-- Las pruebas de 6.2.6-A, C1, C2, publicWeb, tenant isolation, frontend y secret scan deben estar verdes en el HEAD exacto aprobado.
-- PR #32 requiere revisión adversarial independiente antes de Ready/merge.
+- Dos webs pueden implementar recorridos visuales diferentes utilizando los mismos contratos de dominio.
+- La landing de ATMÓSFERA puede combinar contacto y reserva progresiva sin abandonar su propia interfaz.
+- Una solicitud con negocio inexistente o recurso de otro tenant se rechaza de manera determinista.
+- Cambiar la presentación de una web no requiere modificar la lógica central de citas.
+- El contrato inicial no incorpora endpoints ajenos a los recorridos necesarios para el MVP.
+- Las pruebas de 6.2.6-A permanecen verdes junto con tenant isolation, availability, Appointment ownership, C1 y C2.
+- Shared Origin no rompe tenant isolation y una request browser real se bindea al Business explícitamente resuelto.
+- Una Delivery/challenge stale no puede canjearse, mientras una capability READ ya emitida válidamente conserva su lifetime existente.
+- 6.2.6-B sólo podrá cerrarse después de CI verde sobre el HEAD exacto final y revisión adversarial independiente de PR #32.
 
 ## 6. Etapa 6.3 — Autorización, sesiones y pagos
 
@@ -396,7 +483,7 @@ Los identificadores no son credenciales. Una persona que conozca o reciba un ID 
 
 **Por qué es necesario**
 
-El proveedor puede repetir callbacks y una falla puede ocurrir entre la aprobación externa y la actualización local.
+El proveedor puede repetir callbacks y una falla puede ocurrir entre la aprobación externa y la actualización local. El flujo debe poder repetirse de forma segura.
 
 **Criterio de aceptación**
 
@@ -413,7 +500,7 @@ El proveedor puede repetir callbacks y una falla puede ocurrir entre la aprobaci
 
 **Por qué es necesario**
 
-Los parámetros de URL pueden modificarse y quedan registrados en historial, analítica y logs.
+Los parámetros de URL pueden modificarse y quedan registrados en historial, analítica y logs. Aunque no cambien el pago real, pueden presentar información falsa o filtrar detalles internos.
 
 **Criterio de aceptación**
 
@@ -432,7 +519,7 @@ Los parámetros de URL pueden modificarse y quedan registrados en historial, ana
 
 **Por qué es necesario**
 
-Las cookies se envían automáticamente. Si se requiere `SameSite=None`, CORS no sustituye una defensa CSRF.
+Las cookies se envían automáticamente. Si se requiere `SameSite=None`, CORS no sustituye una defensa CSRF. Además, los sockets conservan datos capturados durante el handshake.
 
 **Criterio de aceptación**
 
@@ -449,6 +536,10 @@ Las cookies se envían automáticamente. Si se requiere `SameSite=None`, CORS no
 - Definir cómo una cuenta OAuth agrega una contraseña posteriormente.
 - Revisar la política mínima de contraseña.
 
+**Por qué es necesario**
+
+Una filtración de base de datos no debería convertir tokens de recuperación en credenciales utilizables. Las cuentas OAuth también necesitan un estado explícito, no una contraseña ficticia.
+
 **Criterio de aceptación**
 
 - El token enviado por correo no existe en texto reutilizable en la base de datos.
@@ -460,31 +551,56 @@ Las cookies se envían automáticamente. Si se requiere `SameSite=None`, CORS no
 
 El correo de confirmación incluirá enlaces para gestionar la cita sin exigir login. La reprogramación dirigirá a la agenda existente en la web del negocio, no a una interfaz visual genérica ni a un iframe externo.
 
+Ejemplo conceptual:
+
+```text
+https://negocio.cl/agenda?accion=reagendar&token=TOKEN_SEGURO
+```
+
 La forma exacta de transportar y canjear la credencial debe impedir que un token reutilizable termine expuesto en logs, analítica, historial o encabezados `Referer`.
 
 **Cambio necesario**
 
 - Generar credenciales aleatorias con hash persistido, alcance limitado, expiración y asociación explícita a cita, negocio y acción.
 - Aplicar política de un solo uso o rotación según la acción y registrar cada canje.
+- Exponer un endpoint de contexto que entregue sólo la información necesaria para representar la acción autorizada.
 - Exponer operaciones separadas para confirmar, reprogramar y cancelar.
-- No utilizar el ID de la cita como credencial.
-- Redactar credenciales de logs y analítica y aplicar `Referrer-Policy: no-referrer`.
-- Aplicar rate limiting e idempotencia.
-- Mantener cita/horario originales mientras el cliente explora alternativas.
-- Confirmar el nuevo horario y liberar el anterior mediante una operación recuperable/transaccional.
+- No utilizar el ID de la cita como credencial ni incluir datos personales legibles en el token.
+- Redactar credenciales de logs y analítica, aplicar `Referrer-Policy: no-referrer` y evitar recursos de terceros antes del canje.
+- Aplicar rate limiting e idempotencia a los endpoints públicos de gestión.
+- Mantener la cita y el horario originales mientras el cliente explora alternativas.
+- Al confirmar, reservar el nuevo horario, actualizar la cita y liberar el anterior mediante una transacción o máquina de estados recuperable.
+- Registrar cita anterior, cita resultante, origen, fecha y resultado en auditoría.
+- Enviar una nueva confirmación después de una reprogramación exitosa.
 
 **Criterio de aceptación**
 
 - Una credencial sólo permite la acción, cita y negocio para los que fue emitida.
+- Una credencial alterada, vencida, revocada, reutilizada fuera de su política o presentada fuera de alcance se rechaza.
 - Abrir el enlace no libera ni cancela el horario original.
 - Dos intentos concurrentes no producen reservas duplicadas ni pérdida de ambos horarios.
+- La reprogramación se completa dentro de la web del negocio sin cambiar su identidad visual.
 - Los logs y eventos de analítica no contienen credenciales reutilizables.
 
 ## 7. Etapa 6.4 — Impersonación segura
 
 ### 6.4.1 Crear un ADR antes de implementar
 
-El ADR debe definir objetivo, actores autorizados, operaciones permitidas/prohibidas, duración, motivo, auditoría, aislamiento entre pestañas, terminación/revocación y tratamiento de acciones sensibles.
+El ADR debe definir:
+
+- objetivo del modo soporte;
+- actores autorizados;
+- operaciones permitidas y prohibidas;
+- duración máxima;
+- requisito de motivo;
+- atribución de auditoría;
+- aislamiento entre pestañas;
+- terminación y revocación;
+- tratamiento de acciones sensibles.
+
+**Por qué es necesario**
+
+La impersonación es una capacidad de alto privilegio. Su comportamiento debe ser una decisión de arquitectura, no una consecuencia accidental de sustituir datos en la sesión.
 
 ### 6.4.2 Usar una sesión independiente en otra pestaña
 
@@ -496,6 +612,10 @@ El ADR debe definir objetivo, actores autorizados, operaciones permitidas/prohib
 4. La ruta crea una sesión de soporte aislada.
 5. El token queda invalidado inmediatamente.
 
+**Por qué es necesario**
+
+Abrir `target="_blank"` sin una sesión independiente no sirve: las pestañas comparten la cookie actual y la consola principal también queda impersonando.
+
 **Criterio de aceptación**
 
 - La pestaña original conserva la sesión superadministradora.
@@ -503,50 +623,110 @@ El ADR debe definir objetivo, actores autorizados, operaciones permitidas/prohib
 
 ### 6.4.3 Separar actor y sujeto
 
-La sesión de soporte y cada evento de auditoría deberán conservar `actorId`, `subjectId`, `businessId`, `supportSessionId`, motivo, fechas y permisos efectivos.
+**Cambio necesario**
+
+La sesión de soporte y cada evento de auditoría deberán conservar:
+
+- `actorId`: superadministrador real;
+- `subjectId`: usuario representado;
+- `businessId`;
+- `supportSessionId`;
+- motivo;
+- fecha de inicio y expiración;
+- permisos efectivos.
+
+**Por qué es necesario**
+
+Registrar solamente al usuario impersonado atribuye la acción a la persona equivocada y elimina trazabilidad administrativa.
 
 **Criterio de aceptación**
 
-- Toda acción permite identificar actor real, sujeto y negocio.
-- Inicio, finalización, expiración y revocación generan auditoría.
+- Toda acción realizada en modo soporte permite identificar actor real, sujeto y negocio.
+- Inicio, finalización, expiración y revocación generan eventos de auditoría.
 
 ### 6.4.4 Limitar capacidades
 
 **Cambio necesario**
 
-- Definir solo lectura como comportamiento predeterminado.
-- Exigir elevación explícita para mutaciones si fueran necesarias.
-- Bloquear cambios de contraseña, pagos, eliminación física y operaciones sensibles salvo decisión expresa.
+- Definir modo de solo lectura como comportamiento predeterminado.
+- Exigir una elevación explícita para acciones mutables, si estas son necesarias.
+- Bloquear cambios de contraseña, pagos, eliminación física y otras operaciones sensibles salvo decisión expresa.
+
+**Por qué es necesario**
+
+El objetivo de soporte normalmente es diagnosticar. Entregar todos los permisos del propietario aumenta innecesariamente el impacto de un error o abuso.
+
+**Criterio de aceptación**
+
+- Las acciones sensibles poseen pruebas de denegación durante impersonación.
 
 ## 8. Etapa 6.5 — Observabilidad, dependencias y despliegue
 
 ### 6.5.1 Ampliar el modelo de auditoría
 
-Añadir, cuando corresponda, `businessId`, actor/sujeto, request/correlation ID, resultado, IP/user-agent con retención y origen operacional.
+**Cambio necesario**
+
+Añadir, cuando corresponda:
+
+- `businessId`;
+- `actorId` y `subjectId`;
+- `requestId` o correlation ID;
+- resultado de la operación;
+- IP y user agent con política de retención;
+- origen normal, soporte, sistema o callback externo.
+
+**Por qué es necesario**
+
+El registro actual está orientado a citas y pagos, pero no permite reconstruir completamente acciones multitenant o de impersonación.
 
 ### 6.5.2 Resolver duplicación de correo y accesos directos a modelos
 
-- Eliminar o migrar el módulo antiguo de mailer.
-- Emitir eventos de dominio para citas/pagos.
-- Hacer que NotificationService procese eventos sin acoplar dominio al canal.
-- Mantener correo como canal MVP y permitir WhatsApp posteriormente.
-- Evitar accesos directos a modelos cuando existe repositorio.
-- Centralizar logging.
+**Cambio necesario**
+
+- Eliminar o migrar el módulo antiguo `utils/mailer.js`.
+- Hacer que citas y pagos emitan eventos de dominio, por ejemplo `appointment.created`, `appointment.rescheduled`, `appointment.cancelled` y `appointment.reminder_due`.
+- Hacer que `NotificationService` procese esos eventos sin acoplar el dominio al canal utilizado.
+- Mantener correo como canal operativo del MVP y permitir añadir WhatsApp posteriormente sin modificar los servicios de citas.
+- Evitar accesos directos a modelos desde controladores, WebSocket y utilidades cuando existe una capa de repositorios.
+- Centralizar logging en el logger estructurado.
+
+**Por qué es necesario**
+
+La duplicación permite que correcciones de seguridad o branding se apliquen en un módulo y no en el otro. Los accesos directos también evitan políticas comunes de negocio. Acoplar citas directamente al correo obligaría a modificar el dominio al incorporar WhatsApp u otro canal.
 
 ### 6.5.3 Actualizar dependencias de forma controlada
 
-- Evaluar vulnerabilidades reportadas por `npm audit`.
-- Aplicar primero parches compatibles y volver a ejecutar pruebas.
-- Documentar riesgos no corregibles y mitigaciones.
+**Cambio necesario**
+
+- Evaluar las vulnerabilidades reportadas por `npm audit`.
+- Actualizar primero parches compatibles y volver a ejecutar pruebas.
+- Revisar especialmente Astro/Vite, Socket.IO/`ws`, Multer, Nodemailer y dependencias transitivas del SDK de Transbank.
+- Documentar riesgos sin actualización disponible y mitigaciones aplicadas.
+
+**Por qué es necesario**
+
+La revisión encontró vulnerabilidades conocidas de severidad alta. No todas serán explotables, pero deben evaluarse antes de producción.
 
 ### 6.5.4 Corregir arranque y despliegue
 
-- Esperar MongoDB y gates críticos antes de `listen()`.
-- Incorporar readiness/graceful shutdown.
-- Documentar despliegue.
-- Mantener estrategia explícita de migraciones/índices.
+**Cambio necesario**
 
-6.2.6-B ya añade un gate remoto adicional que verifica el índice físico publicWeb antes de abrir HTTP y no confía sólo en `autoIndex`.
+- Esperar la conexión a MongoDB antes de aceptar tráfico.
+- Corregir la diferencia `client`/`Client` al servir archivos estáticos en Linux.
+- Incorporar readiness y graceful shutdown.
+- Documentar despliegue independiente o conjunto de cliente y servidor.
+- Definir estrategia de migraciones e índices.
+
+6.2.6-B añade una garantía concreta a esta línea: el runtime remoto verifica el índice físico publicWeb después de los gates existentes y antes de `listen()`. La confirmación de cutover no sustituye la inspección física y la migración no ejecuta drop/recreate destructivo automático.
+
+**Por qué es necesario**
+
+El servidor puede aceptar solicitudes antes de disponer de base de datos y la diferencia de mayúsculas puede romper el frontend estático en Linux.
+
+**Criterio de aceptación**
+
+- El servicio no anuncia disponibilidad hasta completar sus dependencias críticas.
+- La terminación deja de aceptar tráfico y cierra servidor, sockets, sesiones y MongoDB ordenadamente.
 
 ## 9. Fase 7 — Refactor frontend reconciliado
 
@@ -567,88 +747,154 @@ La tarea 7.1 quedó implementada y fusionada mediante el PR #1. Su registro se e
 
 ### 7.10 Completar tipado antes de dividir componentes
 
-**Estado:** completada mediante el PR #15 con configuración estricta versionada, 0 usos productivos de `any`, pruebas frontend, `astro check`, `tsc --noEmit` y build aprobados.
+**Estado:** completada mediante el PR #15 con configuración estricta versionada,
+0 usos productivos de `any`, pruebas frontend, `astro check`, `tsc --noEmit` y
+build aprobados.
+
+**Cambio continuo necesario**
+
+- Tipar usuario, membresías, respuestas API, configuración y errores.
+- Eliminar `any`, `as any` y `@ts-ignore` injustificados.
+- Validar los valores de `view` provenientes de la URL.
+
+**Por qué es necesario**
+
+El tipado incompleto impide utilizar TypeScript como red de seguridad durante la separación de contextos y componentes.
 
 ### 7.2 Dividir CalendarContext
 
-Separar SessionContext, CalendarDataContext y CalendarViewContext cuando se retome esta línea.
+**Cambio necesario**
+
+Separar como mínimo:
+
+- `SessionContext`: usuario, negocio activo, configuración, logout y cambio de espacio;
+- `CalendarDataContext`: citas, profesionales, turnos, acciones y sincronización;
+- `CalendarViewContext`: fecha, vista, filtros y selección.
+
+**Por qué es necesario**
+
+El contexto actual combina responsabilidades y provoca renderizados amplios. También mezcla bootstrap, navegación, acciones y WebSocket.
 
 ### 7.3 Dividir SaasBusinessesView
 
-Separar capa de datos, tabla, filtros, métricas y formulario de creación; evitar reglas comerciales hardcodeadas.
+**Cambio necesario**
+
+- Separar capa de datos, tabla, filtros, métricas y formulario de creación.
+- Sustituir `alert` por estados de interfaz consistentes.
+- Obtener trial/plan desde el dominio, no inferirlo mediante slugs.
+
+**Por qué es necesario**
+
+El componente mezcla demasiadas responsabilidades y contiene reglas comerciales hardcodeadas difíciles de probar.
 
 ### 7.4–7.9 Eliminar duplicaciones y datos hardcodeados
 
-Mantener utilidades/paletas/grid compartidos y evitar correos/slugs de demostración en lógica productiva.
+**Cambio necesario**
+
+- Eliminar reglas de días libres basadas en correos concretos.
+- Mover etiquetas profesionales y navegación a configuración de negocio.
+- Extraer colores y utilidades compartidas.
+- Compartir cálculo de grilla y disposición entre vistas.
+- Sustituir fallbacks de slug por una selección explícita de negocio.
+
+**Por qué es necesario**
+
+Los datos de demostración incorporados en la lógica productiva generan resultados incorrectos para nuevos negocios y dificultan el crecimiento SaaS.
 
 ### 7.8 Responsive como cierre
 
-**Estado:** aplazado por decisión de producto. No forma parte del siguiente bloque crítico.
+**Estado:** aplazado por decisión de producto. No forma parte del siguiente
+bloque crítico.
+
+**Cambio necesario**
+
+- Definir primero flujos móviles para calendario, menú, modales y tablas SaaS.
+- Establecer breakpoints y criterios de accesibilidad.
+- Probar teclado, foco, contraste, scroll y tamaños táctiles.
+
+**Por qué es necesario**
+
+El responsive debe aplicarse cuando la estructura de componentes ya sea estable; hacerlo antes aumentaría el retrabajo.
 
 ## 10. Matriz mínima de pruebas de seguridad
 
 | Recurso | Caso permitido | Caso que debe rechazarse |
 |---|---|---|
 | Servicio | Admin A modifica servicio A | Admin A modifica servicio B |
-| Cita | Cliente autorizado consulta su cita | Caller sin authority consulta cita ajena |
+| Cita | Cliente consulta su cita | Cliente consulta cita ajena |
 | Cita | Admin A confirma cita A | Admin A confirma cita B |
-| Turno | Worker A modifica su turno en A | Worker A modifica turno ajeno/de otro negocio |
+| Turno | Worker A modifica su turno en A | Worker A modifica turno ajeno o de otro negocio |
 | Bloqueo | Admin A elimina bloqueo A | Admin A elimina bloqueo B |
-| Pago | Actor autorizado inicia pago | Usuario ajeno inicia pago por ID |
+| Pago | Propietario inicia pago | Usuario ajeno inicia pago por ID |
 | Cliente invitado | Contacto probable acumula seguimiento interno | Contacto no verificado consulta historial |
-| PublicWeb | Browser Origin fresh opera Business exacto | Origin A intenta operar Business B |
-| C2 pre-exchange | Delivery generation vigente puede canjear | Delivery stale/revocada canjea |
-| C2 post-exchange | READ bearer válido conserva su TTL | Cookie/Origin sin bearer obtiene datos |
+| Gestión pública | Credencial válida reprograma su cita | Credencial de otra cita, negocio o acción modifica recursos |
+| Reprogramación | El cambio confirma el nuevo horario y libera el anterior | Abrir el enlace o fallar a mitad deja la cita sin horario |
 | Webpay | Callback válido confirma una vez | Callback repetido duplica efectos |
 | WebSocket | Miembro A entra a sala A | Miembro A entra a sala B |
-| Impersonación | Token válido crea sesión aislada | Token reutilizado/expirado crea sesión |
+| Impersonación | Token válido crea sesión aislada | Token reutilizado o expirado crea sesión |
 | Sesión | Cambio de negocio autorizado | Usuario selecciona negocio sin membresía |
 
 ## 11. Definición de cierre de Fase 6
 
-La Fase 6 sólo podrá declararse terminada cuando se cumplan, entre otras, estas condiciones:
+La Fase 6 podrá declararse terminada cuando se cumplan todas estas condiciones:
 
-- todas las suites oficiales y CI estén verdes;
-- no exista fallback al primer negocio activo;
-- operaciones tenant-scoped filtren por negocio;
-- Membership sea authority tenant;
-- identidad progresiva esté documentada/probada;
-- contrato headless no dependa de UI pública específica;
-- trust pública por Business tenga storage/freshness/revocation verificables;
-- gestión pública use credenciales exact-scope;
-- pagos sean autorizados/idempotentes/reconciliables;
-- sesiones incorporen protección CSRF acorde al despliegue;
-- impersonación sea aislada/auditable;
-- dependencias tengan mitigación aceptada;
-- build, análisis estático, pruebas y secretos terminen sin errores.
+- todas las suites se ejecutan mediante el comando oficial;
+- CI se encuentra activo y verde;
+- no existe fallback al primer negocio activo;
+- las operaciones tenant-scoped filtran por negocio;
+- turnos y bloqueos poseen `businessId` y datos migrados;
+- `Membership` es la autoridad de permisos tenant;
+- el modelo de identidad progresiva y perfiles tenant-scoped está documentado y probado;
+- el contrato headless no depende de una interfaz pública específica;
+- la gestión pública de citas utiliza credenciales con alcance, vencimiento y aislamiento tenant;
+- la reprogramación conserva el horario original hasta confirmar de forma transaccional o recuperable el nuevo;
+- pagos son autorizados, idempotentes y reconciliables;
+- sesiones cuentan con protección CSRF acorde al despliegue;
+- impersonación utiliza una sesión independiente y auditable;
+- las vulnerabilidades de dependencias fueron corregidas o aceptadas con mitigación documentada;
+- build, análisis estático y pruebas terminan sin errores.
 
 ## 12. Decisiones que deben aprobarse antes de implementar
 
-1. ~~Modelo definitivo de identidad y membresía de clientes.~~ **Aprobado:** ADR-001.
-2. ~~Modelo de integración de agenda pública.~~ **Aprobado:** ADR-002.
-3. ~~Destino de enlaces públicos.~~ **Aprobado para READ/bootstrap por publicWeb tenant-scoped en 6.2.6-B; capabilities futuras siguen separadas.**
-4. Arquitectura de dominios frontend/backend necesaria para cookies y CSRF general de 6.3.
-5. Alcance del modo soporte.
-6. Política de retención/auditoría.
-7. Estrategia de migración de campos heredados de User para 6.2.2: aprobada/documentada pero su ejecución operativa conserva sus gates.
-8. Estrategia de migración para turnos/bloqueos cuando corresponda.
-9. Política de compatibilidad/actualización de dependencias.
+1. ~~Modelo definitivo de identidad y membresía de clientes.~~ **Aprobado:** identidad global progresiva con perfiles tenant-scoped ([ADR-001](./adr-001-autoridad-multitenant-identidad-progresiva.md)).
+2. ~~Modelo de integración de la agenda pública.~~ **Aprobado:** API headless y experiencia visual perteneciente a la web del negocio ([ADR-002](./adr-002-agenda-headless-gestion-publica.md)).
+3. ~~Destino de los enlaces de reprogramación.~~ **Aprobado:** `bookingUrl` verificada del negocio y credencial limitada a la acción ([ADR-002](./adr-002-agenda-headless-gestion-publica.md)).
+4. Arquitectura de dominios de frontend y backend, necesaria para cookies y CSRF.
+5. Alcance permitido del modo soporte: sólo lectura o escritura limitada.
+6. Política de retención y contenido de auditoría.
+7. Estrategia de migración de campos heredados de usuario para 6.2.2.
+   **Aprobada mediante el PR #16 y conservada como contingencia:** inventario
+   dry-run, respaldo, aplicación idempotente, verificación y rollback definidos
+   en
+   [`fase-6.2.2-migracion-autoridad-membership.md`](./fase-6.2.2-migracion-autoridad-membership.md).
+   El PR #17 implementó y verificó el inventario read-only original y el PR #19
+   endureció su validación de tipos BSON. La rebaseline preproductiva del PR
+   #18 evita implementar un backfill sin destinatario, pero no declara
+   completados respaldo, apply, verify o rollback.
+8. Estrategia de migración para turnos y bloqueos de 6.2.3.
+9. Política de compatibilidad y actualización de dependencias.
 
-Los parámetros físicos de 6.2.6-B que antes estaban pendientes ya fueron concretados en su documento normativo y PR #32: TTLs, DNS timeout/retry, rate limits, representations de generations, persisted fence y migration/index strategy.
+Los parámetros físicos que el contrato 6.2.6-B dejó a revisión humana ya fueron concretados en PR #32 y están reconciliados en [`fase-6.2.6-b-verified-business-public-origins.md`](./fase-6.2.6-b-verified-business-public-origins.md): TTLs, DNS timeout/retry, rate limits, representations de generations, persisted authority fence, dynamic CORS lookup e índice físico/cutover.
 
 ## 13. Siguiente bloque de trabajo recomendado
 
-La fuente de verdad funcional de 6.2.6-B parte de `master@ed7acfd5fed91b03cd65becd2af154f93dad027b`, que contiene el merge aprobado de PR #31.
+`master@ed7acfd5fed91b03cd65becd2af154f93dad027b` contiene el merge aprobado de PR #31 / contrato 6.2.6-B. **PR #32 es ahora el bloque activo y permanece Draft.**
 
-PR #32 es el bloque activo y debe permanecer **Draft**. La implementación funcional y las correcciones adversariales conocidas están presentes; CI #326 fue verde sobre el runtime corregido. El siguiente gate no es iniciar 6.3 ni ampliar capabilities: es obtener CI verde sobre el HEAD documental final y realizar una **nueva revisión adversarial independiente** de PR #32.
+La implementación funcional y los bloqueantes adversariales conocidos ya fueron corregidos. CI #326 quedó verde sobre el runtime corregido. El siguiente gate es exclusivamente:
+
+1. confirmar CI verde sobre el HEAD documental final exacto;
+2. realizar una nueva revisión adversarial independiente de PR #32;
+3. mantener Draft hasta autorización posterior explícita.
+
+No iniciar desde esta iteración CANCEL, RESCHEDULE, PAYMENT, 6.3 ni 6.4.
 
 Deuda que permanece fuera de 6.2.6-B:
 
-1. capabilities públicas separadas para CANCEL/RESCHEDULE/PAYMENT;
-2. workflow operativo de reconciliation/refund para Payments que lo requieran;
-3. monitoring DNS periódico;
-4. CSRF general/sesiones de 6.3;
-5. impersonación de 6.4;
-6. otras deudas explícitas de fases posteriores.
+1. capabilities públicas separadas para cancel/reschedule/payment;
+2. workflow operativo de reconciliation/refund para Payments autorizados que requieran resolución;
+3. monitoring/reverification periódica de domains;
+4. otras deudas explícitas ya registradas para fases posteriores.
 
 **6.2.6-B no se declara cerrada ni fusionada desde este plan. 6.2.6 completa continúa abierta.**
+
+La implementación y este diseño no autorizan por sí mismos ninguna escritura productiva adicional ni amplían capabilities existentes.
