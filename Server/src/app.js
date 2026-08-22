@@ -12,6 +12,7 @@ import rateLimit from "express-rate-limit";
 import MongoStore from "connect-mongo";
 import { urlMongo, sessionSecret, corsOrigins, frontendUrl, nodeEnv } from "./config/env.js";
 import { publicOriginHasFreshTrust } from "./services/publicWeb.service.js";
+import { AppError } from "./utils/appError.js";
 // EXPRESS
 
 export const app = express();
@@ -75,6 +76,12 @@ const isDynamicPublicHeadlessRoute = (req) => {
   return false;
 };
 
+const corsDenied = () => new AppError(
+  "Origin no permitido por CORS",
+  403,
+  "CORS_ORIGIN_DENIED",
+);
+
 // CORS público y authority de sesión son conceptos distintos. CORS_ORIGINS keeps
 // its compatibility role for non-public surfaces, while the 6.2.6-B public
 // browser surface is admitted dynamically from fresh publicWeb trust. Only
@@ -96,7 +103,7 @@ app.use(
 
     const requestOrigin = normalizeOrigin(rawOrigin);
     if (!requestOrigin) {
-      return callback(new Error("Origin no permitido por CORS"));
+      return callback(corsDenied());
     }
 
     // Authenticated panel origin remains an independent, server-controlled
@@ -108,14 +115,14 @@ app.use(
     if (isDynamicPublicHeadlessRoute(req)) {
       return publicOriginHasFreshTrust({ origin: requestOrigin })
         .then((eligible) => {
-          if (!eligible) return callback(new Error("Origin no permitido por CORS"));
+          if (!eligible) return callback(corsDenied());
           return callback(null, { origin: true, credentials: false });
         })
-        .catch(() => callback(new Error("Origin no permitido por CORS")));
+        .catch(() => callback(corsDenied()));
     }
 
     if (!compatibilityOrigins.has(requestOrigin)) {
-      return callback(new Error("Origin no permitido por CORS"));
+      return callback(corsDenied());
     }
 
     return callback(null, { origin: true, credentials: false });
