@@ -1,3 +1,5 @@
+import { normalizePublicWebsiteUrl } from "./publicWebOrigin.js";
+
 const CONFIG_ERROR_CODE = "GUEST_APPOINTMENT_ACCESS_CONFIG_INVALID";
 
 const configurationError = () => {
@@ -8,41 +10,25 @@ const configurationError = () => {
 
 export const GUEST_APPOINTMENT_ACCESS_CONFIG_ERROR_CODE = CONFIG_ERROR_CODE;
 
-export const getTrustedGuestAppointmentOrigin = () => {
-  const configured = process.env.GUEST_APPOINTMENT_ACCESS_ORIGIN;
-  if (typeof configured !== "string" || configured.length === 0 || configured !== configured.trim()) {
-    throw configurationError();
-  }
-
-  let url;
+// The trusted origin is now an explicit tenant-scoped input resolved from fresh
+// BusinessConfig.publicWeb trust. There is deliberately no environment fallback.
+export const getTrustedGuestAppointmentOrigin = (trustedOrigin) => {
   try {
-    url = new URL(configured);
+    return normalizePublicWebsiteUrl(trustedOrigin);
   } catch {
     throw configurationError();
   }
-
-  if (
-    url.protocol !== "https:"
-    || url.username
-    || url.password
-    || url.search
-    || url.hash
-    || (url.pathname !== "/" && url.pathname !== "")
-  ) {
-    throw configurationError();
-  }
-
-  return url.origin;
 };
 
 export const buildGuestAppointmentVerificationUrl = ({
+  trustedOrigin,
   businessId,
   appointmentId,
   verificationId,
   purpose,
   challengeSecret,
 }) => {
-  const origin = getTrustedGuestAppointmentOrigin();
+  const origin = getTrustedGuestAppointmentOrigin(trustedOrigin);
   const fragment = new URLSearchParams({
     businessId: businessId.toString(),
     appointmentId: appointmentId.toString(),
