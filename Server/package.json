@@ -37,7 +37,8 @@
     "test:appointment-ownership": "node --test test/appointmentOwnershipEnforcement.test.js",
     "test:appointment-service-coherence": "node --test test/appointmentServiceTenantCoherence.test.js",
     "test:service-update-hardening": "node --test test/serviceUpdateHardening.test.js",
-    "test:payment": "node --test test/paymentAuthorityBoundary.test.js && node --test test/paymentOptIn.test.js && node --test test/auditPaymentOptIn.test.js && node --test test/paymentCancellationRebookingRace.test.js",
+    "test:payment-financial-metrics": "node --test test/paymentFinancialMetrics.test.js",
+    "test:payment": "npm run test:payment-financial-metrics && node --test test/paymentAuthorityBoundary.test.js && node --test test/paymentOptIn.test.js && node --test test/auditPaymentOptIn.test.js && node --test test/paymentCancellationRebookingRace.test.js",
     "test:websocket": "node --test test/unit/websocket.auth.test.js"
   },
   "dependencies": {
