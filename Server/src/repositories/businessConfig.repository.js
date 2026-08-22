@@ -85,20 +85,38 @@ export const findFreshTrustForBusiness = async ({ businessId, now }) => (
     .lean()
 );
 
-// Shared origins are valid. We intentionally query zero/one/many configs and
-// then require at least one active Business rather than treating Origin as a key.
-export const hasFreshTrustForOrigin = async ({ origin, now }) => {
-  const configs = await BusinessConfig.find({
-    "publicWeb.verificationStatus": "verified",
-    "publicWeb.websiteUrl": origin,
-    "publicWeb.verifiedOrigin": origin,
-    "publicWeb.verificationValidUntil": { $gt: now },
-    "publicWeb.trustGeneration": { $gte: 1 },
-  }).select("business").lean();
+// Shared origins are valid, but preflight only needs existence of one active
+// Business with fresh trust. The pipeline is deliberately bounded at one result;
+// it never materializes the set of all Businesses sharing an Origin.
+export const buildFreshTrustForOriginPipeline = ({ origin, now }) => [
+  {
+    $match: {
+      "publicWeb.verifiedOrigin": origin,
+      "publicWeb.verificationStatus": "verified",
+      "publicWeb.verificationValidUntil": { $gt: now },
+      "publicWeb.websiteUrl": origin,
+      "publicWeb.trustGeneration": { $gte: 1 },
+    },
+  },
+  {
+    $lookup: {
+      from: Business.collection.name,
+      localField: "business",
+      foreignField: "_id",
+      as: "activeBusiness",
+    },
+  },
+  { $unwind: "$activeBusiness" },
+  { $match: { "activeBusiness.isActive": true } },
+  { $limit: 1 },
+  { $project: { _id: 1 } },
+];
 
-  if (configs.length === 0) return false;
-  const businessIds = configs.map((entry) => entry.business);
-  return Boolean(await Business.exists({ _id: { $in: businessIds }, isActive: true }));
+export const hasFreshTrustForOrigin = async ({ origin, now }) => {
+  const matches = await BusinessConfig.aggregate(
+    buildFreshTrustForOriginPipeline({ origin, now }),
+  ).option({ allowDiskUse: false });
+  return matches.length === 1;
 };
 
 const availableFenceMatch = (now) => ({
