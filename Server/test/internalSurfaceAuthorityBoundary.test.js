@@ -2,12 +2,13 @@ import './setup.js';
 import test from "node:test";
 import assert from "node:assert/strict";
 
-// Debe configurarse antes de importar app/config: el origin público está permitido
-// por CORS, pero no pertenece a la surface administrativa del panel.
+// Debe configurarse antes de importar app/config. El origin público se mantiene
+// credentialless por CORS y además posee trust publicWeb fresh para Business A;
+// aun así nunca pertenece a la surface administrativa del panel.
 process.env.FRONTEND_URL = "http://panel.example";
-process.env.CORS_ORIGINS = "http://panel.example,http://public.example";
+process.env.CORS_ORIGINS = "http://panel.example,https://public.example.test";
 
-const [{ default: app, sessionStore }, { connectDB }, fixtures, models] = await Promise.all([
+const [{ default: app, sessionStore }, { connectDB }, fixtures, models, publicWeb] = await Promise.all([
   import("../src/app.js"),
   import("../src/db/db.js"),
   import("./fixtures.js"),
@@ -17,6 +18,7 @@ const [{ default: app, sessionStore }, { connectDB }, fixtures, models] = await 
     import("../src/db/models/user.model.js"),
     import("../src/db/models/business.model.js"),
   ]),
+  import("../src/services/publicWeb.service.js"),
 ]);
 
 const { seedTestData, cleanTestData, teardown } = fixtures;
@@ -34,7 +36,24 @@ const server = app.listen(0);
 const { port } = server.address();
 const baseUrl = `http://localhost:${port}/api`;
 const panelOrigin = "http://panel.example";
-const publicOrigin = "http://public.example";
+const publicOrigin = "https://public.example.test";
+
+// 6.2.6-B exige que una request browser pública real presente una trust fresh
+// del Business exacto. La fixture la demuestra con resolver fake; CORS_ORIGINS
+// por sí solo no vuelve confiable un origin para las rutas headless dinámicas.
+const pendingPublicWeb = await publicWeb.configurePublicWeb({
+  businessId: seed.business._id,
+  websiteUrl: publicOrigin,
+  bookingUrl: `${publicOrigin}/reservar`,
+});
+const publicChallenge = pendingPublicWeb.dnsVerification.recordValue
+  .slice("agenda-verification=".length);
+const verifiedPublicWeb = await publicWeb.verifyPublicWeb({
+  businessId: seed.business._id,
+  resolveTxt: async () => [["agenda-verification=", publicChallenge]],
+});
+assert.equal(verifiedPublicWeb.verificationStatus, "verified");
+assert.equal(verifiedPublicWeb.verifiedOrigin, publicOrigin);
 
 const loginAdmin = async () => {
   const response = await fetch(`${baseUrl}/login`, {
@@ -92,24 +111,26 @@ const expectForbiddenInternalReads = async (cookie) => {
 test("6.2.6-A internal surface server boundary y live Membership authority", async (t) => {
   const adminCookie = await loginAdmin();
 
-  await t.test("origin público permitido + cookie + header internal sigue recibiendo Services públicos", async () => {
+  await t.test("origin público verificado + cookie + header internal sigue recibiendo Services públicos", async () => {
     const response = await fetch(`${baseUrl}/services?businessId=${seed.business._id}`, {
       headers: publicHeaders(adminCookie),
     });
     assert.equal(response.status, 200);
     assert.equal(response.headers.get("access-control-allow-origin"), publicOrigin);
+    assert.equal(response.headers.get("access-control-allow-credentials"), null);
     const data = await response.json();
     assert.ok(data.payload.length > 0);
     data.payload.forEach(assertPublicService);
   });
 
-  await t.test("origin público permitido + cookie + header internal sigue recibiendo Workers públicos", async () => {
+  await t.test("origin público verificado + cookie + header internal sigue recibiendo Workers públicos", async () => {
     const response = await fetch(
       `${baseUrl}/users/workers?businessId=${seed.business._id}&serviceId=${seed.service._id}`,
       { headers: publicHeaders(adminCookie) },
     );
     assert.equal(response.status, 200);
     assert.equal(response.headers.get("access-control-allow-origin"), publicOrigin);
+    assert.equal(response.headers.get("access-control-allow-credentials"), null);
     const data = await response.json();
     assert.ok(data.payload.length > 0);
     data.payload.forEach(assertPublicWorker);
@@ -178,6 +199,7 @@ test("6.2.6-A internal surface server boundary y live Membership authority", asy
     for (const response of reads) {
       assert.equal(response.status, 403);
       assert.equal(response.headers.get("access-control-allow-origin"), publicOrigin);
+      assert.equal(response.headers.get("access-control-allow-credentials"), null);
     }
 
     const create = await fetch(`${baseUrl}/internal/appointments`, {
@@ -199,6 +221,7 @@ test("6.2.6-A internal surface server boundary y live Membership authority", asy
     });
     assert.equal(create.status, 403);
     assert.equal(create.headers.get("access-control-allow-origin"), publicOrigin);
+    assert.equal(create.headers.get("access-control-allow-credentials"), null);
   });
 
   await t.test("panel de origen confiable conserva workers, services, appointments y shifts", async () => {
@@ -229,6 +252,7 @@ test("6.2.6-A internal surface server boundary y live Membership authority", asy
         headers: publicHeaders(adminCookie),
       });
       assert.equal(publicResponse.status, 200);
+      assert.equal(publicResponse.headers.get("access-control-allow-credentials"), null);
     } finally {
       await Membership.updateOne({ _id: membership._id }, { $set: { isActive: true } });
     }
