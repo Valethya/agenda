@@ -1,10 +1,10 @@
 # Plan maestro de cierre de Fase 6 y estado de Fase 7
 
 **Proyecto:** ATMÓSFERA Agenda
-**Estado del documento:** Plan histórico vigente; esta revisión reconcilia únicamente el bloque 6.2.6-A contra `master` posterior a PR #29 y no reescribe retrospectivamente los registros operativos de fases anteriores. 6.2.6-A está técnicamente cerrada sobre el HEAD aprobado `e85a00d361d60df349030bc43a274c2433dd4e0a`, con CI #286 `success`; PR #30 está Ready y pendiente únicamente de autorización explícita de merge. Esto no declara cerrada la totalidad de 6.2.6.
+**Estado del documento:** Plan histórico vigente; esta revisión registra que 6.2.6-A fue fusionada mediante PR #30 y activa 6.2.6-B exclusivamente como contrato documental. La implementación funcional de 6.2.6-B no ha comenzado y 6.2.6 completa continúa abierta.
 **Fecha original:** 21 de julio de 2026
 **Última revisión:** 22 de agosto de 2026
-**Base de contraste 6.2.6-A:** `master@3f2ab734d412828f5a77ec72b778a8d575a14cd4`, merge aprobado de PR #29 / 6.2.5-C2
+**Base de contraste 6.2.6-B:** `master@ea43c0da9a11355811b5bf0c52210af86fdac335`, merge aprobado de PR #30 / 6.2.6-A
 **Alcance:** Backend, multitenencia, seguridad, pagos, impersonación, frontend, pruebas y operación
 
 ## 1. Objetivo
@@ -64,7 +64,7 @@ No se considerará terminada una tarea solamente porque el código compile. Cada
 - 7.10 está cerrada mediante el PR #15.
 - 7.1–7.6 también están fusionadas según el registro de cada etapa.
 - 7.8 está aplazada por decisión de producto.
-- El registro anterior se conserva como fotografía histórica. Para 6.2.6-A la fuente de verdad es `master@3f2ab734d412828f5a77ec72b778a8d575a14cd4`, que ya contiene el merge aprobado de PR #29 / 6.2.5-C2.
+- El registro anterior se conserva como fotografía histórica. Para 6.2.6-B la fuente de verdad es `master@ea43c0da9a11355811b5bf0c52210af86fdac335`, que ya contiene el merge aprobado de PR #30 / 6.2.6-A. 6.2.6-B está activo únicamente en su iteración documental.
 
 ## 4. Etapa 6.1 — Base verificable
 
@@ -384,9 +384,8 @@ Las webs construidas por ATMÓSFERA serán la interfaz del negocio y consumirán
 
 **Estado 6.2.6-A**
 
-- implementación completada y revisión adversarial cerrada sobre el HEAD técnico aprobado `e85a00d361d60df349030bc43a274c2433dd4e0a`;
-- CI #286 aprobado (`success`);
-- PR #30 Ready y pendiente únicamente de autorización explícita de merge;
+- PR #30 fue fusionado en `master@ea43c0da9a11355811b5bf0c52210af86fdac335`;
+- la implementación y revisión adversarial de 6.2.6-A quedaron cerradas sobre el HEAD técnico aprobado `e85a00d361d60df349030bc43a274c2433dd4e0a` y el cierre documental posterior del PR;
 - se añadió la especificación versionable [`fase-6.2.6-contrato-headless-minimo.md`](./fase-6.2.6-contrato-headless-minimo.md);
 - servicios públicos usan una proyección allowlist mínima;
 - profesionales públicos se resuelven para un Service activo concreto mediante Membership vigente + `Service.workers`, sin usar `User.role`/`User.business` como authority;
@@ -398,19 +397,27 @@ Las webs construidas por ATMÓSFERA serán la interfaz del negocio y consumirán
 - C2 READ permanece action-scoped y no concede cancel, reschedule ni payment authority;
 - la suite contractual se incorpora al comando oficial de integración.
 
-**Pendiente / no cerrado por 6.2.6-A**
+**Estado 6.2.6-B — iteración documental activa**
 
-`BusinessConfig` aún no contiene `websiteUrl`/`bookingUrl` persistidos ni existe infraestructura completa de verificación de dominio. C2 continúa usando `GUEST_APPOINTMENT_ACCESS_ORIGIN` HTTPS server-side como trusted origin. No se inventa un verificador de dominios dentro de 6.2.6-A. Las capabilities cancel/reschedule/payment y el workflow operativo de reconciliation/refund continúan igualmente fuera de alcance. Por esta razón, **6.2.6-A cerrada no equivale a 6.2.6 completa cerrada**.
+- el contrato inicial se define en [`fase-6.2.6-b-verified-business-public-origins.md`](./fase-6.2.6-b-verified-business-public-origins.md);
+- esta iteración es exclusivamente documental y no cambia comportamiento runtime;
+- define un único origin público verificado por Business, `websiteUrl`/`bookingUrl` same-origin, verificación DNS TXT server-side, autoridad Membership admin y cutover C2 fail-closed;
+- no declara persistencia, endpoints, resolver DNS ni cutover C2 implementados;
+- 6.2.6 completa continúa abierta.
+
+**Pendiente / no cerrado todavía**
+
+`BusinessConfig` aún no contiene `websiteUrl`/`bookingUrl` persistidos ni existe infraestructura funcional de verificación de dominio. C2 continúa usando `GUEST_APPOINTMENT_ACCESS_ORIGIN` HTTPS server-side como trusted origin hasta que una implementación futura de 6.2.6-B sea revisada y aprobada. Las capabilities cancel/reschedule/payment y el workflow operativo de reconciliation/refund continúan igualmente fuera de alcance. Por esta razón, **el contrato documental de 6.2.6-B no equivale a 6.2.6-B implementada ni a 6.2.6 completa cerrada**.
 
 **Cambio necesario**
 
-- ~~Definir una versión inicial mínima para servicios, profesionales, disponibilidad y creación de citas.~~ **Implementado, verificado por CI #286 y revisado adversarialmente en 6.2.6-A.**
+- ~~Definir una versión inicial mínima para servicios, profesionales, disponibilidad y creación de citas.~~ **Implementado y cerrado en 6.2.6-A.**
 - Reservar confirmación, reprogramación y cancelación públicas para operaciones separadas con credenciales de acción. **READ existe en C2; las capabilities futuras continúan fuera de alcance.**
-- ~~Exigir `businessId` o slug válido en todas las operaciones públicas y aplicar ownership en el backend.~~ **Preservado y cubierto contractualmente.**
+- ~~Exigir `businessId` o slug válido en todas las operaciones públicas y aplicar ownership en el backend.~~ **Preservado y cubierto contractualmente por 6.2.6-A.**
 - ~~Evitar que la API dependa del orden visual, cantidad de pasos o estructura del formulario consumidor.~~ **Formalizado en 6.2.6-A.**
-- Registrar por negocio una `websiteUrl` y una `bookingUrl` HTTPS cuyos dominios hayan sido verificados. **Pendiente; no se implementa sin infraestructura de confianza.**
-- Construir enlaces operativos exclusivamente desde la configuración persistida; nunca desde una URL arbitraria recibida del navegador. **C2 ya usa trusted server-side origin; la variante persistida por Business sigue pendiente.**
-- ~~Definir estados, códigos de error, idempotencia, límites de frecuencia y reglas de compatibilidad.~~ **Formalizado para el contrato mínimo; no implica que todas las deudas operativas futuras estén resueltas.**
+- Registrar por negocio una `websiteUrl` y una `bookingUrl` HTTPS cuyos origins hayan sido verificados. **Contrato documental definido en 6.2.6-B; implementación pendiente.**
+- Construir enlaces operativos exclusivamente desde configuración persistida y verificada del mismo Business; nunca desde una URL arbitraria recibida del navegador. **Contrato y cutover definidos en 6.2.6-B; implementación pendiente.**
+- ~~Definir estados, códigos de error, idempotencia, límites de frecuencia y reglas de compatibilidad para el contrato headless mínimo.~~ **Formalizado para 6.2.6-A; 6.2.6-B añade su propio contrato documental de lifecycle y errores.**
 
 **Criterio de aceptación**
 
@@ -419,7 +426,8 @@ Las webs construidas por ATMÓSFERA serán la interfaz del negocio y consumirán
 - Una solicitud con negocio inexistente o recurso de otro tenant se rechaza de manera determinista.
 - Cambiar la presentación de una web no requiere modificar la lógica central de citas.
 - El contrato inicial no incorpora endpoints ajenos a los recorridos necesarios para el MVP.
-- Las pruebas de 6.2.6-A permanecen verdes junto con tenant isolation, availability, Appointment ownership, C1 y C2; CI #286 constituye la evidencia de cierre técnico de esta subfase.
+- Las pruebas de 6.2.6-A permanecen verdes junto con tenant isolation, availability, Appointment ownership, C1 y C2.
+- 6.2.6-B no podrá cerrarse funcionalmente hasta implementar y revisar adversarialmente la trust root verificada por Business sin fallback permanente al origin global.
 
 ## 6. Etapa 6.3 — Autorización, sesiones y pagos
 
@@ -857,16 +865,18 @@ La Fase 6 podrá declararse terminada cuando se cumplan todas estas condiciones:
 
 ## 13. Siguiente bloque de trabajo recomendado
 
-En la baseline verificada para esta revisión, `master@3f2ab734d412828f5a77ec72b778a8d575a14cd4` ya contiene PR #29 / 6.2.5-C2. **6.2.6-A está técnicamente cerrada** sobre el HEAD aprobado `e85a00d361d60df349030bc43a274c2433dd4e0a`, con CI #286 `success`; PR #30 está Ready y pendiente únicamente de autorización explícita de merge. Este cierre de 6.2.6-A **no declara cerrada 6.2.6 completa**.
+`master@ea43c0da9a11355811b5bf0c52210af86fdac335` ya contiene el merge aprobado de PR #30 / 6.2.6-A. **6.2.6-B es ahora el bloque activo**, pero la presente iteración es exclusivamente documental mediante [`fase-6.2.6-b-verified-business-public-origins.md`](./fase-6.2.6-b-verified-business-public-origins.md).
 
-Deuda que permanece fuera de 6.2.6-A:
+La implementación funcional de 6.2.6-B no debe comenzar hasta que ese contrato sea revisado adversarialmente y aprobado. El siguiente gate técnico deberá implementar, sin ampliar alcance, `websiteUrl`/`bookingUrl` tenant-scoped, DNS TXT server-side, lifecycle `unconfigured -> pending -> verified` y el cutover C2 desde la trust root global a un verified origin por Business.
 
-1. `websiteUrl`/`bookingUrl` persistidos y verificados por Business;
-2. infraestructura de domain verification;
-3. capabilities públicas separadas para cancel/reschedule/payment;
-4. workflow operativo de reconciliation/refund para Payments autorizados que requieran resolución;
+Deuda que permanece fuera de este contrato documental:
+
+1. implementación funcional de 6.2.6-B y sus tests;
+2. capabilities públicas separadas para cancel/reschedule/payment;
+3. workflow operativo de reconciliation/refund para Payments autorizados que requieran resolución;
+4. monitoring/reverification periódica de domains;
 5. otras deudas explícitas ya registradas para 6.2.6 y fases posteriores.
 
-No iniciar 6.2.6-B ni 6.3 desde este cierre documental. Cualquier siguiente bloque requiere autorización explícita posterior y una decisión separada sobre la deuda pendiente de 6.2.6.
+**6.2.6 completa continúa abierta.** No iniciar 6.3 desde esta iteración documental.
 
 El diseño documental no autoriza por sí mismo ninguna escritura productiva ni amplía capabilities existentes.
