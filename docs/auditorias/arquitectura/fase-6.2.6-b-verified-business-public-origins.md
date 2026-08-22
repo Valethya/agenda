@@ -25,6 +25,20 @@ El MVP soportará exactamente un origin público verificado por Business. El Bus
 - renovar explícitamente la trust mediante una nueva prueba DNS;
 - permitir que Agenda construya enlaces operativos C2 desde el origin verificado vigente.
 
+La cardinalidad es deliberadamente tenant-scoped:
+
+```text
+Business -> máximo un verified public origin
+```
+
+pero **no** implica la relación inversa:
+
+```text
+verified public origin -> máximo un Business
+```
+
+Un mismo origin puede estar legítimamente verificado y fresh para múltiples Businesses. `verifiedOrigin` no es una clave tenant global, no debe tener un índice global `unique` y no sustituye los identificadores públicos explícitos definidos en 6.2.6-A.
+
 La autoridad final debe quedar expresada como:
 
 ```text
@@ -68,6 +82,7 @@ El HEAD adversarial de partida de PR #31 continúa siendo `056c3d7775cbe0aaa2717
 8. C2 implementa end-to-end únicamente READ para exactamente Business + Appointment + READ.
 9. La política CORS actual construye el allowlist desde `CORS_ORIGINS` + `FRONTEND_URL`; únicamente `FRONTEND_URL` obtiene respuestas credentialed (`Access-Control-Allow-Credentials: true`). Un origin público admitido por CORS no adquiere por ello authority de sesión.
 10. `exchangeGuestAppointmentReadChallenge()` valida Delivery entregada, job/generation C2 y challenge C1 antes de emitir la capability READ; actualmente no existe todavía vínculo con una public-web trust generation.
+11. El contrato público 6.2.6-A puede resolver Business mediante identificadores explícitos en query, body o `x-business-id`/`x-business-slug`. Un preflight `OPTIONS` no contiene el body futuro ni conoce el valor futuro de esos headers, por lo que CORS preflight y tenant binding de la request real deben permanecer como decisiones separadas.
 
 No se detectó contradicción de runtime con estas premisas. Los bloqueantes detectados eran contractuales.
 
@@ -93,6 +108,8 @@ El diseño debe resistir, como mínimo:
 - un navegador que aporta `Origin`, `Host`, `Referer`, `returnUrl`, URL o headers arbitrarios;
 - un origin públicamente verificado que intenta convertirse en origin credentialed o panel origin;
 - cookies administrativas incidentales enviadas desde un origin público;
+- un preflight exitoso que intenta reutilizarse como si hubiese concedido tenant authority;
+- un origin compartido legítimamente por dos Businesses que intenta provocar confusión de tenant;
 - un worker tenant que intenta configurar trust sin role admin;
 - un admin B que intenta mutar A;
 - `Business.owner` sin Membership admin;
@@ -125,9 +142,9 @@ AND trustGeneration == generation vigente
 
 `verifiedAt` registra cuándo se obtuvo la prueba. `verificationValidUntil` limita cuánto tiempo esa prueba puede respaldar nuevas operaciones C2.
 
-6.2.6-B no requiere monitoring periódico ni background jobs. La expiración puede verificarse de forma lazy al resolver trust, al autorizar CORS público tenant-scoped, al iniciar/revalidar un delivery C2 y al realizar exchange.
+6.2.6-B no requiere monitoring periódico ni background jobs. La expiración puede verificarse de forma lazy al resolver trust, al autorizar CORS público, al vincular una request browser con el Business explícitamente resuelto, al iniciar/revalidar un delivery C2 y al realizar exchange.
 
-Una trust expirada falla cerrada aunque el documento físico aún conserve temporalmente `verificationStatus = verified` hasta que una escritura posterior materialice la transición. Ningún path de authority puede omitir el predicado temporal.
+Una trust expirada falla cerrada aunque el documento físico aún conserve temporalmente `verificationStatus = verified` hasta que una escritura posterior materialice la transición. Ningún path de authority puede omitir el predicado temporal cuando publicWeb trust sea parte de su decisión.
 
 ## 4. Modelo conceptual
 
@@ -196,9 +213,9 @@ Son server-owned y deben rechazarse si aparecen en un DTO de escritura:
 
 ## 5. Normalización y validación URL
 
-Toda normalización ocurre server-side mediante una única política compartida por escritura, comparación, CORS público tenant-scoped y resolución C2.
+Toda normalización ocurre server-side mediante una única política compartida por escritura, comparación, CORS público, binding browser de la request real y resolución C2.
 
-La normalización nunca depende de headers del request.
+La normalización nunca confía en headers como fuente de tenant authority. El header estándar `Origin` puede participar únicamente en la política CORS/binding browser definida en §11.
 
 ### 5.1 Política de puertos MVP
 
@@ -265,6 +282,8 @@ https://negocio.cl
 ```
 
 `:443` explícito puede normalizarse al mismo origin; cualquier otro puerto se rechaza antes de la comparación.
+
+La igualdad de origin no implica igualdad de Business. Dos Businesses distintos pueden tener el mismo `verifiedOrigin` si cada uno posee su propia prueba tenant-scoped fresh.
 
 ## 6. Lifecycle, freshness y generations
 
@@ -361,12 +380,13 @@ Cuando `now >= verificationValidUntil`:
 
 - el origin deja de ser una trust root efectiva inmediatamente;
 - C2 no puede emitir nuevos enlaces;
-- CORS dinámico tenant-scoped no puede considerar esa prueba fresh;
+- CORS dinámico no puede considerar esa prueba fresh;
+- una request browser con `Origin` no puede usar esa prueba para bindearse al Business;
 - exchanges de Deliveries ligadas a esa generation fallan como invalid proof;
 - no existe fallback al origin global;
 - se requiere nueva prueba DNS.
 
-No se necesita job periódico: cada frontera de authority debe comparar `now` con `verificationValidUntil`.
+No se necesita job periódico: cada frontera que dependa de publicWeb trust debe comparar `now` con `verificationValidUntil`.
 
 ### 6.6 Re-verification explícita
 
@@ -706,15 +726,21 @@ Nunca exponer:
 
 ## 11. CORS público credentialless
 
-6.2.6-B integra verified public origins con la superficie headless pública sin mezclarlos con la frontera autenticada.
+6.2.6-B integra verified public origins con la superficie headless pública sin mezclarlos con la frontera autenticada. El contrato separa explícitamente dos decisiones distintas:
+
+1. **CORS preflight eligibility:** si el navegador puede recibir un grant CORS credentialless para una route class pública/headless desde ese Origin;
+2. **tenant binding de la request real:** si la operación real, una vez resuelto su Business explícito, puede continuar desde ese Origin concreto.
+
+Un preflight exitoso nunca sustituye el segundo paso.
 
 ### 11.1 Invariantes
 
 ```text
-verified public origin
+verified public origin fresh
   == elegible para CORS de surface pública/headless credentialless
 
 verified public origin
+  != tenant identifier único
   != trusted panel origin
   != credentialed origin
   != session authority
@@ -724,38 +750,163 @@ verified public origin
 
 Sólo la política interna server-controlled vigente del panel puede conceder `Access-Control-Allow-Credentials: true`. En la baseline, esa política está vinculada a `FRONTEND_URL`; 6.2.6-B no la sustituye.
 
-Un origin público verificado debe recibir, cuando corresponda, CORS únicamente para rutas públicas/headless y con credenciales deshabilitadas/omitidas.
+Un origin público verificado debe recibir, cuando corresponda, CORS únicamente para rutas públicas/headless y con `credentials:false` semántico; nunca obtiene `Access-Control-Allow-Credentials: true` por `publicWeb`.
 
 La verificación DNS de un origin no lo añade a `assertTrustedAuthenticatedOrigin` ni a ninguna allowlist credentialed.
 
-### 11.2 CORS tenant-scoped
+### 11.2 Cardinalidad: `verifiedOrigin` no identifica un Business único
 
-Un grant dinámico de CORS público debe demostrar server-side que:
+El contrato del MVP es:
 
 ```text
-request Origin normalizado
-== verifiedOrigin fresh del Business solicitado
+Business -> máximo un verified public origin
 ```
 
-Business A no obtiene por su origin permiso de navegador para leer como si fuese Business B.
+No existe la garantía inversa. Está permitido, por ejemplo:
 
-El mecanismo físico puede variar, pero debe conservar:
+```text
+Business A
+websiteUrl = https://estudio.cl
+bookingUrl = https://estudio.cl/a/reservar
 
-- freshness (`now < verificationValidUntil`);
-- `trustGeneration` vigente;
-- Business solicitado explícitamente según el contrato público;
-- route class pública/headless;
-- `credentials: false`.
+Business B
+websiteUrl = https://estudio.cl
+bookingUrl = https://estudio.cl/b/reservar
+```
 
-### 11.3 Preflight `OPTIONS`
+si A y B han demostrado por separado control del mismo hostname y ambas trust permanecen fresh.
 
-La decisión CORS de un preflight no puede depender del body porque un preflight no transporta el body de la operación futura como fuente de authority.
+Por tanto:
 
-La implementación deberá resolver el Business de forma preflight-safe a partir del target de ruta/identificadores explícitos permitidos por el contrato público o de un índice server-side derivado del Origin. Si no puede determinar de forma segura el Business y su trust fresh, falla cerrado.
+- `verifiedOrigin` no lleva índice global `unique`;
+- Origin no sustituye `businessId`/slug ni los mecanismos públicos explícitos de 6.2.6-A;
+- una búsqueda server-side por Origin puede producir cero, uno o múltiples Businesses;
+- CORS no puede tratar `Origin -> Business` como una función unívoca;
+- el aislamiento tenant continúa dependiendo del Business explícitamente resuelto y del scoping/repositorios del backend.
 
-No usar body, `Referer`, cookie, session role ni un header arbitrario aportado por la web como prueba de domain trust.
+### 11.3 Preflight `OPTIONS`: sólo elegibilidad CORS
 
-### 11.4 Cookies incidentales
+Un preflight no contiene el body de la futura request. `Access-Control-Request-Headers` puede declarar nombres de headers futuros, pero no sus valores. Por ello `OPTIONS` no intenta resolver el Business futuro cuando éste sólo será conocido por body o por el valor de un custom header.
+
+Para una route class que el servidor clasifica como pública/headless y compatible con CORS dinámico, la elegibilidad conceptual es:
+
+```text
+route class pública/headless
+AND request Origin normalizado válido
+AND existe >= 1 Business cuya publicWeb trust para ese mismo Origin sea fresh
+-> CORS preflight elegible credentialless
+```
+
+Una trust cuenta como fresh para esta decisión sólo si, para ese Business:
+
+```text
+verificationStatus == verified
+AND verifiedOrigin == origin actual de websiteUrl
+AND verifiedOrigin == request Origin normalizado
+AND now < verificationValidUntil
+AND trustGeneration es la vigente para ese estado
+```
+
+Si no existe ninguna trust fresh para ese Origin, 6.2.6-B no concede el grant CORS dinámico.
+
+El preflight:
+
+- no selecciona tenant;
+- no valida ownership de Business;
+- no concede tenant authority;
+- no concede session authority;
+- no concede Membership/admin authority;
+- no habilita rutas internas;
+- no autoriza side effects;
+- no depende del body inexistente;
+- no depende del valor futuro de `x-business-id`, `x-business-slug` u otro custom header;
+- no usa `Referer` ni cookies como prueba de domain trust;
+- mantiene `credentials:false` para este grant público.
+
+Un preflight permitido significa únicamente que el navegador puede intentar la request pública posterior. No afirma que esa request posterior esté autorizada para ningún Business concreto.
+
+### 11.4 Request real browser: binding exacto al Business resuelto
+
+Cuando la request pública real presenta header `Origin`, primero conserva el contrato público existente para resolver el Business explícito mediante los mecanismos de 6.2.6-A. Después y **antes de cualquier controller o side effect público afectado**, debe comprobar server-side:
+
+```text
+Business explícitamente resuelto
+AND request Origin normalizado
+AND Business.publicWeb.verificationStatus == verified
+AND Business.publicWeb.verifiedOrigin == origin actual de websiteUrl
+AND Business.publicWeb.verifiedOrigin == request Origin normalizado
+AND now < Business.publicWeb.verificationValidUntil
+AND Business.publicWeb.trustGeneration es la vigente
+```
+
+Sólo entonces puede continuar la operación browser.
+
+Ejemplo de mismatch:
+
+```text
+Origin = https://a.cl
+Business solicitado = B
+B.verifiedOrigin = https://b.cl
+```
+
+Resultado obligatorio:
+
+```text
+reject fail-closed
+antes de controller/side effect
+sin creación ni mutación parcial
+```
+
+El hecho de que `https://a.cl` haya superado un preflight porque existe una trust fresh para Business A no concede permiso para operar Business B.
+
+El Business sigue siendo el tenant explícito; `Origin` funciona aquí como binding adicional de navegador a la publicWeb trust de **ese mismo Business**, no como selector de tenant.
+
+### 11.5 Shared origin válido
+
+Si:
+
+```text
+Business A verifiedOrigin = https://estudio.cl fresh
+Business B verifiedOrigin = https://estudio.cl fresh
+```
+
+entonces:
+
+```text
+OPTIONS desde https://estudio.cl
+-> elegible credentialless
+
+request real desde https://estudio.cl + Business A explícito
+-> puede continuar si el resto del contrato A es válido
+
+request real desde https://estudio.cl + Business B explícito
+-> puede continuar si el resto del contrato B es válido
+```
+
+A y B no comparten datos ni autoridad por compartir Origin. Cada request resuelve un Business concreto y todos los recursos siguen tenant-scoped por ese Business.
+
+### 11.6 Requests públicas sin `Origin`
+
+Se preserva expresamente el contrato headless de 6.2.6-A para server-to-server, CLI, backend-to-backend y otros callers non-browser/same-origin compatibles que no presentan header `Origin`.
+
+```text
+absence of Origin
+!= invalid public request
+```
+
+La ausencia de `Origin` no dispara una comprobación CORS inexistente ni convierte `publicWeb` en autenticación general de la API pública.
+
+Una request pública sin `Origin`:
+
+- sigue exigiendo Business explícito según 6.2.6-A;
+- sigue sometida a validación, tenant scoping y ownership propios de la ruta;
+- no obtiene session/Membership/admin authority;
+- no necesita demostrar un browser-origin binding sólo por existir 6.2.6-B;
+- no puede usar esta excepción para acceder a rutas internas, que conservan sus fronteras independientes.
+
+Las operaciones que por su propio contrato sí dependen de publicWeb trust —por ejemplo el destino C2 después del cutover— continúan exigiendo esa trust aunque el caller no presente `Origin`. Esta sección sólo evita usar CORS como autenticación general de la API headless.
+
+### 11.7 Cookies incidentales y panel authority
 
 Incluso si un navegador envía accidentalmente una cookie administrativa desde un verified public origin:
 
@@ -765,6 +916,8 @@ Incluso si un navegador envía accidentalmente una cookie administrativa desde u
 - el origin público no obtiene internal/admin data.
 
 Si un mismo string de origin coincide también con `FRONTEND_URL`, cualquier permiso credentialed existe por la política independiente del panel, no por `publicWeb.verified`.
+
+CORS continúa siendo una política de navegador, no una primitive de autorización backend. Clientes no-browser no quedan autorizados por poder falsificar u omitir `Origin`; siguen sujetos al contrato de la ruta y al tenant explícito.
 
 ## 12. Errores públicos estables
 
@@ -988,7 +1141,7 @@ Cutover obligatorio:
 
 1. implementar persistencia/lifecycle/freshness/generations;
 2. implementar DNS verification + re-verification;
-3. implementar CORS público credentialless tenant-scoped;
+3. implementar CORS público credentialless con preflight eligibility separada del tenant binding de la request real;
 4. ligar C2 Delivery/job a `trustGeneration`;
 5. revalidar generation antes de outbound delivery y en exchange;
 6. cambiar C2 para depender sólo del resolver tenant-scoped;
@@ -1000,40 +1153,47 @@ No se acepta estado final:
 verifiedOrigin ?? GUEST_APPOINTMENT_ACCESS_ORIGIN
 ```
 
-No backfill implícito de trust desde la variable global. Cada Business requiere su prueba DNS propia.
+No backfill implícito de trust desde la variable global. Cada Business requiere su prueba DNS propia, incluso cuando comparte el mismo Origin con otro Business.
 
 ## 18. Invariantes de seguridad
 
 1. Máximo un origin público verificado por Business en el MVP.
-2. HTTPS obligatorio y puerto efectivo 443; puertos no estándar rechazados.
-3. `bookingUrl` exact same-origin con `websiteUrl`.
-4. Sin username/password/query/fragment; website sin path significativo.
-5. No wildcard/IP/localhost/single-label.
-6. Sólo DNS TXT server-side puede producir verified.
-7. Raw DNS challenge nunca se persiste, aparece en GET, errores ni logs.
-8. Persistencia contiene sólo hash/derivación suficiente.
-9. Verified trust posee `verifiedAt` y `verificationValidUntil` server-owned.
-10. `now >= verificationValidUntil` invalida authority aun sin background job.
-11. Existe re-verification explícita; `/verify` no extiende trust verified por no-op.
-12. `verificationAttemptGeneration` cerca DNS TOCTOU.
-13. `trustGeneration` cerca el epoch de public trust que atraviesa C2.
-14. Origin change, delete, expiry/reverification invalidan Deliveries/challenges C2 de generations anteriores.
-15. Same-origin booking path change no incrementa trust generation innecesariamente.
-16. Worker no puede iniciar outbound delivery sobre una generation revocada; debe existir fence linealizable.
-17. Exchange revalida generation + origin + status + freshness.
-18. Stale generation produce C2 `INVALID_PROOF` aunque C1 TTL siga vigente.
-19. C2 mantiene bearer/challenge en fragment.
-20. C2 sigue exactamente Business + Appointment + READ.
-21. Email C2 sigue sólo a `Appointment.guestContact`.
-22. Business sin fresh verified trust falla cerrado antes de emitir artefactos cuando sea posible.
-23. Verified public origin puede obtener sólo CORS público/headless credentialless.
-24. Verified public origin no se convierte en trusted panel/credentialed/session/Membership/admin authority.
-25. Sólo política interna del panel puede conceder `Access-Control-Allow-Credentials: true`.
-26. Preflight no depende del body.
-27. Business A/B conservan aislamiento de origin y datos.
-28. GET Business Settings continúa read-only.
-29. Estado final C2 no conserva fallback global.
-30. Payment/CANCEL/RESCHEDULE permanecen fuera de alcance.
+2. `verifiedOrigin` no es globalmente unique entre Businesses; un mismo origin puede estar fresh-verified para múltiples Businesses.
+3. HTTPS obligatorio y puerto efectivo 443; puertos no estándar rechazados.
+4. `bookingUrl` exact same-origin con `websiteUrl`.
+5. Sin username/password/query/fragment; website sin path significativo.
+6. No wildcard/IP/localhost/single-label.
+7. Sólo DNS TXT server-side puede producir verified.
+8. Raw DNS challenge nunca se persiste, aparece en GET, errores ni logs.
+9. Persistencia contiene sólo hash/derivación suficiente.
+10. Verified trust posee `verifiedAt` y `verificationValidUntil` server-owned.
+11. `now >= verificationValidUntil` invalida authority aun sin background job.
+12. Existe re-verification explícita; `/verify` no extiende trust verified por no-op.
+13. `verificationAttemptGeneration` cerca DNS TOCTOU.
+14. `trustGeneration` cerca el epoch de public trust que atraviesa C2.
+15. Origin change, delete, expiry/reverification invalidan Deliveries/challenges C2 de generations anteriores.
+16. Same-origin booking path change no incrementa trust generation innecesariamente.
+17. Worker no puede iniciar outbound delivery sobre una generation revocada; debe existir fence linealizable.
+18. Exchange revalida generation + origin + status + freshness.
+19. Stale generation produce C2 `INVALID_PROOF` aunque C1 TTL siga vigente.
+20. C2 mantiene bearer/challenge en fragment.
+21. C2 sigue exactamente Business + Appointment + READ.
+22. Email C2 sigue sólo a `Appointment.guestContact`.
+23. Business sin fresh verified trust falla cerrado antes de emitir artefactos C2 cuando sea posible.
+24. `OPTIONS` decide únicamente elegibilidad CORS, nunca tenant authority.
+25. Preflight no depende del body ni del valor futuro de custom headers.
+26. El grant CORS público dinámico permanece credentialless y nunca concede `Access-Control-Allow-Credentials: true` por `publicWeb`.
+27. La request browser real vuelve a resolver el Business explícitamente según 6.2.6-A.
+28. Una request browser con `Origin` sólo continúa si ese Origin coincide con la publicWeb trust fresh del mismo Business resuelto.
+29. El binding Origin + Business ocurre antes de cualquier controller o side effect público afectado.
+30. Shared origin A/B no rompe aislamiento tenant; Origin no se usa como tenant identifier único.
+31. Requests públicas sin `Origin` conservan el contrato headless 6.2.6-A y siguen exigiendo Business explícito.
+32. Verified public origin no se convierte en trusted panel/credentialed/session/Membership/admin authority.
+33. Sólo política interna del panel puede conceder `Access-Control-Allow-Credentials: true`.
+34. CORS no equivale a autorización backend.
+35. GET Business Settings continúa read-only.
+36. Estado final C2 no conserva fallback global.
+37. Payment/CANCEL/RESCHEDULE permanecen fuera de alcance.
 
 ## 19. Matriz mínima de tests futuros
 
@@ -1103,19 +1263,29 @@ No backfill implícito de trust desde la variable global. Cada Business requiere
 | Appointment.client/User.email | nunca fallback |
 | capability | exactamente READ |
 
-### 19.5 CORS
+### 19.5 CORS, preflight y tenant binding
 
 | Caso | Resultado esperado |
 |---|---|
-| verified + fresh origin A consume endpoint público A desde navegador | CORS allow credentialless |
-| origin A no verified/expired | no grant dinámico por publicWeb |
-| verified origin A intenta leer Business B como B | fail closed / sin grant tenant B |
-| verified public origin con cookie admin | no obtiene rutas internas |
+| A fresh `https://a.cl`, preflight desde `https://a.cl` a route class pública | allow credentialless |
+| Origin sin ninguna publicWeb trust fresh | no grant dinámico 6.2.6-B |
+| Origin anteriormente verified pero `now >= verificationValidUntil` | no grant dinámico 6.2.6-B |
+| `OPTIONS` sin body ni valor de business header | decide por route class + Origin + existencia de trust fresh; no tenant authority |
+| `Access-Control-Request-Headers: x-business-id` sin valor futuro | no intenta inferir tenant desde el nombre del header |
+| A fresh `https://a.cl`, B fresh `https://b.cl`, request real Origin A + Business B | reject antes del controller/side effect |
+| mismatch anterior sobre POST mutable | ninguna creación/mutación parcial |
+| Business A y B fresh con shared `https://estudio.cl` | preflight shared origin allow credentialless |
+| shared `https://estudio.cl` + request real Business A | allow si scoping/contrato A válido |
+| shared `https://estudio.cl` + request real Business B | allow si scoping/contrato B válido |
+| shared origin A/B | datos permanecen tenant-scoped; no cross-Business leakage |
+| request pública válida server-to-server sin `Origin` + Business explícito | conserva conducta headless 6.2.6-A |
+| request sin `Origin` pero sin Business explícito | sigue fallando según 6.2.6-A |
+| verified public origin con cookie admin incidental | no obtiene rutas internas |
 | verified public origin | sin `Access-Control-Allow-Credentials: true` por publicWeb |
 | verified origin intenta convertirse en trusted authenticated origin | reject/no authority |
-| `FRONTEND_URL` legítimo | conserva conducta credentialed existente |
-| preflight OPTIONS sin body | decisión no depende del body |
-| Origin/Business contradictorios | fail closed |
+| `FRONTEND_URL` legítimo | conserva conducta credentialed existente por política independiente |
+| preflight permitido + request real tenant inválido | request real fail closed; preflight no autoriza |
+| caller non-browser falsifica/omite Origin | CORS no le concede authority; manda el contrato backend de la ruta |
 
 ### 19.6 Regression
 
@@ -1124,7 +1294,7 @@ No backfill implícito de trust desde la variable global. Cada Business requiere
 - C2 READ permanece Business + Appointment + READ;
 - Business Settings GET sigue read-only y defaults no materializan;
 - `DEFAULT_SLOT_DURATION_MINUTES` no cambia;
-- booking headless 6.2.6-A permanece intacto;
+- booking headless 6.2.6-A permanece intacto, incluidos callers públicos sin `Origin`;
 - Membership continúa siendo authority tenant;
 - trusted authenticated panel boundary permanece independiente;
 - Payment initiation/authority no se amplían;
@@ -1134,7 +1304,7 @@ No backfill implícito de trust desde la variable global. Cada Business requiere
 
 6.2.6-B funcional no podrá considerarse cerrada hasta que:
 
-1. BusinessConfig represente un único public origin con lifecycle seguro.
+1. BusinessConfig represente un único public origin por Business con lifecycle seguro, sin imponer unicidad global del origin entre Businesses.
 2. URL normalization aplique HTTPS/443/same-origin determinista.
 3. sólo tenant admin configure/verify/reverify/rotate/delete.
 4. DNS TXT sea único método y resolver sea server-side/injectable.
@@ -1145,14 +1315,16 @@ No backfill implícito de trust desde la variable global. Cada Business requiere
 9. worker delivery esté fenced frente a revocación concurrente.
 10. exchange revalide generation/origin/status/freshness.
 11. same-origin booking path preserve trust sin invalidación innecesaria.
-12. verified public origins se integren sólo con CORS headless credentialless tenant-scoped.
-13. `FRONTEND_URL` conserve su política legítima e independiente de credenciales.
-14. verified public origin nunca adquiera authenticated/session/admin authority.
-15. Business sin fresh verified trust falle cerrado.
-16. `GUEST_APPOINTMENT_ACCESS_ORIGIN` deje de ser trust root runtime C2.
-17. fragment, guestContact y READ scope C2 permanezcan intactos.
-18. tests de freshness, worker race, post-delivery revocation y CORS formen parte del gate oficial.
-19. una revisión adversarial posterior apruebe código + tests + cutover.
+12. CORS headless separe preflight eligibility credentialless de tenant binding exacto de la request real.
+13. un shared origin pueda servir a múltiples Businesses sin convertirse en tenant identifier ni romper aislamiento.
+14. requests públicas sin `Origin` conserven el contrato 6.2.6-A y no requieran CORS como autenticación general.
+15. `FRONTEND_URL` conserve su política legítima e independiente de credenciales.
+16. verified public origin nunca adquiera authenticated/session/admin authority.
+17. Business sin fresh verified trust falle cerrado en las operaciones que contractualmente dependen de publicWeb trust.
+18. `GUEST_APPOINTMENT_ACCESS_ORIGIN` deje de ser trust root runtime C2.
+19. fragment, guestContact y READ scope C2 permanezcan intactos.
+20. tests de freshness, worker race, post-delivery revocation, shared-origin, preflight/request binding y no-Origin formen parte del gate oficial.
+21. una revisión adversarial posterior apruebe código + tests + cutover.
 
 ## 21. Decisiones que requieren revisión humana antes de implementar
 
@@ -1165,10 +1337,10 @@ El contrato fija las garantías; permanecen como parámetros de implementación 
 5. **Política adicional para hostnames especiales/reservados**, sobre los bloqueos ya definidos.
 6. **Representación física de `verificationAttemptGeneration` y `trustGeneration`.** Debe demostrar conditional writes y no permitir ABA/replay tras delete/recreate.
 7. **Mecanismo físico de linearización worker vs revocation.** CAS/fence/lease/mutex equivalente que impida comenzar un outbound send tras revocación confirmada.
-8. **Mecanismo físico del CORS público tenant-scoped y resolución preflight-safe del Business.** Debe conservar `credentials:false` y no depender de body.
+8. **Mecanismo físico de lookup CORS dinámico por Origin.** Debe soportar cero/uno/múltiples Businesses por Origin, decidir `OPTIONS` sólo por elegibilidad fresh de al menos una trust, mantener `credentials:false` y realizar el binding exacto contra el Business recién en la request real.
 9. **Envelope exacto de errores.** Los códigos contractuales deben integrarse sin exponer estado sensible.
 
-Ninguno autoriza ampliar la capability.
+Ninguno autoriza ampliar la capability ni convertir Origin en tenant authority.
 
 ## 22. Deuda fuera de alcance
 
@@ -1197,6 +1369,8 @@ No pertenece a 6.2.6-B:
 
 La reverificación **explícita y bajo demanda** y la freshness acotada sí pertenecen a 6.2.6-B; únicamente el monitoring periódico queda fuera.
 
+Compartir un mismo verified origin entre múltiples Businesses no constituye “múltiples origins por Business” y está expresamente permitido por este contrato.
+
 ## 23. Restricción de esta iteración
 
 Esta iteración modifica únicamente documentación Markdown y, si corresponde, metadata documental del PR.
@@ -1207,7 +1381,7 @@ No se implementan modelos, controllers, repositories, services, routes, middlewa
 
 6.2.6-A está merged en `master@ea43c0da9a11355811b5bf0c52210af86fdac335`.
 
-6.2.6-B continúa como bloque activo exclusivamente documental. Los bloqueantes de freshness, cross-C2 generation/revocation y CORS público credentialless quedan incorporados al contrato, pero **ninguno está implementado en runtime**.
+6.2.6-B continúa como bloque activo exclusivamente documental. Los bloqueantes de freshness, cross-C2 generation/revocation y separación inequívoca entre CORS preflight eligibility y tenant binding de la request real quedan incorporados al contrato, pero **ninguno está implementado en runtime**.
 
 6.2.6 completa continúa abierta.
 
