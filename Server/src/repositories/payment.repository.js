@@ -36,11 +36,16 @@ export const aggregateFinancialMetrics = async (matchFilter = {}) => {
   return await Payment.aggregate([
     { $match: matchFilter },
     {
+      $set: {
+        effectiveAmount: { $ifNull: ["$authorizedAmount", "$amount"] },
+      },
+    },
+    {
       $group: {
         _id: null,
-        totalRevenue: { $sum: "$amount" },
+        totalRevenue: { $sum: "$effectiveAmount" },
         totalTransactions: { $sum: 1 },
-        averageTicket: { $avg: "$amount" },
+        averageTicket: { $avg: "$effectiveAmount" },
       },
     },
   ]);
