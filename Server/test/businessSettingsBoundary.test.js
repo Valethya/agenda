@@ -54,7 +54,7 @@ const getSlotStarts = async () => {
 
 const sortedKeys = (value) => Object.keys(value).sort();
 
-test("6.2.6-A Business Settings boundary", async (t) => {
+test("6.2.6-B Business Settings boundary", async (t) => {
   await t.test("GET público/anónimo no expone BusinessConfig ni crea defaults", async () => {
     assert.equal(await BusinessConfig.countDocuments({ business: seed.business._id }), 0);
 
@@ -83,7 +83,7 @@ test("6.2.6-A Business Settings boundary", async (t) => {
     assert.equal(await BusinessConfig.countDocuments({ business: seed.business._id }), 0);
   });
 
-  await t.test("slotDuration canónico y DTO permanecen estables antes/después de materializar config", async () => {
+  await t.test("slotDuration canónico y DTO publicWeb permanecen estables antes/después de materializar config", async () => {
     const cookie = await login("test-admin@example.com", "passwordAdmin");
     assert.equal(await BusinessConfig.countDocuments({ business: seed.business._id }), 0);
 
@@ -99,20 +99,44 @@ test("6.2.6-A Business Settings boundary", async (t) => {
       "cancellationSettings",
       "emailSettings",
       "paymentSettings",
+      "publicWeb",
       "uiSettings",
       "workingHours",
-    ];
+    ].sort();
     assert.deepEqual(sortedKeys(beforePayload), expectedRootKeys);
     assert.deepEqual(sortedKeys(beforePayload.business), ["_id", "name", "slug"]);
     assert.equal(beforePayload.business._id, seed.business._id.toString());
     assert.equal(beforePayload.business.name, seed.business.name);
     assert.equal(beforePayload.business.slug, seed.business.slug);
     assert.equal(beforePayload.appointmentSettings.slotDuration, 60);
+    assert.deepEqual(beforePayload.publicWeb, {
+      websiteUrl: null,
+      bookingUrl: null,
+      verificationStatus: "unconfigured",
+      verificationMethod: "dns_txt",
+      verifiedOrigin: null,
+      verifiedAt: null,
+      verificationValidUntil: null,
+      trustGeneration: 0,
+      dnsVerification: null,
+    });
     assert.equal(await BusinessConfig.countDocuments({ business: seed.business._id }), 0);
 
     const slotsBefore = await getSlotStarts();
     assert.ok(slotsBefore.length > 2);
     assert.deepEqual(slotsBefore.slice(0, 4), ["09:00", "10:00", "11:00", "12:00"]);
+
+    const rejectedTrustInjection = await fetch(`${baseUrl}/business-settings`, {
+      method: "PUT",
+      headers: {
+        Cookie: cookie,
+        Origin: panelOrigin,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ publicWeb: { verificationStatus: "verified", trustGeneration: 99 } }),
+    });
+    assert.equal(rejectedTrustInjection.status, 400);
+    assert.equal(await BusinessConfig.countDocuments({ business: seed.business._id }), 0);
 
     const putResponse = await fetch(`${baseUrl}/business-settings`, {
       method: "PUT",
@@ -143,6 +167,9 @@ test("6.2.6-A Business Settings boundary", async (t) => {
     assert.equal(afterPayload.business.slug, beforePayload.business.slug);
     assert.equal(afterPayload.appointmentSettings.slotDuration, beforePayload.appointmentSettings.slotDuration);
     assert.equal(afterPayload.appointmentSettings.bufferTime, 15);
+    assert.equal(afterPayload.publicWeb.verificationStatus, "unconfigured");
+    assert.equal(afterPayload.publicWeb.trustGeneration, 0);
+    assert.equal(afterPayload.publicWeb.dnsVerification, null);
 
     const slotsAfter = await getSlotStarts();
     assert.deepEqual(slotsAfter, slotsBefore);
