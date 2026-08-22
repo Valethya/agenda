@@ -12,6 +12,12 @@ import { backendUrl } from "../config/env.js";
 const asId = (value) => (value?._id ?? value)?.toString?.() || "";
 const sameId = (left, right) => asId(left) === asId(right);
 
+const legacyAppointmentPaymentStatus = (paymentType) => {
+  if (paymentType === "deposit") return "partially_paid";
+  if (paymentType === "full") return "fully_paid";
+  throw new ValidationError("El tipo del Payment legacy no es compatible con settlement de Appointment");
+};
+
 // 1. Inicio legacy. La ruta HTTP pública está fail-closed en 6.2.6-A; esta
 // función se conserva sólo hasta retirar/hardening posterior del módulo legado.
 export const initiatePayment = async (appointmentId, paymentType = "deposit") => {
@@ -137,16 +143,39 @@ const getPendingLegacyPayment = async (tokenWs) => {
   return payment;
 };
 
+const recordAuthorizedAmountMismatch = async ({
+  tokenWs,
+  authorizedAmount,
+}) => {
+  const hasNumericAuthorizedAmount = Number.isFinite(authorizedAmount) && authorizedAmount > 0;
+  const paymentRecord = await paymentRepository.updatePendingByTransactionId(
+    tokenWs,
+    {
+      $set: {
+        status: "approved",
+        ...(hasNumericAuthorizedAmount ? { authorizedAmount } : {}),
+        authorizedAt: new Date(),
+        reconciliationStatus: "required",
+        reconciliationReason: "amount_mismatch",
+      },
+    },
+  );
+  if (!paymentRecord) {
+    throw new ValidationError("El Payment pendiente cambió durante la reconciliación de monto");
+  }
+  return paymentRecord;
+};
+
 const settleAuthorizedLegacyPayment = async ({
   tokenWs,
   appointment,
   businessId,
-  paymentStatus,
-  paymentType,
-  amount,
+  expectedPayment,
+  authorizedAmount,
 }) => {
   const appointmentId = asId(appointment._id);
   const workerId = asId(appointment.worker);
+  const paymentStatus = legacyAppointmentPaymentStatus(expectedPayment.type);
 
   return appointmentRepository.withSerializedBookingInterval(
     { businessId, workerId, date: appointment.date },
@@ -190,8 +219,7 @@ const settleAuthorizedLegacyPayment = async ({
         {
           $set: {
             status: "approved",
-            amount,
-            type: paymentType,
+            authorizedAmount,
             authorizedAt: new Date(),
             reconciliationStatus: reconciliationReason ? "required" : "applied",
             ...(reconciliationReason ? { reconciliationReason } : {}),
@@ -231,9 +259,10 @@ const settleAuthorizedLegacyPayment = async ({
   );
 };
 
-// 2. Confirmar un Payment legacy YA EXISTENTE. token_ws fija primero Payment,
-// Appointment y Business localmente. Sólo después de validar ese scope se llama
-// al proveedor; Webpay debe devolver exactamente el buy_order esperado.
+// 2. Confirmar un Payment legacy YA EXISTENTE. token_ws fija primero el snapshot
+// económico/autoritativo local: transactionId + Appointment + Business + amount + type.
+// Service puede seguir validándose como relación existente, pero sus valores mutables
+// no redefinen retroactivamente el Payment que originó la transacción.
 export const confirmPayment = async (tokenWs) => {
   if (!tokenWs) {
     await logEvent({
@@ -249,6 +278,12 @@ export const confirmPayment = async (tokenWs) => {
     const pendingPayment = await getPendingLegacyPayment(tokenWs);
     appointmentId = asId(pendingPayment.appointment);
     const paymentBusinessId = asId(pendingPayment.business);
+    const expectedAmount = Number(pendingPayment.amount);
+    legacyAppointmentPaymentStatus(pendingPayment.type);
+
+    if (pendingPayment.gateway !== "webpay") {
+      throw new ValidationError("El Payment pendiente no pertenece a Webpay");
+    }
 
     const appointment = await appointmentRepository.findById(appointmentId);
     if (!appointment) {
@@ -269,8 +304,7 @@ export const confirmPayment = async (tokenWs) => {
       throw new NotFoundError("El negocio asociado al pago no existe");
     }
 
-    const service = appointment.service;
-    if (!service) {
+    if (!appointment.service) {
       throw new NotFoundError("El servicio asociado a la cita no existe");
     }
 
@@ -307,13 +341,7 @@ export const confirmPayment = async (tokenWs) => {
     });
 
     if (commitResponse.status === "AUTHORIZED" && commitResponse.response_code === 0) {
-      const expectedDeposit = service.depositAmount > 0 ? service.depositAmount : null;
-      const expectedFull = service.price;
-      const isDeposit = Boolean(expectedDeposit) && commitResponse.amount === expectedDeposit;
-      const isFull = commitResponse.amount === expectedFull;
-      if (!isDeposit && !isFull) {
-        throw new ValidationError("El monto de la transacción no coincide con el configurado para el servicio.");
-      }
+      const authorizedAmount = Number(commitResponse.amount);
 
       await logEvent({
         appointmentId,
@@ -321,8 +349,46 @@ export const confirmPayment = async (tokenWs) => {
         event: "WEBPAY_PAYMENT_AUTHORIZED",
         level: "SUCCESS",
         message: "Pago autorizado por Transbank.",
-        metadata: { authorizationCode: commitResponse.authorization_code, amount: commitResponse.amount }
+        metadata: {
+          authorizationCode: commitResponse.authorization_code,
+          expectedAmount,
+          authorizedAmount,
+          paymentType: pendingPayment.type,
+        }
       });
+
+      if (!Number.isFinite(authorizedAmount) || authorizedAmount <= 0 || authorizedAmount !== expectedAmount) {
+        const paymentRecord = await recordAuthorizedAmountMismatch({
+          tokenWs,
+          authorizedAmount,
+        });
+
+        await logEvent({
+          appointmentId,
+          userId,
+          event: "WEBPAY_PAYMENT_RECONCILIATION_REQUIRED",
+          level: "WARN",
+          message: "Webpay autorizó un monto distinto al snapshot económico del Payment; la Appointment no fue activada.",
+          metadata: {
+            paymentId: paymentRecord._id,
+            reconciliationReason: "amount_mismatch",
+            expectedAmount,
+            authorizedAmount,
+          },
+        });
+
+        return {
+          success: false,
+          paymentAuthorized: true,
+          requiresReconciliation: true,
+          reason: "payment_authorized_reconciliation_required",
+          appointmentId,
+          businessSlug: business.slug,
+          amount: authorizedAmount,
+          expectedAmount,
+          authorizationCode: commitResponse.authorization_code,
+        };
+      }
 
       // El resultado externo no concede authority para reactivar una Appointment.
       // Después del commit del proveedor se revalida estado + intervalo bajo el mismo
@@ -331,9 +397,8 @@ export const confirmPayment = async (tokenWs) => {
         tokenWs,
         appointment,
         businessId,
-        paymentStatus: isDeposit ? "partially_paid" : "fully_paid",
-        paymentType: isDeposit ? "deposit" : "full",
-        amount: commitResponse.amount,
+        expectedPayment: pendingPayment,
+        authorizedAmount,
       });
 
       if (!settlement.activated) {
@@ -356,7 +421,8 @@ export const confirmPayment = async (tokenWs) => {
           reason: "payment_authorized_reconciliation_required",
           appointmentId,
           businessSlug: business.slug,
-          amount: commitResponse.amount,
+          amount: authorizedAmount,
+          expectedAmount,
           authorizationCode: commitResponse.authorization_code,
         };
       }
@@ -396,7 +462,8 @@ export const confirmPayment = async (tokenWs) => {
         success: true,
         appointmentId,
         businessSlug: business.slug,
-        amount: commitResponse.amount,
+        amount: authorizedAmount,
+        expectedAmount,
         authorizationCode: commitResponse.authorization_code,
       };
     }
