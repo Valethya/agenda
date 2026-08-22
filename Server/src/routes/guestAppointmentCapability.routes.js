@@ -7,9 +7,8 @@ import { guestAppointmentReadChallengeSchema, guestAppointmentReadConsumeSchema,
 
 const router = Router();
 
-// Validation establishes an explicit businessId. The browser-only binding then
-// checks that exact Business without making Origin a tenant selector. Requests
-// without Origin preserve C2's existing generic headless acceptance boundary.
+// Challenge issuance/exchange still depends on current tenant publicWeb trust for
+// browser callers. Requests without Origin preserve C2's generic headless path.
 router.post(
   "/read/challenge",
   guestReadChallengeLimiter,
@@ -24,11 +23,15 @@ router.post(
   bindExplicitPublicBusinessOrigin,
   exchangeReadChallenge,
 );
+
+// A successfully exchanged READ capability is already the exact-scope bearer
+// authority (Business + Appointment + READ). Do not rebind its later consumption
+// to current publicWeb freshness; revocation only makes old Delivery/challenge
+// exchange stale and does not shorten an already-issued capability lifetime.
 router.post(
   "/read",
   guestReadConsumeLimiter,
   validate(guestAppointmentReadConsumeSchema),
-  bindExplicitPublicBusinessOrigin,
   consumeReadCapability,
 );
 
