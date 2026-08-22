@@ -182,3 +182,18 @@ export const updateBusinessConfigSchema = z.object({
     }).strict().optional(),
   }).strict(),
 });
+
+// --- 6.2.6-B publicWeb commands ---
+// Trust fields are never accepted from the client. URL normalization and the
+// stronger HTTPS/443/hostname policy are enforced once, server-side, by the
+// publicWeb service after this structural allowlist.
+export const configurePublicWebSchema = z.object({
+  body: z.object({
+    websiteUrl: z.string().min(1).max(2048),
+    bookingUrl: z.string().min(1).max(2048),
+  }).strict(),
+});
+
+export const emptyPublicWebCommandSchema = z.object({
+  body: z.object({}).strict(),
+});
