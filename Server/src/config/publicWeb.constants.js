@@ -14,6 +14,11 @@ export const PUBLIC_WEB_DNS_TIMEOUT_MS = 3 * 1000;
 export const PUBLIC_WEB_VERIFICATION_RATE_WINDOW_MS = 15 * 60 * 1000;
 export const PUBLIC_WEB_VERIFICATION_RATE_LIMIT = 20;
 
+// Dynamic browser-CORS trust lookups happen before the application-wide limiter,
+// so they receive an equivalent per-IP admission budget before any Mongo lookup.
+export const PUBLIC_WEB_CORS_LOOKUP_RATE_WINDOW_MS = 15 * 60 * 1000;
+export const PUBLIC_WEB_CORS_LOOKUP_RATE_LIMIT = 200;
+
 // A short persisted lease linearizes C2 outbound-send authorization against
 // public-web revocation. The external send must begin while this lease is held.
 export const PUBLIC_WEB_AUTHORITY_FENCE_TTL_MS = 2 * 60 * 1000;
