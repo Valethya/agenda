@@ -10,30 +10,51 @@ import Service from "../src/db/models/service.model.js";
 import Appointment from "../src/db/models/appointment.model.js";
 import { createHash } from "../src/utils/password.js";
 
-// Conectar a la base de datos de test
 await connectDB();
-
-// Sembrar dos negocios para comprobar resolución explícita y aislamiento.
 await cleanTestData();
 const seed = await seedTestData();
+const publicServiceB = await Service.create({
+  name: "Servicio público de Negocio B",
+  description: "Servicio para comprobar tenant explícito con sesión ambiente",
+  duration: 30,
+  price: 12000,
+  depositAmount: 0,
+  business: seed.businessB._id,
+  workers: [seed.workerB._id],
+  isActive: true,
+});
 
-// Creamos un servidor de pruebas en un puerto dinámico efímero (evita colisiones de puerto)
 const server = app.listen(0);
 const { port } = server.address();
 const baseUrl = `http://localhost:${port}/api`;
+const sessionCookies = new Map();
 
 const loginAs = async (email, password) => {
+  if (sessionCookies.has(email)) return sessionCookies.get(email);
+
   const response = await fetch(`${baseUrl}/login`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ email, password }),
   });
   assert.ok(response.status === 200 || response.status === 201);
-  return response.headers.get("set-cookie");
+  const cookie = response.headers.get("set-cookie");
+  sessionCookies.set(email, cookie);
+  return cookie;
+};
+
+const assertPublicServiceProjection = (service, businessId) => {
+  assert.deepStrictEqual(
+    Object.keys(service).sort(),
+    ["business", "depositAmount", "description", "duration", "id", "name", "price"],
+  );
+  assert.strictEqual(service.business, businessId.toString());
+  for (const forbidden of ["workers", "isActive", "createdAt", "updatedAt"]) {
+    assert.ok(!(forbidden in service));
+  }
 };
 
 test("Servidor Express - Endpoints Básicos", async (t) => {
-  // Test 1: Verificar el estado de salud de la API (GET /api/health)
   await t.test("GET /api/health debería retornar status 200 y confirmación", async () => {
     const response = await fetch(`${baseUrl}/health`);
     assert.strictEqual(response.status, 200);
@@ -89,16 +110,20 @@ test("Servidor Express - Endpoints Básicos", async (t) => {
     assert.ok(!data.message.includes(inactiveBusiness.name));
   });
 
-  // Obtener la configuración del negocio explícitamente seleccionado.
-  await t.test("GET /api/business-settings debería inicializar y retornar la configuración", async () => {
-    const response = await fetch(`${baseUrl}/business-settings?slug=${seed.business.slug}`);
+  await t.test("GET /api/business-settings requiere surface interna y Membership vigente", async () => {
+    const anonymous = await fetch(`${baseUrl}/business-settings?slug=${seed.business.slug}`);
+    assert.strictEqual(anonymous.status, 401);
+
+    const cookie = await loginAs("test-admin@example.com", "passwordAdmin");
+    const response = await fetch(`${baseUrl}/business-settings`, {
+      headers: { Cookie: cookie },
+    });
     assert.strictEqual(response.status, 200);
     const data = await response.json();
     assert.strictEqual(data.status, "success");
     assert.ok(data.payload.businessName);
   });
 
-  // Test 3: Listar servicios públicos (GET /api/services)
   await t.test("GET /api/services debería retornar el listado de servicios activos", async () => {
     const response = await fetch(`${baseUrl}/services?slug=${seed.business.slug}`);
     assert.strictEqual(response.status, 200);
@@ -107,7 +132,6 @@ test("Servidor Express - Endpoints Básicos", async (t) => {
     assert.ok(Array.isArray(data.payload));
   });
 
-  // Test 4: Ruta inexistente debería retornar 404
   await t.test("GET /api/ruta-inexistente debería retornar error 404", async () => {
     const response = await fetch(`${baseUrl}/ruta-inexistente`);
     assert.strictEqual(response.status, 404);
@@ -115,34 +139,39 @@ test("Servidor Express - Endpoints Básicos", async (t) => {
     assert.strictEqual(data.error, "Route not found");
   });
 
-  await t.test("Admin autenticado no debería cambiar de tenant mediante query", async () => {
+  await t.test("Admin autenticado de A + tenant B explícito usa contrato público de B", async () => {
     const cookie = await loginAs("test-admin@example.com", "passwordAdmin");
     const response = await fetch(`${baseUrl}/services?slug=${seed.businessB.slug}`, {
       headers: { Cookie: cookie },
     });
     assert.strictEqual(response.status, 200);
     const data = await response.json();
-    assert.ok(data.payload.length > 0);
-    assert.ok(data.payload.every((service) => service.business === seed.business._id.toString()));
+    assert.ok(data.payload.some((service) => service.id === publicServiceB._id.toString()));
+    assert.ok(data.payload.every((service) => service.business === seed.businessB._id.toString()));
+    data.payload.forEach((service) => assertPublicServiceProjection(service, seed.businessB._id));
   });
 
-  await t.test("Worker autenticado no debería cambiar de tenant mediante header", async () => {
+  await t.test("Worker autenticado de A + header tenant B explícito usa contrato público de B", async () => {
     const cookie = await loginAs("test-worker@example.com", "passwordWorker");
     const response = await fetch(`${baseUrl}/services`, {
-      headers: { Cookie: cookie, "x-business-slug": seed.businessB.slug },
+      headers: {
+        Cookie: cookie,
+        "x-business-slug": seed.businessB.slug,
+      },
     });
     assert.strictEqual(response.status, 200);
     const data = await response.json();
-    assert.ok(data.payload.length > 0);
-    assert.ok(data.payload.every((service) => service.business === seed.business._id.toString()));
+    assert.ok(data.payload.some((service) => service.id === publicServiceB._id.toString()));
+    assert.ok(data.payload.every((service) => service.business === seed.businessB._id.toString()));
+    data.payload.forEach((service) => assertPublicServiceProjection(service, seed.businessB._id));
   });
 
-  await t.test("Miembro autenticado de un negocio inactivo debería recibir 403", async () => {
+  await t.test("Miembro autenticado de un negocio inactivo debería recibir 403 en surface interna", async () => {
     const cookie = await loginAs("test-admin@example.com", "passwordAdmin");
     await Business.findByIdAndUpdate(seed.business._id, { isActive: false });
 
     try {
-      const response = await fetch(`${baseUrl}/services`, {
+      const response = await fetch(`${baseUrl}/internal/services`, {
         headers: { Cookie: cookie },
       });
       assert.strictEqual(response.status, 403);
@@ -190,12 +219,14 @@ test("Servidor Express - Endpoints Básicos", async (t) => {
     assert.strictEqual(await User.findOne({ email: guestEmail }), null);
   });
 
-  await t.test("Reserva sugerida debería rechazar un profesional de otro tenant", async () => {
+  await t.test("Sugerencia interna debería rechazar un profesional de otro tenant", async () => {
+    const cookie = await loginAs("test-admin@example.com", "passwordAdmin");
     const guestEmail = "cross-tenant-worker@example.com";
     const appointmentCountBefore = await Appointment.countDocuments({});
-    const response = await fetch(`${baseUrl}/appointments`, {
+    const response = await fetch(`${baseUrl}/internal/appointments`, {
       method: "POST",
       headers: {
+        Cookie: cookie,
         "Content-Type": "application/json",
         "x-business-slug": seed.business.slug,
       },
@@ -221,7 +252,7 @@ test("Servidor Express - Endpoints Básicos", async (t) => {
 
   await t.test("Disponibilidad pública debería rechazar un profesional de otro tenant", async () => {
     const response = await fetch(
-      `${baseUrl}/availability/slots?workerId=${seed.workerB._id}&serviceId=${seed.service._id}&date=2099-01-05&slug=${seed.business.slug}`
+      `${baseUrl}/availability/slots?workerId=${seed.workerB._id}&serviceId=${seed.service._id}&date=2099-01-05&slug=${seed.business.slug}`,
     );
     assert.strictEqual(response.status, 404);
   });
@@ -250,7 +281,6 @@ test("Servidor Express - Endpoints Básicos", async (t) => {
   });
 });
 
-// Liberamos los recursos al finalizar todas las pruebas
 test.after(async () => {
   await teardown(server, sessionStore);
 });

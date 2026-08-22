@@ -1,11 +1,26 @@
 import * as appointmentService from "../services/appointment.service.js";
-import * as authService from "../services/auth.service.js";
+import { projectPublicAppointmentCreated } from "../services/publicBookingContract.service.js";
+import {
+  projectInternalAppointment,
+  projectInternalAppointments,
+} from "../services/internalAppointmentProjection.service.js";
 import { ValidationError } from "../utils/appError.js";
 
 export const createAppointment = async (req, res, next) => {
   try {
-    const { worker, service, date, startTime, notes, clientInfo, paymentOption, isSuggestion } = req.body;
-    let clientId;
+    const input = req.bookingInput || {};
+    const {
+      worker,
+      service,
+      date,
+      startTime,
+      notes,
+      clientInfo,
+      paymentOption,
+      isSuggestion,
+    } = input;
+    const publicBooking = req.bookingSurface === "public";
+    let clientId = null;
     let guestContact = null;
 
     const tenantScope = await appointmentService.validateBookingTenantScope({
@@ -15,11 +30,14 @@ export const createAppointment = async (req, res, next) => {
     });
 
     if (clientInfo) {
-      // Capture Appointment-scoped provenance directly from this booking input
-      // before getOrCreateGuestUser can correlate or mutate any global User.
-      guestContact = appointmentService.buildGuestBookingContactSnapshot(clientInfo);
-      const clientUser = await authService.getOrCreateGuestUser(clientInfo);
-      clientId = clientUser._id.toString();
+      guestContact = {
+        ...appointmentService.buildGuestBookingContactSnapshot(clientInfo),
+        firstName: clientInfo.firstName,
+        lastName: clientInfo.lastName,
+        phone: clientInfo.phone,
+      };
+    } else if (publicBooking) {
+      throw new ValidationError("Debe proporcionar la información del cliente (clientInfo) para reservar sin login");
     } else if (req.session?.user) {
       clientId = req.session.user.id;
     } else {
@@ -40,7 +58,11 @@ export const createAppointment = async (req, res, next) => {
       guestContact,
     });
 
-    res.status(201).json({ status: "success", message: "Cita reservada exitosamente", payload: appointment });
+    const payload = publicBooking
+      ? projectPublicAppointmentCreated(appointment)
+      : projectInternalAppointment(appointment);
+
+    res.status(201).json({ status: "success", message: "Cita reservada exitosamente", payload });
   } catch (error) { next(error); }
 };
 
@@ -88,7 +110,7 @@ export const getAppointment = async (req, res, next) => {
       req.tenantAuthority,
       req.businessId,
     );
-    res.status(200).json({ status: "success", payload: appointment });
+    res.status(200).json({ status: "success", payload: projectInternalAppointment(appointment) });
   } catch (error) { next(error); }
 };
 
@@ -99,7 +121,8 @@ export const getMyAppointments = async (req, res, next) => {
       req.tenantAuthority,
       req.businessId,
     );
-    res.status(200).json({ status: "success", results: appointments.length, payload: appointments });
+    const payload = projectInternalAppointments(appointments);
+    res.status(200).json({ status: "success", results: payload.length, payload });
   } catch (error) { next(error); }
 };
 

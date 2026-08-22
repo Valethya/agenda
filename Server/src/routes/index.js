@@ -9,27 +9,31 @@ import paymentRoutes from "./payment.routes.js";
 import userRoutes from "./user.routes.js";
 import businessConfigRoutes from "./businessConfig.routes.js";
 import superadminRoutes from "./superadmin.routes.js";
-import { scopeBusiness } from "../middleware/business.middleware.js";
+import internalBookingRoutes from "./internalBooking.routes.js";
 import { paymentRoutesEnabled } from "../config/env.js";
 
 const router = Router();
 
 router.use("/", authRoutes);
 
-router.use("/services", scopeBusiness, serviceRoutes);
-router.use("/availability", scopeBusiness, availabilityRoutes);
-router.use("/appointments", scopeBusiness, appointmentRoutes);
+// Surface administrativa fijada por routing del servidor. El caller no puede
+// obtenerla declarando un header en una ruta pública.
+router.use("/internal", internalBookingRoutes);
 
-// C2 has its own explicit businessId contract and intentionally does not use
-// scopeBusiness, which also accepts session/slug/header-derived tenant context.
+// Contrato headless público. Cookies incidentales no cambian estas políticas.
+router.use("/services", serviceRoutes);
+router.use("/availability", availabilityRoutes);
+router.use("/appointments", appointmentRoutes);
+router.use("/users", userRoutes);
+
+// C2 tiene su propio contrato businessId/capability y permanece independiente.
 router.use("/guest-appointments", guestAppointmentCapabilityRoutes);
 
 if (paymentRoutesEnabled) {
   router.use("/payments", paymentRoutes);
 }
-router.use("/users", scopeBusiness, userRoutes);
-router.use("/business-settings", scopeBusiness, businessConfigRoutes);
 
+router.use("/business-settings", businessConfigRoutes);
 router.use("/superadmin", superadminRoutes);
 router.use("/health", healthRoutes);
 

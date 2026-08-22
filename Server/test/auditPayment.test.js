@@ -2,413 +2,266 @@ import './setup.js';
 process.env.ENABLE_PAYMENTS = "true";
 
 import test from "node:test";
-import assert from "node:assert";
-import { connectDB } from "../src/db/db.js";
-import User from "../src/db/models/user.model.js";
-import Service from "../src/db/models/service.model.js";
-import Appointment from "../src/db/models/appointment.model.js";
-import Shift from "../src/db/models/shift.model.js";
-import Business from "../src/db/models/business.model.js";
-import Payment from "../src/db/models/payment.model.js";
-import AuditLog from "../src/db/models/auditLog.model.js";
-import Block from "../src/db/models/block.model.js";
-import Membership from "../src/db/models/membership.model.js";
-import { createHash } from "../src/utils/password.js";
-import { cleanTestData, teardown } from "./fixtures.js";
-
-// Mock de Transbank SDK
+import assert from "node:assert/strict";
 import pkg from "transbank-sdk";
+import { connectDB } from "../src/db/db.js";
+import { seedTestData, cleanTestData, teardown } from "./fixtures.js";
+import Appointment from "../src/db/models/appointment.model.js";
+import Payment from "../src/db/models/payment.model.js";
+
 const { WebpayPlus } = pkg;
 
-export const mockPaymentState = {
+const gatewayState = {
   buyOrder: null,
   amount: 5000,
-  token: "mock-token-12345",
   status: "AUTHORIZED",
   responseCode: 0,
-  failCreate: false,
-  failCommit: false,
-  authorizationCode: "1213",
+  authorizationCode: "AUTH-LEGACY",
+  commitCount: 0,
+  throwMessage: null,
 };
 
-// Sobrescribir prototipos de Webpay Plus Transaction
-WebpayPlus.Transaction.prototype.create = async function (buyOrder, sessionId, amount, returnUrl) {
-  if (mockPaymentState.failCreate) {
-    throw new Error("Transbank creation failed");
+WebpayPlus.Transaction.prototype.commit = async function () {
+  gatewayState.commitCount += 1;
+  if (gatewayState.throwMessage) {
+    throw new Error(gatewayState.throwMessage);
   }
-  mockPaymentState.buyOrder = buyOrder;
-  mockPaymentState.amount = amount;
   return {
-    token: mockPaymentState.token,
-    url: "https://webpay-mock-redirect",
+    status: gatewayState.status,
+    response_code: gatewayState.responseCode,
+    buy_order: gatewayState.buyOrder,
+    amount: gatewayState.amount,
+    authorization_code: gatewayState.authorizationCode,
   };
 };
 
-WebpayPlus.Transaction.prototype.commit = async function (token) {
-  if (mockPaymentState.failCommit) {
-    throw new Error("Connection timeout mock");
-  }
-  return {
-    status: mockPaymentState.status,
-    response_code: mockPaymentState.responseCode,
-    buy_order: mockPaymentState.buyOrder,
-    amount: mockPaymentState.amount,
-    authorization_code: mockPaymentState.authorizationCode,
-  };
-};
-
-// Payment/Webpay queda deny-by-default en runtime. Esta suite legacy hace opt-in
-// únicamente dentro de su propio proceso para conservar la cobertura existente
-// sin habilitar el módulo para el MVP.
+// ENABLE_PAYMENTS debe existir antes de evaluar config/env.js y routes/index.js.
 const { default: app, sessionStore } = await import("../src/app.js");
 
-// Conectar a la base de datos
 await connectDB();
-
+await cleanTestData();
+const seed = await seedTestData();
 const server = app.listen(0);
 const { port } = server.address();
 const baseUrl = `http://localhost:${port}/api`;
 
-test("Pruebas de Integración - Flujo de Pago Abierto y Registro Progresivo", async (t) => {
-  let workerCookie = "";
-  let testServiceId = "";
-  let testWorkerId = "";
-  let testBusinessId = "";
-  let tomorrowStr = "";
-
-  const tenantJsonHeaders = () => ({
-    "Content-Type": "application/json",
-    "x-business-id": testBusinessId,
+const createLegacyPending = async ({
+  token,
+  paymentBusiness = seed.business._id,
+  startTime = "09:00",
+  paymentAmount = 5000,
+  paymentType = "deposit",
+}) => {
+  const hour = Number(startTime.slice(0, 2));
+  const endTime = `${String(hour + 1).padStart(2, "0")}:00`;
+  const appointment = await Appointment.create({
+    client: seed.client._id,
+    worker: seed.worker._id,
+    service: seed.service._id,
+    business: seed.business._id,
+    date: new Date("2099-02-02T00:00:00.000Z"),
+    startTime,
+    endTime,
+    status: "pending_payment",
+    paymentStatus: "unpaid",
   });
 
-  // Configuración inicial de datos de prueba
-  t.before(async () => {
-    // Cada suite parte desde una base vacía. La guarda de cleanTestData evita
-    // que esta limpieza pueda ejecutarse fuera de una base terminada en _test.
-    await cleanTestData();
-
-    // Crear negocio
-    const business = await Business.create({
-      name: "Barbería Auditoría",
-      slug: "barberia-audit",
-      isActive: true,
-    });
-    testBusinessId = business._id.toString();
-
-    // Crear trabajador
-    const hashedPassword = await createHash("password123");
-    const workerUser = await User.create({
-      firstName: "Trabajador",
-      lastName: "Audit",
-      email: "audit-worker@example.com",
-      password: hashedPassword,
-      role: "worker",
-      business: business._id,
-    });
-    testWorkerId = workerUser._id.toString();
-
-    // Crear membresía para el trabajador (requerida por resolveSessionFromUser)
-    await Membership.create({
-      user: workerUser._id,
-      business: business._id,
-      role: "worker",
-    });
-
-    // Iniciar sesión de trabajador para obtener la cookie de administración
-    const logRes = await fetch(`${baseUrl}/login`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        email: "audit-worker@example.com",
-        password: "password123",
-      }),
-    });
-    workerCookie = logRes.headers.get("set-cookie");
-
-    // Crear servicio. 6.2.4-B exige allowlist profesional explícita.
-    const service = await Service.create({
-      name: "Servicio Auditoría",
-      description: "Servicio de prueba para auditoría",
-      duration: 30,
-      price: 10000,
-      depositAmount: 3000,
-      business: business._id,
-      workers: [workerUser._id],
-      isActive: true,
-    });
-    testServiceId = service._id.toString();
-
-    // Generar fecha de prueba garantizando que sea día laborable (Lun-Vie)
-    const tomorrow = new Date();
-    tomorrow.setDate(tomorrow.getDate() + 2);
-    // Si cae en fin de semana, avanzar al lunes
-    while (tomorrow.getDay() === 0 || tomorrow.getDay() === 6) {
-      tomorrow.setDate(tomorrow.getDate() + 1);
-    }
-    tomorrowStr = tomorrow.toISOString().split("T")[0];
-
-    // Crear shift para el trabajador en el día de la semana de la prueba
-    await Shift.create({
-      business: business._id,
-      worker: workerUser._id,
-      dayOfWeek: tomorrow.getDay(),
-      isOpen: true,
-      startTime: "09:00",
-      endTime: "18:00",
-      breaks: [],
-    });
+  const payment = await Payment.create({
+    appointment: appointment._id,
+    business: paymentBusiness,
+    amount: paymentAmount,
+    currency: "CLP",
+    gateway: "webpay",
+    transactionId: token,
+    status: "pending",
+    type: paymentType,
   });
 
-  t.after(async () => {
-    await teardown(server, sessionStore);
+  gatewayState.buyOrder = appointment._id.toString();
+  gatewayState.amount = paymentAmount;
+  gatewayState.status = "AUTHORIZED";
+  gatewayState.responseCode = 0;
+  gatewayState.authorizationCode = "AUTH-LEGACY";
+  gatewayState.commitCount = 0;
+  gatewayState.throwMessage = null;
+
+  return { appointment, payment };
+};
+
+const callReturn = (token) => fetch(`${baseUrl}/payments/webpay-return?token_ws=${encodeURIComponent(token)}`, {
+  method: "POST",
+  redirect: "manual",
+});
+
+test("Payment legacy callback preservado sin reabrir payment authority", async (t) => {
+  await t.test("callback autorizado confirma Appointment y aprueba Payment del mismo Business", async () => {
+    const { appointment } = await createLegacyPending({ token: "legacy-approved" });
+    const response = await callReturn("legacy-approved");
+    assert.equal(response.status, 302);
+    assert.match(response.headers.get("location") || "", /payment-success/);
+    assert.equal(gatewayState.commitCount, 1);
+
+    const [storedAppointment, storedPayment] = await Promise.all([
+      Appointment.findById(appointment._id),
+      Payment.findOne({ transactionId: "legacy-approved" }),
+    ]);
+    assert.equal(storedAppointment.status, "confirmed");
+    assert.equal(storedAppointment.paymentStatus, "partially_paid");
+    assert.equal(storedPayment.status, "approved");
+    assert.equal(storedPayment.business.toString(), seed.business._id.toString());
+    assert.equal(storedPayment.amount, 5000);
+    assert.equal(storedPayment.authorizedAmount, 5000);
+    assert.equal(storedPayment.reconciliationStatus, "applied");
   });
 
-  // Limpiar colecciones transaccionales antes de cada caso de prueba
-  t.beforeEach(async () => {
-    await Appointment.deleteMany({});
-    await Payment.deleteMany({});
-    await Block.deleteMany({});
-    await AuditLog.deleteMany({});
+  await t.test("callback rechazado cancela Appointment y marca Payment rejected", async () => {
+    const { appointment } = await createLegacyPending({ token: "legacy-rejected", startTime: "10:00" });
+    gatewayState.status = "FAILED";
+    gatewayState.responseCode = -1;
 
-    mockPaymentState.buyOrder = null;
-    mockPaymentState.amount = 3000;
-    mockPaymentState.token = "mock-token-12345";
-    mockPaymentState.status = "AUTHORIZED";
-    mockPaymentState.responseCode = 0;
-    mockPaymentState.failCreate = false;
-    mockPaymentState.failCommit = false;
-    mockPaymentState.authorizationCode = "1213";
+    const response = await callReturn("legacy-rejected");
+    assert.equal(response.status, 302);
+    assert.match(response.headers.get("location") || "", /payment-failed/);
+    assert.equal(gatewayState.commitCount, 1);
+
+    const [storedAppointment, storedPayment] = await Promise.all([
+      Appointment.findById(appointment._id),
+      Payment.findOne({ transactionId: "legacy-rejected" }),
+    ]);
+    assert.equal(storedAppointment.status, "cancelled");
+    assert.equal(storedPayment.status, "rejected");
   });
 
-  // 1. CASO DE PRUEBA: Pago Aprobado Exitosamente sin Login de Cliente
-  await t.test("Debería registrar correctamente todo el flujo de un pago aprobado como invitado en el AuditLog", async () => {
-    // A. Crear reserva como invitado (POST sin cookies, pasando clientInfo)
-    const bookRes = await fetch(`${baseUrl}/appointments`, {
-      method: "POST",
-      headers: tenantJsonHeaders(),
-      body: JSON.stringify({
-        worker: testWorkerId,
-        service: testServiceId,
-        date: tomorrowStr,
-        startTime: "09:00",
-        notes: "Cita aprobada invitado",
-        clientInfo: {
-          firstName: "Cliente",
-          lastName: "Audit",
-          email: "audit-client@example.com",
-          phone: "+56911112222",
-        },
-      }),
+  await t.test("Payment y Appointment de Businesses distintos fallan antes del commit externo", async () => {
+    const { appointment } = await createLegacyPending({
+      token: "legacy-cross-business",
+      paymentBusiness: seed.businessB._id,
+      startTime: "11:00",
     });
-    assert.strictEqual(bookRes.status, 201);
-    const bookData = await bookRes.json();
-    const appointmentId = bookData.payload._id;
-    assert.ok(appointmentId);
 
-    // Verificar que se creó el cliente en la base de datos
-    const createdClient = await User.findOne({ email: "audit-client@example.com" });
-    assert.ok(createdClient);
-    assert.strictEqual(createdClient.firstName, "Cliente");
-    assert.ok(createdClient.phone.includes("+56911112222"));
+    const response = await callReturn("legacy-cross-business");
+    assert.equal(response.status, 302);
+    assert.match(response.headers.get("location") || "", /payment-failed/);
+    assert.equal(gatewayState.commitCount, 0);
 
-    // B. Iniciar pago (Público, sin cookies)
-    const initRes = await fetch(`${baseUrl}/payments/initiate`, {
-      method: "POST",
-      headers: tenantJsonHeaders(),
-      body: JSON.stringify({
-        appointmentId,
-        paymentType: "deposit",
-      }),
-    });
-    assert.strictEqual(initRes.status, 200);
-    const initData = await initRes.json();
-    assert.strictEqual(initData.payload.token, "mock-token-12345");
-
-    // C. Confirmar pago (Commit)
-    const returnRes = await fetch(`${baseUrl}/payments/webpay-return?token_ws=mock-token-12345`, {
-      method: "POST",
-      redirect: "manual",
-    });
-    assert.strictEqual(returnRes.status, 302);
-
-    // Verificar cita confirmada
-    const apptAfter = await Appointment.findById(appointmentId);
-    assert.strictEqual(apptAfter.status, "confirmed");
-
-    // D. Consultar timeline de auditoría usando las cookies de trabajador (administración)
-    const timelineRes = await fetch(`${baseUrl}/appointments/${appointmentId}/timeline`, {
-      headers: { Cookie: workerCookie },
-    });
-    assert.strictEqual(timelineRes.status, 200);
-    const timelineData = await timelineRes.json();
-    const logs = timelineData.payload;
-    const events = logs.map((l) => l.event);
-
-    assert.ok(events.includes("APPOINTMENT_REQUEST_RECEIVED"));
-    assert.ok(events.includes("APPOINTMENT_VALIDATION_SUCCESS"));
-    assert.ok(events.includes("APPOINTMENT_PENDING_CREATED"));
-    assert.ok(events.includes("WEBPAY_CREATE_REQUEST"));
-    assert.ok(events.includes("WEBPAY_CREATE_SUCCESS"));
-    assert.ok(events.includes("CLIENT_REDIRECTED_TO_WEBPAY"));
-    assert.ok(events.includes("CLIENT_RETURNED_FROM_WEBPAY"));
-    assert.ok(events.includes("WEBPAY_COMMIT_REQUEST"));
-    assert.ok(events.includes("WEBPAY_COMMIT_SUCCESS"));
-    assert.ok(events.includes("WEBPAY_PAYMENT_AUTHORIZED"));
-    assert.ok(events.includes("APPOINTMENT_CONFIRMED"));
+    const [storedAppointment, storedPayment] = await Promise.all([
+      Appointment.findById(appointment._id),
+      Payment.findOne({ transactionId: "legacy-cross-business" }),
+    ]);
+    assert.equal(storedAppointment.status, "pending_payment");
+    assert.equal(storedAppointment.paymentStatus, "unpaid");
+    assert.equal(storedPayment.status, "pending");
   });
 
-  // 2. CASO DE PRUEBA: Identificación Progresiva y Detección de Duplicados
-  await t.test("Debería detectar duplicados por teléfono/correo y realizar identificación progresiva de datos", async () => {
-    // A. Crear reserva para Cliente 1 (Creación de registro inicial)
-    const bookRes1 = await fetch(`${baseUrl}/appointments`, {
-      method: "POST",
-      headers: tenantJsonHeaders(),
-      body: JSON.stringify({
-        worker: testWorkerId,
-        service: testServiceId,
-        date: tomorrowStr,
-        startTime: "09:00",
-        clientInfo: {
-          firstName: "Progresivo",
-          lastName: "Uno",
-          email: "progressive-1@example.com",
-          phone: "+56977777777",
-        },
-      }),
-    });
-    assert.strictEqual(bookRes1.status, 201);
-    const clientDb1 = await User.findOne({ phone: "+56977777777" });
-    assert.ok(clientDb1);
-    assert.ok(clientDb1.email.includes("progressive-1@example.com"));
-    assert.ok(clientDb1.phone.includes("+56977777777"));
+  await t.test("buy_order distinto al Payment pending falla cerrado después del único commit esperado", async () => {
+    const { appointment } = await createLegacyPending({ token: "legacy-buy-order", startTime: "12:00" });
+    gatewayState.buyOrder = seed.businessB._id.toString();
 
-    // Limpiar citas del slot para permitir re-agendamiento del test
-    await Appointment.deleteMany({});
+    const response = await callReturn("legacy-buy-order");
+    assert.equal(response.status, 302);
+    assert.match(response.headers.get("location") || "", /payment-failed/);
+    assert.equal(gatewayState.commitCount, 1);
 
-    // B. Crear reserva usando un EMAIL NUEVO pero el MISMO TELÉFONO
-    // Esperamos que asocie la cita al mismo cliente, añada el nuevo email al arreglo,
-    // y no sobrescriba los nombres existentes.
-    const bookRes2 = await fetch(`${baseUrl}/appointments`, {
-      method: "POST",
-      headers: tenantJsonHeaders(),
-      body: JSON.stringify({
-        worker: testWorkerId,
-        service: testServiceId,
-        date: tomorrowStr,
-        startTime: "09:00",
-        clientInfo: {
-          firstName: "Progresivo Actualizado",
-          lastName: "Modificado",
-          email: "progressive-2@example.com", // Email nuevo
-          phone: "+56977777777", // Teléfono coincide con cliente existente
-        },
-      }),
-    });
-    assert.strictEqual(bookRes2.status, 201);
-    const bookData2 = await bookRes2.json();
-
-    // Buscar cuántos usuarios existen con ese teléfono (debe ser exactamente 1)
-    const countUsers = await User.countDocuments({ phone: "+56977777777" });
-    assert.strictEqual(countUsers, 1);
-
-    // Comprobar que el usuario existente conservó sus nombres e incorporó el nuevo email
-    const updatedClient = await User.findOne({ phone: "+56977777777" });
-    assert.ok(updatedClient.email.includes("progressive-1@example.com"));
-    assert.ok(updatedClient.email.includes("progressive-2@example.com"));
-    assert.strictEqual(updatedClient.firstName, "Progresivo"); // No sobrescrito
-    assert.strictEqual(updatedClient.lastName, "Uno"); // No sobrescrito
-
-    // Comprobar que la cita se asignó a este cliente
-    assert.strictEqual(bookData2.payload.client, updatedClient._id.toString());
-
-    // C. Probar completado de nombres cuando están vacíos
-    // Dejar apellido vacío en base de datos para simular ficha incompleta
-    await User.updateOne({ _id: updatedClient._id }, { lastName: "" });
-
-    // Limpiar citas del slot
-    await Appointment.deleteMany({});
-
-    // Reservar indicando un apellido para completar la ficha
-    const bookRes3 = await fetch(`${baseUrl}/appointments`, {
-      method: "POST",
-      headers: tenantJsonHeaders(),
-      body: JSON.stringify({
-        worker: testWorkerId,
-        service: testServiceId,
-        date: tomorrowStr,
-        startTime: "09:00",
-        clientInfo: {
-          firstName: "Progresivo",
-          lastName: "Completado",
-          email: "progressive-2@example.com",
-          phone: "+56977777777",
-        },
-      }),
-    });
-    assert.strictEqual(bookRes3.status, 201);
-
-    const completedClient = await User.findOne({ phone: "+56977777777" });
-    assert.strictEqual(completedClient.firstName, "Progresivo");
-    assert.strictEqual(completedClient.lastName, "Completado"); // Completado
+    const [storedAppointment, storedPayment] = await Promise.all([
+      Appointment.findById(appointment._id),
+      Payment.findOne({ transactionId: "legacy-buy-order" }),
+    ]);
+    assert.equal(storedAppointment.status, "pending_payment");
+    assert.equal(storedPayment.status, "pending");
   });
 
-  // 3. CASO DE PRUEBA: Intento de reserva sin proporcionar clientInfo
-  await t.test("Debería denegar la reserva si no se pasa clientInfo y no hay sesión activa", async () => {
-    const bookRes = await fetch(`${baseUrl}/appointments`, {
-      method: "POST",
-      headers: tenantJsonHeaders(),
-      body: JSON.stringify({
-        worker: testWorkerId,
-        service: testServiceId,
-        date: tomorrowStr,
-        startTime: "09:00",
-      }),
+  await t.test("Service mutable no redefine el amount/type del Payment pending", async () => {
+    const { appointment } = await createLegacyPending({
+      token: "legacy-payment-snapshot",
+      startTime: "13:00",
+      paymentAmount: 5000,
+      paymentType: "deposit",
     });
-    assert.strictEqual(bookRes.status, 400);
-    const bookData = await bookRes.json();
-    assert.ok(bookData.message.includes("clientInfo"));
+
+    seed.service.depositAmount = 6000;
+    await seed.service.save();
+
+    gatewayState.amount = 5000;
+    const response = await callReturn("legacy-payment-snapshot");
+
+    seed.service.depositAmount = 5000;
+    await seed.service.save();
+
+    assert.equal(response.status, 302);
+    assert.match(response.headers.get("location") || "", /payment-success/);
+
+    const [storedAppointment, storedPayment] = await Promise.all([
+      Appointment.findById(appointment._id),
+      Payment.findOne({ transactionId: "legacy-payment-snapshot" }),
+    ]);
+    assert.equal(storedAppointment.status, "confirmed");
+    assert.equal(storedAppointment.paymentStatus, "partially_paid");
+    assert.equal(storedPayment.status, "approved");
+    assert.equal(storedPayment.amount, 5000);
+    assert.equal(storedPayment.type, "deposit");
+    assert.equal(storedPayment.authorizedAmount, 5000);
+    assert.equal(storedPayment.reconciliationStatus, "applied");
+    assert.equal(storedPayment.reconciliationReason, undefined);
   });
 
-  // 4. CASO DE PRUEBA: Horario tomado (con Bloqueo administrativo)
-  await t.test("Debería impedir el pago si el horario de la cita fue tomado por un bloqueo", async () => {
-    // Crear reserva inicial
-    const bookRes = await fetch(`${baseUrl}/appointments`, {
-      method: "POST",
-      headers: tenantJsonHeaders(),
-      body: JSON.stringify({
-        worker: testWorkerId,
-        service: testServiceId,
-        date: tomorrowStr,
-        startTime: "09:00",
-        clientInfo: {
-          firstName: "Cliente",
-          lastName: "Bloqueado",
-          email: "audit-client@example.com",
-          phone: "+56911112222",
-        },
-      }),
+  await t.test("AUTHORIZED amount mismatch registra reconciliación sin activar Appointment", async () => {
+    const { appointment } = await createLegacyPending({
+      token: "legacy-amount-mismatch",
+      startTime: "14:00",
+      paymentAmount: 5000,
     });
-    const appointmentId = (await bookRes.json()).payload._id;
+    gatewayState.amount = 7000;
 
-    // Crear bloqueo administrativo en el mismo horario
-    await Block.create({
-      business: testBusinessId,
-      worker: testWorkerId,
-      date: new Date(tomorrowStr),
-      startTime: "09:00",
-      endTime: "09:30",
-      reason: "Bloqueo por slot ocupado",
-    });
+    const response = await callReturn("legacy-amount-mismatch");
+    assert.equal(response.status, 302);
+    const location = new URL(response.headers.get("location"));
+    assert.equal(location.pathname, "/payment-failed");
+    assert.equal(location.searchParams.get("reason"), "payment_authorized_reconciliation_required");
+    assert.equal(location.searchParams.get("paymentAuthorized"), "true");
 
-    // Intentar iniciar el pago
-    const initRes = await fetch(`${baseUrl}/payments/initiate`, {
-      method: "POST",
-      headers: tenantJsonHeaders(),
-      body: JSON.stringify({ appointmentId, paymentType: "deposit" }),
-    });
-
-    assert.strictEqual(initRes.status, 400);
-    const initData = await initRes.json();
-    assert.ok(initData.message.includes("no se encuentra disponible"));
+    const [storedAppointment, storedPayment] = await Promise.all([
+      Appointment.findById(appointment._id),
+      Payment.findOne({ transactionId: "legacy-amount-mismatch" }),
+    ]);
+    assert.equal(storedAppointment.status, "pending_payment");
+    assert.equal(storedAppointment.paymentStatus, "unpaid");
+    assert.equal(storedPayment.status, "approved");
+    assert.equal(storedPayment.amount, 5000);
+    assert.equal(storedPayment.authorizedAmount, 7000);
+    assert.equal(storedPayment.type, "deposit");
+    assert.equal(storedPayment.reconciliationStatus, "required");
+    assert.equal(storedPayment.reconciliationReason, "amount_mismatch");
+    assert.ok(storedPayment.authorizedAt instanceof Date);
   });
+
+  await t.test("redirect técnico usa reason estable y nunca filtra error.message", async () => {
+    const sensitiveText = "sensitive-provider-secret-should-never-leak";
+    const { appointment } = await createLegacyPending({
+      token: "legacy-sensitive-error",
+      startTime: "15:00",
+    });
+    gatewayState.throwMessage = sensitiveText;
+
+    const response = await callReturn("legacy-sensitive-error");
+    assert.equal(response.status, 302);
+    const locationRaw = response.headers.get("location") || "";
+    const location = new URL(locationRaw);
+    assert.equal(location.pathname, "/payment-failed");
+    assert.equal(location.searchParams.get("reason"), "server_error");
+    assert.equal(location.searchParams.has("message"), false);
+    assert.equal(locationRaw.includes(sensitiveText), false);
+    assert.equal(decodeURIComponent(locationRaw).includes(sensitiveText), false);
+
+    const [storedAppointment, storedPayment] = await Promise.all([
+      Appointment.findById(appointment._id),
+      Payment.findOne({ transactionId: "legacy-sensitive-error" }),
+    ]);
+    assert.equal(storedAppointment.status, "pending_payment");
+    assert.equal(storedPayment.status, "pending");
+    gatewayState.throwMessage = null;
+  });
+});
+
+test.after(async () => {
+  await teardown(server, sessionStore);
 });

@@ -20,6 +20,10 @@ export const updateMany = async (filter, updateData) => {
 };
 
 export const associateOrphanedLogs = async (userId, appointmentId) => {
+  // Los bookings guest no tienen User. Nunca correlacionar logs anónimos entre
+  // solicitudes distintas por medio de userId=null/undefined.
+  if (!userId) return null;
+
   return await AuditLog.updateMany(
     { userId, appointmentId: { $exists: false } },
     { appointmentId }

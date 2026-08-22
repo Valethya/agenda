@@ -1,8 +1,15 @@
+import mongoose from "mongoose";
 import Appointment from "../db/models/appointment.model.js";
+import AppointmentBookingMutex from "../db/models/appointmentBookingMutex.model.js";
+import { ConflictError } from "../utils/appError.js";
 
 const PAYMENT_SETTLEMENT_STATUSES = new Set(["partially_paid", "fully_paid"]);
+const ACTIVE_BOOKING_STATUSES = Object.freeze(["pending_payment", "pending", "confirmed", "completed"]);
 
 const populateProtectedTenantRelations = (query, businessId) => query
+  // Sólo las lecturas internas protegidas necesitan guestContact para construir
+  // el DTO operacional. Nunca se serializa este subdocumento raw.
+  .select("+guestContact")
   .populate("client", "firstName lastName email phone")
   .populate("worker", "firstName lastName email phone")
   .populate({
@@ -11,6 +18,57 @@ const populateProtectedTenantRelations = (query, businessId) => query
     select: "name duration price depositAmount workers business isActive",
   })
   .populate("business", "name slug");
+
+const bookingMutexId = (businessId, workerId, date) => {
+  const dateKey = new Date(date).toISOString().slice(0, 10);
+  return `${businessId.toString()}:${workerId.toString()}:${dateKey}`;
+};
+
+const ensureBookingMutex = async (lockId) => {
+  try {
+    await AppointmentBookingMutex.updateOne(
+      { _id: lockId },
+      { $setOnInsert: { version: 0 } },
+      { upsert: true },
+    );
+  } catch (error) {
+    // Dos procesos pueden intentar materializar por primera vez la misma fila.
+    // La unicidad de _id resuelve la carrera; el perdedor puede continuar.
+    if (error?.code !== 11000) throw error;
+  }
+};
+
+export const withSerializedBookingInterval = async (
+  { businessId, workerId, date },
+  work,
+) => {
+  const lockId = bookingMutexId(businessId, workerId, date);
+  await ensureBookingMutex(lockId);
+
+  const session = await mongoose.startSession();
+  let result;
+  try {
+    await session.withTransaction(async () => {
+      // Este write es el punto de serialización cross-process para el worker/día.
+      // No hay lease que pueda expirar: la exclusión existe sólo durante la txn.
+      const lock = await AppointmentBookingMutex.findOneAndUpdate(
+        { _id: lockId },
+        { $inc: { version: 1 } },
+        { new: true, session },
+      );
+      if (!lock) throw new Error("No se pudo adquirir la serialización de booking");
+
+      result = await work(session);
+    }, {
+      readConcern: { level: "snapshot" },
+      writeConcern: { w: "majority" },
+    });
+
+    return result;
+  } finally {
+    await session.endSession();
+  }
+};
 
 export const findByBusinessWorkerAndDate = async (businessId, workerId, date) => {
   const startOfDay = new Date(date);
@@ -30,8 +88,73 @@ export const findByBusinessWorkerAndDate = async (businessId, workerId, date) =>
   });
 };
 
-export const create = async (data) => {
-  return await Appointment.create(data);
+export const findActiveOverlapForBusinessWorkerAndDate = async ({
+  businessId,
+  workerId,
+  date,
+  startTime,
+  endTime,
+  excludeAppointmentId = null,
+  session,
+}) => {
+  const startOfDay = new Date(date);
+  startOfDay.setUTCHours(0, 0, 0, 0);
+  const endOfDay = new Date(date);
+  endOfDay.setUTCHours(23, 59, 59, 999);
+
+  const filter = {
+    business: businessId,
+    worker: workerId,
+    date: { $gte: startOfDay, $lte: endOfDay },
+    status: { $in: ACTIVE_BOOKING_STATUSES },
+    startTime: { $lt: endTime },
+    endTime: { $gt: startTime },
+  };
+  if (excludeAppointmentId) filter._id = { $ne: excludeAppointmentId };
+
+  return await Appointment.findOne(filter).session(session || null);
+};
+
+const createWithSession = async (data, session) => {
+  const [created] = await Appointment.create([data], { session });
+  return created;
+};
+
+export const create = async (data, { session = null } = {}) => {
+  if (session) return await createWithSession(data, session);
+
+  return await withSerializedBookingInterval(
+    {
+      businessId: data.business,
+      workerId: data.worker,
+      date: data.date,
+    },
+    async (transactionSession) => {
+      const overlap = await findActiveOverlapForBusinessWorkerAndDate({
+        businessId: data.business,
+        workerId: data.worker,
+        date: data.date,
+        startTime: data.startTime,
+        endTime: data.endTime,
+        session: transactionSession,
+      });
+
+      if (overlap) {
+        throw new ConflictError("El horario seleccionado ya no se encuentra disponible");
+      }
+
+      try {
+        return await createWithSession(data, transactionSession);
+      } catch (error) {
+        // Conserva el contrato estable si una fila legacy/no serializada colisiona
+        // con el índice exacto de startTime durante la transición.
+        if (error?.code === 11000) {
+          throw new ConflictError("El horario seleccionado ya no se encuentra disponible");
+        }
+        throw error;
+      }
+    },
+  );
 };
 
 // Legacy Payment-only commands. Payment/Webpay remains deny-by-default; these
@@ -45,17 +168,33 @@ export const markPendingPaymentFromLegacyPayment = async (id) => {
   );
 };
 
-export const confirmFromLegacyPayment = async (id, paymentStatus) => {
+export const findBookingTransitionById = async (id, { session = null } = {}) => (
+  Appointment.findById(id).session(session || null)
+);
+
+export const confirmPendingPaymentFromLegacyPayment = async (
+  id,
+  paymentStatus,
+  { session = null } = {},
+) => {
   if (!PAYMENT_SETTLEMENT_STATUSES.has(paymentStatus)) {
     throw new TypeError("Estado de pago de Appointment inválido");
   }
 
-  return await Appointment.findByIdAndUpdate(
-    id,
+  return await Appointment.findOneAndUpdate(
+    { _id: id, status: "pending_payment" },
     { $set: { status: "confirmed", paymentStatus } },
-    { new: true, runValidators: true },
+    { new: true, runValidators: true, session },
   );
 };
+
+export const cancelPendingPaymentForLegacyConflict = async (id, { session = null } = {}) => (
+  Appointment.findOneAndUpdate(
+    { _id: id, status: "pending_payment" },
+    { $set: { status: "cancelled" } },
+    { new: true, runValidators: true, session },
+  )
+);
 
 export const cancelFromRejectedLegacyPayment = async (id) => {
   return await Appointment.findByIdAndUpdate(

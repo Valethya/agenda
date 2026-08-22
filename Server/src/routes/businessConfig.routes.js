@@ -7,19 +7,21 @@ import {
 } from "../controllers/businessConfig.controller.js";
 import { isAuthenticated } from "../middleware/auth.middleware.js";
 import { isAdmin } from "../middleware/role.middleware.js";
+import { scopeBusiness } from "../middleware/business.middleware.js";
 import { validate } from "../middleware/validate.middleware.js";
 import { updateBusinessConfigSchema } from "../validations/common.validation.js";
 
 const router = Router();
 
-// Consultas públicas (para que el frontend o widget obtenga políticas del negocio)
-router.get("/", getBusinessConfig);
+// BusinessConfig es estado operacional del panel, no parte del contrato headless.
+// GET es internal-only y semánticamente read-only: si no existe configuración,
+// devuelve defaults calculados sin materializar un documento. La persistencia
+// sólo ocurre mediante comandos explícitos como PUT.
+router.get("/", scopeBusiness, isAuthenticated, getBusinessConfig);
 
-// Configuración protegida (Solo administradores)
-router.put("/", isAuthenticated, isAdmin, validate(updateBusinessConfigSchema), updateBusinessConfig);
-
-// Métricas y analíticas (Solo administradores del negocio)
-router.get("/metrics", isAuthenticated, isAdmin, getBusinessMetrics);
-router.get("/analytics", isAuthenticated, isAdmin, getBusinessAnalytics);
+// Configuración, métricas y analíticas: sesión + Membership admin vigente.
+router.put("/", scopeBusiness, isAuthenticated, isAdmin, validate(updateBusinessConfigSchema), updateBusinessConfig);
+router.get("/metrics", scopeBusiness, isAuthenticated, isAdmin, getBusinessMetrics);
+router.get("/analytics", scopeBusiness, isAuthenticated, isAdmin, getBusinessAnalytics);
 
 export default router;

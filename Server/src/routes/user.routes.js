@@ -6,16 +6,17 @@ import {
 } from "../controllers/user.controller.js";
 import { isAuthenticated } from "../middleware/auth.middleware.js";
 import { isAdmin } from "../middleware/role.middleware.js";
+import { scopeBusiness, scopePublicBusiness } from "../middleware/business.middleware.js";
 import { validate } from "../middleware/validate.middleware.js";
 import { createWorkerSchema, objectIdParamSchema } from "../validations/common.validation.js";
 
 const router = Router();
 
-// Rutas públicas (ej: el cliente visualiza qué profesionales están disponibles)
-router.get("/workers", getWorkers);
+// Discovery público fijado por routing. El panel obtiene su proyección operativa
+// únicamente desde /api/internal/users/workers.
+router.get("/workers", scopePublicBusiness, getWorkers);
 
-// Rutas protegidas de administración (Solo administradores)
-router.post("/workers", isAuthenticated, isAdmin, validate(createWorkerSchema), createWorker);
-router.delete("/workers/:id", isAuthenticated, isAdmin, validate(objectIdParamSchema), deleteWorker);
+router.post("/workers", scopeBusiness, isAuthenticated, isAdmin, validate(createWorkerSchema), createWorker);
+router.delete("/workers/:id", scopeBusiness, isAuthenticated, isAdmin, validate(objectIdParamSchema), deleteWorker);
 
 export default router;

@@ -28,10 +28,14 @@ test("6.2.4-B Appointment sólo expone mutaciones purpose-specific", async () =>
   assert.doesNotMatch(repository, /export const \w*update\w*\s*=\s*async\s*\(\s*id\s*,\s*(?:data|updateData)\b/ui);
   assert.match(repository, /export const transitionStatusByBusiness/u);
   assert.match(repository, /export const markPendingPaymentFromLegacyPayment/u);
-  assert.match(repository, /export const confirmFromLegacyPayment/u);
+  assert.match(repository, /export const confirmPendingPaymentFromLegacyPayment/u);
+  assert.match(repository, /\{ _id: id, status: "pending_payment" \}/u);
+  assert.match(repository, /export const cancelPendingPaymentForLegacyConflict/u);
   assert.match(repository, /export const cancelFromRejectedLegacyPayment/u);
+  assert.doesNotMatch(repository, /export const confirmFromLegacyPayment/u);
   assert.doesNotMatch(service, /appointmentRepository\.update(?:ByIdAndBusiness)?\s*\(/u);
   assert.doesNotMatch(payment, /appointmentRepository\.update\s*\(/u);
+  assert.match(payment, /withSerializedBookingInterval/u);
 });
 
 test("6.2.4-B Service update no acepta passthrough abierto ni business mutable", async () => {
@@ -77,4 +81,24 @@ test("6.2.4-B Payment/Webpay queda deny-by-default", async () => {
 
   assert.match(env, /process\.env\.ENABLE_PAYMENTS\s*===\s*"true"/u);
   assert.match(routes, /if\s*\(paymentRoutesEnabled\)\s*\{[\s\S]*router\.use\("\/payments", paymentRoutes\)/u);
+});
+
+test("6.2.6-A booking guest no correlaciona ni crea User", async () => {
+  const controller = await readSource("controllers/appointment.controller.js");
+  const model = await readSource("db/models/appointment.model.js");
+
+  assert.doesNotMatch(controller, /getOrCreateGuestUser/u);
+  assert.doesNotMatch(controller, /authService/u);
+  assert.match(controller, /bookingSurface\s*===\s*"public"/u);
+  assert.match(controller, /guestContact\s*=\s*\{/u);
+  assert.match(model, /client:[\s\S]*default:\s*null/u);
+  assert.match(model, /client autenticado o guestContact/u);
+});
+
+test("6.2.6-A inicio de Payment no acepta Appointment ID como authority", async () => {
+  const routes = await readSource("routes/payment.routes.js");
+
+  assert.doesNotMatch(routes, /\bstartPayment\b/u);
+  assert.match(routes, /El inicio de pago público requiere una autoridad específica/u);
+  assert.match(routes, /ForbiddenError/u);
 });

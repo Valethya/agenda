@@ -15,6 +15,24 @@ const appointmentGuestContactSchema = new mongoose.Schema(
       maxlength: 320,
       immutable: true,
     },
+    firstName: {
+      type: String,
+      trim: true,
+      maxlength: 120,
+      immutable: true,
+    },
+    lastName: {
+      type: String,
+      trim: true,
+      maxlength: 120,
+      immutable: true,
+    },
+    phone: {
+      type: String,
+      trim: true,
+      maxlength: 64,
+      immutable: true,
+    },
     provenance: {
       type: String,
       enum: ["guest-booking-input-v1"],
@@ -32,10 +50,12 @@ const appointmentGuestContactSchema = new mongoose.Schema(
 
 const appointmentSchema = new mongoose.Schema(
   {
+    // Appointment.client es una relación operacional opcional, nunca authority.
+    // Las reservas guest se representan sin fabricar un User autenticable.
     client: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
-      required: [true, "El cliente es obligatorio"],
+      default: null,
     },
     worker: {
       type: mongoose.Schema.Types.ObjectId,
@@ -77,9 +97,8 @@ const appointmentSchema = new mongoose.Schema(
       required: [true, "El negocio para la cita es obligatorio"],
       index: true,
     },
-    // Operational contact captured from the booking request itself. This is
-    // resource-scoped provenance, not identity or Client authority. Legacy
-    // appointments without this snapshot are intentionally ineligible for C2.
+    // Provenance operacional capturada desde el request de booking. Es scope de
+    // esta Appointment, no identidad, ownership ni grant de Client.
     guestContact: {
       type: appointmentGuestContactSchema,
       default: null,
@@ -102,6 +121,14 @@ const appointmentSchema = new mongoose.Schema(
     },
   }
 );
+
+// Todo Appointment nuevo debe tener una identidad autenticada real o provenance
+// guest Appointment-scoped. Nunca se rellena client mediante matching de contacto.
+appointmentSchema.pre("validate", function () {
+  if (!this.client && !this.guestContact) {
+    this.invalidate("client", "La cita requiere client autenticado o guestContact");
+  }
+});
 
 // La colisión de una cita activa es local al tenant. Citas canceladas quedan fuera.
 appointmentSchema.index(

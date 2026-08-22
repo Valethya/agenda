@@ -9,7 +9,9 @@ import {
   resolveActiveTenantParticipant,
 } from "./professionalEligibility.service.js";
 import { NotFoundError, ValidationError } from "../utils/appError.js";
+import { parseStrictISODate } from "../utils/date.js";
 import { timeToMinutes, minutesToTime, checkOverlap } from "../utils/time.js";
+import { DEFAULT_SLOT_DURATION_MINUTES } from "../config/businessConfig.defaults.js";
 
 export const resolveActiveWorkerInTenant = async (workerId, businessId) =>
   resolveActiveTenantParticipant(workerId, businessId);
@@ -17,8 +19,9 @@ export const resolveActiveWorkerInTenant = async (workerId, businessId) =>
 export const getAvailableSlots = async (workerId, dateStr, serviceId, businessId, excludeAppointmentId = null) => {
   if (!businessId) throw new ValidationError("El contexto de negocio es obligatorio para consultar disponibilidad");
 
+  const targetDate = parseStrictISODate(dateStr);
+  if (!targetDate) throw new ValidationError("La fecha debe ser una fecha Gregoriana válida");
   const dateParts = dateStr.split("-").map(Number);
-  const targetDate = new Date(Date.UTC(dateParts[0], dateParts[1] - 1, dateParts[2]));
   const dayOfWeek = targetDate.getUTCDay();
 
   const service = await serviceRepository.findByIdAndBusiness(
@@ -37,6 +40,8 @@ export const getAvailableSlots = async (workerId, dateStr, serviceId, businessId
 
   const [shift, holiday, appointments, blocks, businessConfig] = await Promise.all([
     shiftRepository.findByBusinessWorkerAndDay(businessId, workerId, dayOfWeek),
+    // Holiday es deliberadamente un calendario global compartido. No concede
+    // authority tenant y se aplica por igual a todos los Businesses.
     holidayRepository.findByDate(targetDate),
     appointmentRepository.findByBusinessWorkerAndDate(businessId, workerId, targetDate),
     blockRepository.findByBusinessWorkerAndDateRange(businessId, workerId, targetDate, targetDate),
@@ -63,8 +68,8 @@ export const getAvailableSlots = async (workerId, dateStr, serviceId, businessId
   }
 
   const blockedIntervals = blocks.map((b) => ({ start: timeToMinutes(b.startTime), end: timeToMinutes(b.endTime) }));
-  let bookingInterval = 30;
-  if (businessConfig?.appointmentSettings?.slotDuration) bookingInterval = businessConfig.appointmentSettings.slotDuration;
+  const bookingInterval = businessConfig?.appointmentSettings?.slotDuration
+    ?? DEFAULT_SLOT_DURATION_MINUTES;
 
   const availableSlots = [];
   const todaySantiago = new Date(new Date().toLocaleString("en-US", { timeZone: "America/Santiago" }));

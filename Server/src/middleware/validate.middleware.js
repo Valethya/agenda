@@ -1,25 +1,32 @@
 import { ZodError } from "zod";
 
-export const validate = (schema) => (req, res, next) => {
+export const validate = (schemaOrResolver, options = {}) => (req, res, next) => {
   try {
-    // Validamos req.body, req.query y req.params contra el esquema Zod
-    schema.parse({
+    const schema = typeof schemaOrResolver === "function" && typeof schemaOrResolver.parse !== "function"
+      ? schemaOrResolver(req)
+      : schemaOrResolver;
+
+    // Validamos req.body, req.query y req.params contra el esquema Zod.
+    const parsed = schema.parse({
       body: req.body,
       query: req.query,
       params: req.params,
     });
+
+    // Opt-in: las fronteras que necesiten garantías de allowlist pueden obligar
+    // al controller a consumir exactamente el body parseado/transformado.
+    if (options.assignBody && parsed.body !== undefined) {
+      req[options.assignBody] = parsed.body;
+    }
   } catch (error) {
     if (error instanceof ZodError) {
-      // Zod arroja un error estructurado si falla la validación
       const formattedErrors = (error.errors || error.issues || []).map((err) => {
-        // Remover "body", "query" o "params" del path para dejar solo el nombre del campo
-        const fieldPath = err.path.slice(1).join("."); 
+        const fieldPath = err.path.slice(1).join(".");
         return {
           field: fieldPath || err.path[0],
           message: err.message,
         };
       });
-
 
       return res.status(400).json({
         status: "fail",
@@ -29,12 +36,11 @@ export const validate = (schema) => (req, res, next) => {
         errors: formattedErrors,
       });
     }
-    
+
     return next(error);
   }
-  
+
   return next();
 };
 
 export default validate;
-

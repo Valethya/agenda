@@ -14,6 +14,7 @@ import {
 } from "../controllers/auth.controller.js";
 import { stopImpersonatingBusiness } from "../controllers/superadmin.controller.js";
 import { isAuthenticated } from "../middleware/auth.middleware.js";
+import { requireTrustedAuthenticatedOrigin } from "../middleware/trustedAuthenticatedOrigin.middleware.js";
 import { validate } from "../middleware/validate.middleware.js";
 import {
   registerSchema,
@@ -42,15 +43,16 @@ const authLimiter = rateLimit({
 const router = Router();
 
 router.post("/register", validate(registerSchema), register);
-router.post("/login", authLimiter, validate(loginSchema), login);
-router.post("/select-membership", validate(selectMembershipSchema), selectMembership);
-router.post("/switch-business", isAuthenticated, validate(switchBusinessSchema), switchBusiness);
-router.post("/stop-impersonating", isAuthenticated, stopImpersonatingBusiness);
-router.post("/google", validate(googleLoginSchema), googleLogin);
-router.post("/logout", isAuthenticated, logout);
-router.get("/me", getCurrentUser);
+// Login/admin session creation is a panel operation when a browser supplies Origin.
+router.post("/login", requireTrustedAuthenticatedOrigin, authLimiter, validate(loginSchema), login);
+router.post("/select-membership", requireTrustedAuthenticatedOrigin, validate(selectMembershipSchema), selectMembership);
+router.post("/switch-business", requireTrustedAuthenticatedOrigin, isAuthenticated, validate(switchBusinessSchema), switchBusiness);
+router.post("/stop-impersonating", requireTrustedAuthenticatedOrigin, isAuthenticated, stopImpersonatingBusiness);
+router.post("/google", requireTrustedAuthenticatedOrigin, validate(googleLoginSchema), googleLogin);
+router.post("/logout", requireTrustedAuthenticatedOrigin, isAuthenticated, logout);
+router.get("/me", requireTrustedAuthenticatedOrigin, getCurrentUser);
 router.post("/forgot-password", authLimiter, validate(forgotPasswordSchema), forgotPassword);
 router.post("/reset-password", validate(resetPasswordSchema), resetPassword);
-router.post("/change-password", isAuthenticated, validate(changePasswordSchema), changePassword);
+router.post("/change-password", requireTrustedAuthenticatedOrigin, isAuthenticated, validate(changePasswordSchema), changePassword);
 
 export default router;

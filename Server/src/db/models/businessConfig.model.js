@@ -1,4 +1,5 @@
 import mongoose from "mongoose";
+import { DEFAULT_SLOT_DURATION_MINUTES } from "../../config/businessConfig.defaults.js";
 
 const businessConfigSchema = new mongoose.Schema(
   {
@@ -31,7 +32,7 @@ const businessConfigSchema = new mongoose.Schema(
       },
     ],
     appointmentSettings: {
-      slotDuration: { type: Number, default: 60 }, // Duración de los bloques en minutos (15, 30, 60, etc.)
+      slotDuration: { type: Number, default: DEFAULT_SLOT_DURATION_MINUTES },
       bufferTime: { type: Number, default: 0 }, // Tiempo de holgura en minutos entre citas
       minAdvanceHours: { type: Number, default: 2 }, // Horas mínimas previas para agendar
       maxAdvanceDays: { type: Number, default: 30 }, // Máximo de días a futuro para ver disponibilidad

@@ -97,6 +97,8 @@ export async function apiFetch<T = unknown>(path: string, options: ApiRequestIni
   const headers = new Headers(options.headers);
   let body = options.body;
 
+  // El slug transporta contexto/tenant cuando el endpoint lo acepta. La selección
+  // public/internal pertenece al routing del servidor y nunca a un header del cliente.
   if (slug && !headers.has('x-business-slug') && !headers.has('x-business-id')) {
     headers.set('x-business-slug', slug);
   }
@@ -138,7 +140,7 @@ export async function logout() {
 }
 
 export async function getWorkers() {
-  const data = await apiFetch<ApiResponse<Professional[]>>("/users/workers");
+  const data = await apiFetch<ApiResponse<Professional[]>>("/internal/users/workers");
   return data.payload;
 }
 
