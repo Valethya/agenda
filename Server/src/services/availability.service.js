@@ -11,6 +11,7 @@ import {
 import { NotFoundError, ValidationError } from "../utils/appError.js";
 import { parseStrictISODate } from "../utils/date.js";
 import { timeToMinutes, minutesToTime, checkOverlap } from "../utils/time.js";
+import { DEFAULT_SLOT_DURATION_MINUTES } from "../config/businessConfig.defaults.js";
 
 export const resolveActiveWorkerInTenant = async (workerId, businessId) =>
   resolveActiveTenantParticipant(workerId, businessId);
@@ -67,8 +68,8 @@ export const getAvailableSlots = async (workerId, dateStr, serviceId, businessId
   }
 
   const blockedIntervals = blocks.map((b) => ({ start: timeToMinutes(b.startTime), end: timeToMinutes(b.endTime) }));
-  let bookingInterval = 30;
-  if (businessConfig?.appointmentSettings?.slotDuration) bookingInterval = businessConfig.appointmentSettings.slotDuration;
+  const bookingInterval = businessConfig?.appointmentSettings?.slotDuration
+    ?? DEFAULT_SLOT_DURATION_MINUTES;
 
   const availableSlots = [];
   const todaySantiago = new Date(new Date().toLocaleString("en-US", { timeZone: "America/Santiago" }));
