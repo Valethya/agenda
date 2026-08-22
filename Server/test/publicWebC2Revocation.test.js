@@ -21,7 +21,7 @@ import {
   reverifyPublicWeb,
   verifyPublicWeb,
 } from "../src/services/publicWeb.service.js";
-import fixtures from "./fixtures.js";
+import * as fixtures from "./fixtures.js";
 
 const { seedTestData, cleanTestData } = fixtures;
 await connectDB();
