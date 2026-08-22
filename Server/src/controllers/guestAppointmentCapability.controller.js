@@ -1,10 +1,18 @@
 import { consumeGuestAppointmentReadCapability, exchangeGuestAppointmentReadChallenge, requestGuestAppointmentReadChallenge } from "../services/guestAppointmentCapability.service.js";
 
+const INVALID_PROOF_CODE = "GUEST_APPOINTMENT_CAPABILITY_INVALID_PROOF";
+
 const secure = (res) => {
   res.set("Cache-Control", "no-store");
   res.set("Referrer-Policy", "no-referrer");
   return res;
 };
+
+const invalidProof = (res) => secure(res).status(403).json({
+  status: "fail",
+  code: INVALID_PROOF_CODE,
+  message: "Acceso guest no válido",
+});
 
 export const requestReadChallenge = async (req, res) => {
   await requestGuestAppointmentReadChallenge({ businessId: req.body.businessId, appointmentId: req.body.appointmentId });
@@ -33,7 +41,7 @@ export const exchangeReadChallenge = async (req, res) => {
       },
     });
   } catch {
-    return secure(res).status(403).json({ status: "fail", code: "GUEST_APPOINTMENT_ACCESS_INVALID", message: "Acceso guest no válido" });
+    return invalidProof(res);
   }
 };
 
@@ -46,6 +54,6 @@ export const consumeReadCapability = async (req, res) => {
     });
     return secure(res).status(200).json({ status: "success", appointment });
   } catch {
-    return secure(res).status(403).json({ status: "fail", code: "GUEST_APPOINTMENT_ACCESS_INVALID", message: "Acceso guest no válido" });
+    return invalidProof(res);
   }
 };
