@@ -4,7 +4,9 @@ import * as appointmentRepository from "../repositories/appointment.repository.j
 import * as deliveryRepository from "../repositories/guestAppointmentVerificationDelivery.repository.js";
 import * as capabilityRepository from "../repositories/guestAppointmentCapability.repository.js";
 import * as jobRepository from "../repositories/guestAppointmentVerificationJob.repository.js";
+import * as publicWebJobRepository from "../repositories/guestAppointmentPublicWeb.repository.js";
 import { consumeExactVerificationForBusiness } from "./clientContactVerification.service.js";
+import { resolveFreshPublicWebTrust } from "./publicWeb.service.js";
 import {
   GUEST_APPOINTMENT_IMPLEMENTED_PURPOSE_TO_ACTION,
   GUEST_APPOINTMENT_PURPOSES,
@@ -74,6 +76,24 @@ export const requestGuestAppointmentReadChallenge = async ({ businessId, appoint
   return ACCEPTED;
 };
 
+const deliveryHasCurrentPublicWebTrust = async ({ delivered, business, appointment }) => {
+  const trust = await resolveFreshPublicWebTrust({ businessId: business, now: new Date() });
+  if (
+    !trust
+    || delivered.publicWebTrustGeneration !== trust.trustGeneration
+    || delivered.trustedOrigin !== trust.origin
+  ) return false;
+
+  return publicWebJobRepository.deliveredJobTrustMatches({
+    jobId: delivered.job,
+    jobGeneration: delivered.jobGeneration,
+    businessId: business,
+    appointmentId: appointment,
+    publicWebTrustGeneration: delivered.publicWebTrustGeneration,
+    trustedOrigin: delivered.trustedOrigin,
+  });
+};
+
 export const exchangeGuestAppointmentReadChallenge = async ({
   businessId,
   appointmentId,
@@ -106,6 +126,11 @@ export const exchangeGuestAppointmentReadChallenge = async ({
   });
   if (!trustedJob) throw invalidProof();
 
+  // First publicWeb check is before consuming the single-use C1 proof.
+  if (!await deliveryHasCurrentPublicWebTrust({ delivered, business, appointment })) {
+    throw invalidProof();
+  }
+
   try {
     await consumeExactVerificationForBusiness({
       verificationId: verification,
@@ -114,6 +139,13 @@ export const exchangeGuestAppointmentReadChallenge = async ({
       secret: challenge,
     });
   } catch {
+    throw invalidProof();
+  }
+
+  // Re-read immediately before capability creation. Expiry, delete, reverify or
+  // origin/generation change between the two boundaries fails closed with the
+  // same guest-facing invalid-proof code.
+  if (!await deliveryHasCurrentPublicWebTrust({ delivered, business, appointment })) {
     throw invalidProof();
   }
 
