@@ -205,16 +205,22 @@ const storageCanApply = (storage) => Object.values(storage).every((status) => (
   status.exactUniqueExists || status.canCreateTransactionally
 ));
 
-export const readProductionOwnerSource = async (db, { session } = {}) => {
-  const observedCollections = (await db.listCollections({}, { nameOnly: true }).toArray())
-    .map((collection) => collection.name)
-    .sort();
+export const readProductionOwnerSource = async (
+  db,
+  { session, metadata } = {},
+) => {
+  const observedCollections = metadata?.observedCollections
+    ? [...metadata.observedCollections].sort()
+    : (await db.listCollections({}, { nameOnly: true }).toArray())
+      .map((collection) => collection.name)
+      .sort();
   const observed = new Set(observedCollections);
-  const readIndexes = async (collection) => (
-    observed.has(collection)
+  const readIndexes = async (collection, supplied) => {
+    if (Array.isArray(supplied)) return supplied;
+    return observed.has(collection)
       ? db.collection(collection).listIndexes().toArray()
-      : []
-  );
+      : [];
+  };
   const [businesses, users, memberships, businessIndexes, userIndexes, membershipIndexes] =
     await Promise.all([
       observed.has("businesses")
@@ -226,9 +232,9 @@ export const readProductionOwnerSource = async (db, { session } = {}) => {
       observed.has("memberships")
         ? db.collection("memberships").find({}, { session }).toArray()
         : [],
-      readIndexes("businesses"),
-      readIndexes("users"),
-      readIndexes("memberships"),
+      readIndexes("businesses", metadata?.businessIndexes),
+      readIndexes("users", metadata?.userIndexes),
+      readIndexes("memberships", metadata?.membershipIndexes),
     ]);
   return {
     observedCollections,
@@ -479,10 +485,11 @@ const openConnection = async (mongoUri) => {
 };
 
 const sourceWithPlannedIndexes = (source) => {
-  const observed = new Set(source.observedCollections ?? []);
   const next = {
-    ...source,
-    observedCollections: [...new Set([...observed, ...OWNER_COLLECTIONS])].sort(),
+    observedCollections: [...new Set([
+      ...(source.observedCollections ?? []),
+      ...OWNER_COLLECTIONS,
+    ])].sort(),
     businessIndexes: [...(source.businessIndexes ?? [])],
     userIndexes: [...(source.userIndexes ?? [])],
     membershipIndexes: [...(source.membershipIndexes ?? [])],
@@ -583,9 +590,12 @@ export const runProductionOwnerBootstrap = async ({
         });
         await assertOwnership();
 
-        const verificationSource = await readProductionOwnerSource(connection.db, { session });
+        const verificationSource = await readProductionOwnerSource(connection.db, {
+          session,
+          metadata: sourceWithPlannedIndexes(source),
+        });
         const ready = await verifyProductionOwnerReadyState(
-          sourceWithPlannedIndexes(verificationSource),
+          verificationSource,
           manifest,
           passwordVerifier,
         );
