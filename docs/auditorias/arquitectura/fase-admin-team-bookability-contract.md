@@ -121,9 +121,10 @@ La lectura interna no usa el endpoint público y esa separación debe conservars
 3. para un User nuevo persiste todavía valores legacy `User.role = "worker"` y `User.business = businessId`;
 4. crea una única `Membership` con `role = "worker"`;
 5. rechaza si ya existe cualquier Membership para ese `User + Business`;
-6. inicializa automáticamente horarios lunes-viernes 09:00-18:00, descanso 13:00-14:00 y fin de semana cerrado.
+6. inicializa automáticamente horarios lunes-viernes 09:00-18:00, descanso 13:00-14:00 y fin de semana cerrado;
+7. para un User nuevo exige y persiste una contraseña porque `User.password` continúa siendo un campo físico obligatorio.
 
-Ese comportamiento describe el runtime legacy, **no** el contrato futuro de Equipo.
+Ese comportamiento describe el runtime legacy, **no** el contrato futuro de Equipo. En particular, que el endpoint legacy acepte una contraseña elegida por un administrador no autoriza a conservar esa política en la primera UI futura.
 
 ### 2.4 Eliminación actual
 
@@ -215,6 +216,8 @@ Estos recursos pueden seguir referenciando la identidad global `User` siempre qu
 16. Ningún `Service`, `Shift`, `Block` o `Appointment` concede autoridad tenant por su mera referencia a un User.
 17. Toda mutación de Equipo debe estar acotada al Business autenticado y revalidar autoridad vigente.
 18. El contrato headless/CORS/origin de 6.2.6-A/6.2.6-B permanece vigente.
+19. Autenticación, participación tenant y agendabilidad son fronteras distintas: `Membership`/`isBookable` nunca sustituyen una credencial de autenticación ni autorizan a un admin a inventar una contraseña permanente para otra persona.
+20. Mientras no exista transferencia de propiedad explícita, la Membership del `Business.owner` y el último admin activo están protegidos contra desactivación desde la superficie ordinaria de Equipo.
 
 ## 4. Vocabulario canónico
 
@@ -510,16 +513,28 @@ TEAM_MEMBER_ALREADY_EXISTS
 
 El mensaje puede indicar que esa persona ya participa **en este Business**, pero no debe revelar Memberships, roles ni presencia en otros Businesses.
 
+### 8.12 Onboarding requerido
+
+La primera UI no puede pedir a un admin que defina la contraseña permanente de otra persona. Si el email solicitado no corresponde a una identidad global existente, la operación de Equipo debe terminar sin crear `User`, Membership, Shift, Service assignment ni estado parcial y devolver un resultado estable conceptualmente equivalente a:
+
+```text
+TEAM_ONBOARDING_REQUIRED
+```
+
+Ese resultado sólo expresa que la operación solicitada no puede completarse todavía por esta superficie. No debe revelar relaciones con otros Businesses ni exponer un endpoint separado de existencia global por email.
+
 ## 9. Acciones mínimas de la primera UI funcional
 
 La primera superficie funcional de Equipo debe limitarse a:
 
 1. listar Equipo;
-2. añadir un profesional;
-3. habilitar como profesional a un admin/owner existente;
+2. vincular como profesional una identidad global **ya existente** que todavía no participa en este Business;
+3. habilitar como profesional a un admin/owner ya existente en el Business;
 4. habilitar recepción de reservas;
 5. deshabilitar recepción de reservas;
-6. desactivar acceso tenant cuando corresponda.
+6. desactivar acceso tenant cuando corresponda y sólo si el objetivo no es el owner actual ni el último admin activo.
+
+Mientras no exista el contrato e implementación de onboarding seguro, `añadir un profesional` **no incluye crear un User global nuevo**. Un email sin User debe quedar en `TEAM_ONBOARDING_REQUIRED` o equivalente sin mutación parcial.
 
 No debe incluir hard delete.
 
@@ -581,7 +596,7 @@ isActive permanece true
 isBookable pasa a false
 ```
 
-El owner/admin conserva acceso administrativo.
+El owner/admin conserva acceso administrativo y propiedad. Esta mutación de bookability sí está permitida para el owner; la prohibición de desactivación de acceso no impide activar o desactivar su agendabilidad.
 
 ## 11. Lifecycle de miembro y profesional
 
@@ -589,13 +604,17 @@ Los ejes deben evolucionar de forma separada.
 
 ### 11.1 Crear participación
 
+Para una identidad global ya existente:
+
 ```text
-User global
+User global existente
 -> exactamente una Membership(User, Business)
 -> role tenant explícito
 -> isActive explícito/verdadero según operación
 -> isBookable explícito, nunca inferido del role
 ```
+
+Crear participación no crea ni modifica una credencial global. La creación de un `User` inexistente pertenece al onboarding seguro separado definido en la sección 12.
 
 ### 11.2 Habilitar agendabilidad
 
@@ -629,7 +648,7 @@ Desde el instante en que la mutación es efectiva, discovery/availability públi
 
 ### 11.4 Desactivar acceso tenant
 
-Mutación conceptual:
+Mutación conceptual permitida sólo cuando las guardas de continuidad administrativa de 17.5 se cumplen:
 
 ```text
 Membership.isActive = false
@@ -647,6 +666,8 @@ La desactivación:
 - impide discovery público y availability efectiva;
 - requiere una acción futura explícita para volver a habilitar agendabilidad.
 
+No puede ejecutarse desde la primera superficie ordinaria contra la Membership del `Business.owner` ni contra el último admin activo.
+
 ### 11.5 Reactivación futura
 
 No forma parte de las acciones mínimas de esta primera UI. Cuando se implemente, reactivar acceso no deberá reactivar agendabilidad automáticamente.
@@ -657,27 +678,39 @@ Queda fuera de la UI ordinaria de Equipo.
 
 El endpoint legacy `DELETE /api/users/workers/:id?hard=true` no debe convertirse en una acción normal de la futura pantalla. Cualquier lifecycle destructivo futuro requerirá contrato explícito separado, análisis de referencias históricas y autorización reforzada.
 
-## 12. Creación de nuevos profesionales
+## 12. Alta de profesionales y frontera de onboarding
 
-La operación futura debe ser una mutación tenant autorizada cuyo lookup global permanece interno al servidor.
+`Añadir profesional` y `habilitar acceso autenticado de una identidad global nueva` son operaciones conceptualmente distintas.
+
+La primera superficie de Equipo sólo puede materializar participación para un User global ya existente. La creación segura de una identidad global nueva requiere un contrato de onboarding separado porque el modelo físico actual exige `User.password` y esta fase no autoriza invitaciones, reset de contraseña ni delivery de credenciales.
+
+El lookup global por email permanece interno al servidor y nunca se expone como directorio.
 
 ### 12.1 Email no corresponde a User global
 
-El servidor debe:
+La primera implementación de Equipo debe fallar cerrada y **no crear el User**.
 
-1. normalizar/validar el input según una política única;
-2. comprobar internamente si existe User;
-3. crear una identidad global si no existe;
-4. crear exactamente una Membership en el Business;
-5. asignar `role` tenant apropiado;
-6. persistir `isBookable` de forma explícita;
-7. no crear horarios ni Service assignments implícitos.
+Resultado contractual estable:
 
-Mientras no exista un flujo de invitación, la implementación funcional posterior deberá definir de manera acotada cómo se provisiona una credencial inicial para un User realmente nuevo. Este documento no implementa invitaciones ni reset de password.
+```text
+TEAM_ONBOARDING_REQUIRED
+```
+
+La operación debe terminar con:
+
+- cero User nuevos;
+- cero Membership nuevas;
+- cero cambios de `isBookable`;
+- cero Shift;
+- cero Service assignments;
+- cero password generado, conocido, predeterminado o elegido por el admin;
+- cero estado parcial que convierta la identidad inexistente en participante tenant.
+
+La UI puede explicar que esa persona requiere un onboarding todavía no disponible, sin presentar un formulario de contraseña para terceros.
 
 ### 12.2 Email ya corresponde a User global sin Membership en este Business
 
-El servidor debe:
+El servidor puede completar la operación tenant autorizada y debe:
 
 - reutilizar el mismo User;
 - no sobrescribir password;
@@ -685,9 +718,11 @@ El servidor debe:
 - no cambiar `User.role` para expresar autoridad tenant;
 - no cambiar `User.business` para expresar pertenencia;
 - crear exactamente una Membership en este Business;
+- persistir `role`, `isActive` e `isBookable` según el comando autorizado;
+- no crear horarios ni Service assignments implícitos;
 - no revelar las relaciones del User con otros Businesses.
 
-Los campos de identidad enviados para una operación de alta sólo pueden usarse para crear un User inexistente. Si el User ya existe, el resultado debe usar su identidad canónica sin realizar overwrite silencioso.
+Los campos de identidad recibidos no autorizan overwrite de la identidad global existente. La respuesta usa su identidad canónica.
 
 ### 12.3 User ya posee Membership en este Business
 
@@ -701,21 +736,47 @@ Para un intento genérico de alta duplicada, responder conflicto tenant-local es
 
 La API administrativa no debe ofrecer un endpoint de `¿existe este email globalmente?` como paso previo.
 
-El lookup ocurre dentro de la operación autorizada de alta. Las respuestas no deben distinguir innecesariamente:
+El lookup ocurre únicamente dentro de la operación autorizada de Equipo. La respuesta no revela:
 
-```text
-"email existe globalmente en otro tenant"
-```
+- Businesses ajenos;
+- roles ajenos;
+- ownership ajeno;
+- `User.business` legacy;
+- otras Memberships.
 
-de:
-
-```text
-"se creó una nueva identidad"
-```
-
-cuando esa diferencia no sea necesaria para completar la operación.
+Que una operación autorizada finalice en `TEAM_ONBOARDING_REQUIRED` es el mínimo resultado necesario para indicar que esta superficie no puede completar el alta; no autoriza una API general de búsqueda ni otras correlaciones globales.
 
 Sí puede informarse un conflicto si ya existe una Membership **en el Business actual**, porque ese hecho pertenece al tenant autorizado.
+
+### 12.5 Credencial y autenticación
+
+La primera UI de Equipo **no acepta una contraseña para otra persona**.
+
+No se permite como política de alta:
+
+- contraseña elegida por el admin;
+- contraseña fija/compartida;
+- contraseña temporal predecible;
+- almacenar una credencial que el admin pueda conocer y reutilizar;
+- omitir o debilitar el requisito físico actual de `User.password` sólo para hacer caber esta UI.
+
+`Membership` e `isBookable` tampoco convierten a una identidad en autenticada.
+
+Hasta que exista un flujo seguro de onboarding, un email sin User permanece fuera de Equipo y no obtiene Membership.
+
+### 12.6 Fase futura de onboarding seguro
+
+Antes de permitir que Equipo cree un User global nuevo debe existir una fase pequeña y explícita que defina y pruebe, como mínimo:
+
+- cómo se demuestra/controla el destino de onboarding;
+- cómo obtiene la persona —no el admin— el control de su credencial inicial;
+- expiración, single-use y revocación de cualquier material temporal;
+- ausencia de bearer/password raw en logs y persistencia indebida;
+- comportamiento ante replay/concurrencia;
+- no enumeración global innecesaria;
+- integración con `User.password` sin debilitar autenticación existente.
+
+Este PR no elige todavía invitación por email, reset de contraseña ni otro mecanismo físico. Sólo congela que **debe existir ese contrato antes de crear Users nuevos desde Equipo**.
 
 ## 13. Discovery público
 
@@ -850,6 +911,8 @@ Requisitos independientemente del path final:
 
 La lectura administrativa debe poder representar roles `admin` y `worker`, miembros activos e inactivos y `isBookable` en ambos roles.
 
+La mutación de alta de esta primera superficie debe aceptar sólo identidades globales ya existentes; un lookup sin User debe concluir en `TEAM_ONBOARDING_REQUIRED` sin escrituras. No se crea un endpoint separado de búsqueda global por email.
+
 ## 17. Seguridad multitenant
 
 ### 17.1 Regla de mutación
@@ -883,13 +946,30 @@ El backend debe revalidar `Membership.role` del caller en cada mutación. Un `ro
 
 ### 17.4 Owner
 
-`Business.owner` puede servir para presentación o reglas de continuidad explícitamente documentadas, pero nunca para saltarse una Membership admin activa.
+`Business.owner` puede servir para presentación y para la guarda de continuidad de 17.5, pero nunca para saltarse una Membership admin activa ni para autorizar por sí mismo una mutación.
 
-### 17.5 Último admin / auto-desactivación
+### 17.5 Owner actual / último admin / desactivación
 
-Este contrato no diseña todavía transferencia de propiedad ni administración avanzada. Hasta que exista una política explícita, la futura mutación debe fallar cerrado ante operaciones que dejarían al Business sin una vía administrativa válida o cuya seguridad dependa de una regla no definida.
+La primera superficie de Equipo adopta una política fail-closed explícita mientras no exista transferencia de propiedad:
 
-No se debe improvisar esa decisión usando `Business.owner` como bypass.
+1. La Membership correspondiente al `Business.owner` **no puede desactivarse** desde Equipo.
+2. El último `Membership.role="admin"` activo del Business **no puede desactivarse**, aunque no coincida con `Business.owner`.
+3. Un admin no-owner sólo puede desactivarse si, evaluando el estado persistido del mismo Business, permanece al menos otro admin activo válido después de la operación.
+4. El caller debe conservar una Membership admin activa y válida durante la mutación.
+5. La Membership objetivo debe pertenecer exactamente al Business autenticado.
+6. Las comprobaciones son server-side; esconder o deshabilitar un botón frontend no constituye enforcement.
+7. La operación debe fallar cerrada ante estado ambiguo, lectura inconsistente o carrera que impida demostrar estas precondiciones.
+8. `Business.owner` no concede autoridad al caller: sólo identifica un objetivo protegido por continuidad.
+9. No se implementa transferencia de propiedad en esta fase.
+
+Estas restricciones sólo protegen la desactivación de acceso. La bookability del owner puede cambiar independientemente:
+
+```text
+admin + isBookable=true
+-> admin + isBookable=false
+```
+
+sin modificar `Business.owner`, `Membership.role` ni `Membership.isActive`.
 
 ## 18. Compatibilidad y migración futura
 
@@ -968,10 +1048,12 @@ Después de verificar storage:
 - discovery público debe usar ese predicado;
 - Availability debe usar el mismo predicado;
 - Service allowlists deben validarlo;
-- creación administrativa debe persistirlo explícitamente;
+- creación administrativa de Membership para User existente debe persistirlo explícitamente;
 - el flujo legacy de auto-horarios debe quedar retirado;
 - el listado Equipo debe dejar de filtrar exclusivamente `role="worker"`;
 - el fallback por role debe eliminarse en el mismo ciclo de cutover.
+
+El cutover de bookability no autoriza todavía creación de User global nuevo desde Equipo; esa capacidad continúa cerrada hasta la fase de onboarding seguro.
 
 ## 19. Pruebas obligatorias de la futura implementación
 
@@ -1009,7 +1091,15 @@ Además deben añadirse regresiones para:
 27. alta con User global existente no revela sus otros Businesses;
 28. conflicto same-Business es estable y no crea duplicados;
 29. lectura Equipo puede representar admin/worker, activo/inactivo y bookable/no-bookable;
-30. errores DB/infraestructura no se degradan silenciosamente a lista vacía.
+30. errores DB/infraestructura no se degradan silenciosamente a lista vacía;
+31. email sin User global produce `TEAM_ONBOARDING_REQUIRED` o equivalente sin crear User/Membership ni aceptar password del admin;
+32. no existe una ruta preliminar de enumeración global por email para Equipo;
+33. la Membership del owner actual no puede desactivarse desde Team mientras no exista transferencia de ownership;
+34. el último admin activo no puede desactivarse;
+35. un segundo admin no-owner puede desactivarse sólo si permanece otro admin activo válido;
+36. cambiar bookability del owner no modifica ownership, role ni acceso;
+37. un admin de A no puede usar las guardas de owner/último-admin para leer o mutar estado de B;
+38. una carrera que cambia owner/admin-count durante la desactivación falla cerrada o se serializa de forma que las invariantes sigan siendo ciertas al commit.
 
 ## 20. Relación con ADR-001 y contratos anteriores
 
@@ -1027,6 +1117,8 @@ Membership.isBookable
 
 Ambos viven en la misma relación `User + Business`, pero son conceptos ortogonales.
 
+La autenticación de un `User` nuevo constituye una frontera adicional y no se deriva de ninguna de esas dos propiedades. Equipo no crea un User inexistente hasta que exista onboarding seguro explícito.
+
 6.2.6-A permanece como contrato headless mínimo para Services, profesionales, slots y booking guest.
 
 6.2.6-B permanece como contrato de public origin verificado. La trust pública no concede session/admin authority ni cambia estas reglas.
@@ -1042,6 +1134,10 @@ Este PR no implementa:
 - componentes React;
 - vista Equipo funcional;
 - creación/edición funcional de trabajadores;
+- onboarding de User nuevo;
+- invitaciones por email;
+- reset de contraseña;
+- email delivery de onboarding;
 - Servicios UI;
 - Horarios UI;
 - disponibilidad UI;
@@ -1052,10 +1148,9 @@ Este PR no implementa:
 - pagos;
 - nuevas reservas públicas;
 - autenticación nueva;
-- invitaciones por email;
-- reset de contraseña;
 - roles nuevos;
 - permisos granulares;
+- transferencia de ownership;
 - soporte mutable;
 - cambios de superadmin;
 - multi-sucursal;
@@ -1077,37 +1172,53 @@ Este PR no implementa:
 
 Esta etapa debe ser pequeña y revisable antes de construir UI.
 
-### B. Endpoints administrativos tenant-safe
+### B. Endpoints administrativos tenant-safe para identidades existentes
 
 - listado Equipo separado del endpoint público;
-- alta/reutilización de identidad sin enumeración global;
+- alta/reutilización exclusivamente de User global ya existente, sin enumeración global separada;
+- `TEAM_ONBOARDING_REQUIRED` fail-closed cuando no existe User;
 - habilitar/deshabilitar bookability;
-- desactivar Membership de forma fail-closed;
+- desactivar Membership con guardas owner/último-admin;
 - respuestas estables y aislamiento cross-tenant.
 
-### C. UI Equipo
+### C. Onboarding seguro de identidad nueva
 
-- estados loading/error/empty;
+Antes de permitir que Equipo cree Users nuevos:
+
+- definir el mecanismo de onboarding/credencial;
+- garantizar que el admin no conoce ni elige la contraseña permanente de otra persona;
+- definir expiración/single-use/revocación si existe material temporal;
+- impedir enumeración y filtración de secretos;
+- probar concurrencia/replay y compatibilidad con la autenticación existente.
+
+Hasta cerrar C, Equipo sólo puede vincular Users ya existentes.
+
+### D. UI Equipo
+
+- estados loading/error/empty/onboarding-required;
 - listado mínimo;
-- añadir profesional;
+- añadir profesional existente;
 - `También presto servicios` para admin/owner;
 - habilitar/deshabilitar reservas;
-- desactivar acceso cuando corresponda;
-- sin hard delete ordinario.
+- desactivar acceso cuando corresponda, con owner/último-admin protegidos;
+- sin hard delete ordinario;
+- no mostrar un campo para definir password de terceros.
 
-### D. Servicios
+La capacidad de crear una identidad nueva desde esta UI sólo se habilita después de que C esté implementada y revisada.
+
+### E. Servicios
 
 - administración de Service;
 - asignación explícita de profesionales bookable;
 - validación del predicado canónico.
 
-### E. Horarios / disponibilidad
+### F. Horarios / disponibilidad
 
 - edición real de Shift/Block;
 - ninguna disponibilidad genérica automática;
 - Availability reutiliza eligibility canónica.
 
-### F. Primera reserva productiva end-to-end
+### G. Primera reserva productiva end-to-end
 
 Sólo después de cerrar Equipo, Servicios y Horarios debe habilitarse/verificarse el primer flujo productivo real completo:
 
@@ -1149,7 +1260,23 @@ Sólo se deshabilita `isBookable`. La Membership permanece activa, el rol no cam
 
 ### ¿Qué ocurre al desactivar acceso?
 
-La Membership queda inactiva y `isBookable=false`. Se revoca participación tenant y la persona deja de ser elegible públicamente, preservando datos históricos.
+Cuando la operación está permitida, la Membership queda inactiva y `isBookable=false`. Se revoca participación tenant y la persona deja de ser elegible públicamente, preservando datos históricos. La primera UI debe rechazar la desactivación del owner actual y del último admin activo.
+
+### ¿Puede desactivarse al Business.owner desde la primera UI de Equipo?
+
+No. Hasta que exista transferencia de ownership explícita, su Membership está protegida contra desactivación. Esto no convierte `Business.owner` en autoridad; el caller sigue necesitando una Membership admin válida.
+
+### ¿Puede desactivarse al último admin activo?
+
+No. La operación debe fallar cerrada server-side. Un admin no-owner sólo puede desactivarse si permanece otra Membership admin activa válida en el mismo Business.
+
+### ¿Qué ocurre si se intenta añadir un email que todavía no corresponde a User?
+
+La primera superficie de Equipo no crea esa identidad y no solicita una contraseña elegida por el admin. Responde `TEAM_ONBOARDING_REQUIRED` o equivalente sin escrituras parciales. Crear Users nuevos exige primero el contrato de onboarding seguro.
+
+### ¿Añadir profesional equivale a habilitar una identidad nueva para autenticarse?
+
+No. Vincular una identidad global existente al Business y provisionar autenticación para una identidad inexistente son operaciones distintas.
 
 ### ¿Qué vuelve públicamente seleccionable a una persona?
 
@@ -1185,6 +1312,7 @@ Esta definición queda lista para revisión adversarial cuando el lector puede d
 
 ```text
 identidad global
+autenticación/onboarding de identidad nueva
 participación tenant
 rol/autoridad tenant
 agendabilidad
@@ -1195,4 +1323,4 @@ reserva
 
 Ninguno de esos conceptos debe volver a colapsarse bajo la palabra `worker`.
 
-La siguiente fase no debe comenzar implementando UI directamente: primero debe materializar y migrar de forma segura la fuente canónica de agendabilidad, luego exponer las operaciones administrativas tenant-safe y recién después construir Equipo.
+La siguiente fase no debe comenzar implementando UI directamente: primero debe materializar y migrar de forma segura la fuente canónica de agendabilidad, luego exponer las operaciones administrativas tenant-safe para identidades existentes; antes de permitir creación de Users nuevos debe cerrar el onboarding seguro; recién después se habilita esa capacidad en Equipo.
