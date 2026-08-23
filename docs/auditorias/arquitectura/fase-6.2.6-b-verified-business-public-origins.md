@@ -6,7 +6,7 @@
 **Tipo de iteración:** implementación funcional + reconciliación adversarial  
 **Contrato documental aprobado:** PR #31, HEAD `3f3623f099446615039584601d6c6a7f3f4a8be0`  
 **Baseline funcional verificada:** `master@ed7acfd5fed91b03cd65becd2af154f93dad027b`, merge aprobado de PR #31  
-**HEAD adversarial de entrada:** `1a3654d209200737507c4022cc438ce6efb276a7`  
+**HEAD adversarial de entrada de esta corrección:** `43f85f58a3a8417bf4a74404067351d39a1f8847`  
 **Fecha:** 22 de agosto de 2026
 
 > El contrato normativo aprobado se conserva. Los apartados de implementación física y estado se reconciliaron con PR #32. Este documento no declara 6.2.6-B cerrada ni autoriza Ready/merge; el siguiente gate es CI verde sobre el HEAD final exacto y una nueva revisión adversarial independiente.
@@ -97,7 +97,7 @@ PR #32 implementa ese contrato sin ampliar capability scope:
 - Job/Delivery ligados a publicWeb generation/origin;
 - persisted authority fence worker/revocation y exchange/mint;
 - lookup CORS bounded y protegido antes de Mongo;
-- índice físico no unique + migración/gate remoto.
+- índice físico no unique gobernado exclusivamente por `PUBLIC_WEB_INDEX_SPEC`, migración explícita y runtime cutover gate; no existe declaración de ese índice en el schema Mongoose.
 
 ## 3. Threat model
 
@@ -132,6 +132,7 @@ El diseño debe resistir, como mínimo:
 - respuestas DNS incorrectas, ausentes o fallidas;
 - stale DNS result tras cambiar/rotar configuración;
 - un origin que fue verificado legítimamente pero cuya prueba ya expiró;
+- un challenge que estaba vigente al iniciar `/verify` pero expira mientras el resolver DNS está en curso;
 - una Delivery C2 emitida bajo trust generation N y utilizada después de N+1;
 - revocación durante el procesamiento del worker;
 - enlace ya enviado cuya trust generation se revoca antes del exchange;
@@ -140,7 +141,8 @@ El diseño debe resistir, como mínimo:
 - cross-Business origin leakage;
 - ampliación accidental de C2 a CANCEL, RESCHEDULE o PAYMENT;
 - Origins desconocidos que intentan usar el preflight dinámico como amplificador de consultas MongoDB;
-- una revocación publicWeb posterior que intenta acortar incorrectamente una READ capability ya canjeada.
+- una revocación publicWeb posterior que intenta acortar incorrectamente una READ capability ya canjeada;
+- una conexión runtime que intentara materializar el índice publicWeb por `autoIndex` antes de la migración/cutover explícitos.
 
 ### 3.3 Semántica de la prueba DNS y freshness
 
@@ -331,17 +333,29 @@ No rota challenge, no renueva freshness, no cambia generations y no re-expone ra
 
 ### 6.4 Expiración del challenge DNS pending
 
-`challengeExpiresAt <= now` impide verificar. Rotate crea raw nuevo y attempt generation nueva.
+La freshness del challenge se comprueba dos veces durante `/verify`:
+
+1. antes de iniciar el resolver, contra `requestObservedAt`;
+2. después de obtener y validar el TXT, contra un `proofObservedAt` nuevo.
+
+En ambos límites la regla es estricta:
+
+```text
+challengeExpiresAt <= instante observado
+-> PUBLIC_WEB_CHALLENGE_EXPIRED
+```
+
+Por tanto, un challenge que estaba vigente al entrar pero vence mientras `resolveTxt()` está en curso no puede convertirse en trust verificada. Rotate crea raw nuevo y attempt generation nueva.
 
 **Valor físico:** 15 minutos, centralizado en `PUBLIC_WEB_CHALLENGE_TTL_MS`.
 
 ### 6.5 Freshness de trust verified
 
-Una verificación exitosa fija:
+El instante autoritativo de una verificación exitosa es `proofObservedAt`, obtenido **después** del resolver y de comprobar el TXT, no el timestamp inicial de la request.
 
 ```text
-verifiedAt = now
-verificationValidUntil = now + 30 días
+verifiedAt = proofObservedAt
+verificationValidUntil = proofObservedAt + 30 días
 ```
 
 **Valor físico:** 30 días, centralizado en `PUBLIC_WEB_VERIFIED_TRUST_TTL_MS` y distinto de C1/C2.
@@ -362,7 +376,9 @@ Cuando `now >= verificationValidUntil`:
 
 ### 6.7 Verificación exitosa y TOCTOU DNS
 
-`POST /verify` captura:
+`POST /verify` separa dos instantes: `requestObservedAt` y `proofObservedAt`.
+
+Primero valida freshness inicial y captura el snapshot:
 
 ```text
 origin
@@ -372,7 +388,28 @@ trustGeneration
 challengeExpiresAt
 ```
 
-resuelve TXT fuera del write y aplica conditional update sólo si esos valores siguen vigentes.
+Después resuelve TXT fuera del write y comprueba la prueba DNS. Una vez obtenida la prueba, lee un `proofObservedAt` nuevo y exige:
+
+```text
+challengeExpiresAt > proofObservedAt
+```
+
+El CAS final vuelve a exigir físicamente:
+
+```text
+status == pending
+origin == snapshot.origin
+challengeHash == snapshot.challengeHash
+verificationAttemptGeneration == snapshot.verificationAttemptGeneration
+trustGeneration == snapshot.trustGeneration
+challengeExpiresAt > proofObservedAt
+```
+
+Sólo después de superar ese CAS se materializa verified con `verifiedAt = proofObservedAt` y `verificationValidUntil = proofObservedAt + PUBLIC_WEB_VERIFIED_TRUST_TTL_MS`.
+
+**Clock/testability:** producción usa `defaultNowProvider()` y lee el reloj en ambos límites. Los tests pueden inyectar `nowProvider()` para producir T0/T1 distintos sin sleeps reales ni dependencia del wall clock. Por compatibilidad con pruebas deterministas existentes, un `now: Date` explícito se adapta a un provider fijo y conserva la semántica previa cuando no se necesita simular avance temporal.
+
+Si el challenge vence durante `resolveTxt`, el error adoptado es `PUBLIC_WEB_CHALLENGE_EXPIRED`; el documento permanece pending, no se escriben `verifiedOrigin`, `verifiedAt` ni `verificationValidUntil`, y no aparece posteriormente una fresh trust derivada de ese intento.
 
 ## 7. Contrato DNS TXT
 
@@ -633,7 +670,7 @@ Códigos sanitizados equivalentes:
 | 409 | `PUBLIC_WEB_UNCONFIGURED` | falta configuración |
 | 409 | `PUBLIC_WEB_NOT_PENDING` | operación requiere pending |
 | 409 | `PUBLIC_WEB_REVERIFICATION_REQUIRED` | verify sobre verified |
-| 409 | `PUBLIC_WEB_CHALLENGE_EXPIRED` | challenge vencido |
+| 409 | `PUBLIC_WEB_CHALLENGE_EXPIRED` | challenge vencido, incluido expiry durante `resolveTxt` |
 | 409 | `PUBLIC_WEB_VERIFICATION_NOT_PROVEN` | TXT no coincide |
 | 409 | `PUBLIC_WEB_STATE_CHANGED` | attempt/trust state cambió |
 | 409 | `PUBLIC_WEB_TRUST_EXPIRED` | trust administrativa expirada |
@@ -659,13 +696,18 @@ Visible idempotente, con revision server-owned anti-replay.
 ### 13.4 DNS fence
 
 ```text
-read attempt A / trust N
+read attempt A / trust N / challengeExpiresAt E en T0
 -> resolve DNS
+-> proofObservedAt = T1
+-> exigir E > T1
 -> conditional write WHERE attempt=A
                          AND trust=N
                          AND origin=expected
                          AND status=pending
+                         AND challengeExpiresAt > T1
 ```
+
+El timestamp de entrada no puede autorizar una prueba DNS observada después de la expiración.
 
 ### 13.5 Trust generation y linearización de delivery
 
@@ -786,33 +828,36 @@ No backfill implícito. Cada Business demuestra DNS aunque comparta Origin.
 11. `now >= validUntil` invalida authority.
 12. Reverify explícito; verify no renueva verified.
 13. attemptGeneration cerca DNS TOCTOU.
-14. trustGeneration cerca epoch C2 y anti-ABA.
-15. Origin change/delete/expiry/reverify invalidan Delivery/challenge C2 previos.
-16. Booking path same-origin no incrementa generation innecesariamente.
-17. Worker no inicia outbound sobre generation revocada; persisted fence linealizable.
-18. Exchange revalida generation/origin/status/freshness antes C1 y mint.
-19. Stale generation produce INVALID_PROOF.
-20. C2 bearer/challenge permanecen fragment.
-21. C2 sigue Business + Appointment + READ.
-22. Email C2 sólo guestContact.
-23. Business sin fresh trust falla antes de emitir artefactos C2 cuando es posible.
-24. OPTIONS decide elegibilidad CORS, nunca tenant authority.
-25. Preflight no depende de body/valores futuros de headers.
-26. Grant publicWeb es credentialless.
-27. Request browser real resuelve Business explícito 6.2.6-A.
-28. Origin browser debe coincidir con fresh trust del Business exacto.
-29. Binding ocurre antes de controller/side effect.
-30. Shared origin no rompe aislamiento.
-31. Requests sin Origin preservan headless 6.2.6-A.
-32. Public origin no se vuelve panel/session/Membership/admin authority.
-33. `/read` bearer-authorized es excepción CORS exacta, siempre credentialless y no depende de current publicWeb.
-34. CORS no equivale a autorización backend.
-35. GET Business Settings sigue read-only.
-36. C2 no conserva fallback global.
-37. Dynamic CORS DB lookup está rate-limited antes de Mongo y bounded a existencia.
-38. Índice publicWeb se materializa/verifica explícitamente para runtime remoto.
-39. Capability READ ya mintada conserva lifetime C2 existente tras publicWeb revocation.
-40. Payment/CANCEL/RESCHEDULE permanecen fuera de alcance.
+14. Un challenge debe seguir vigente en `proofObservedAt`, después del resolver DNS; el CAS exige el mismo límite temporal.
+15. `verifiedAt` y `verificationValidUntil` se derivan de `proofObservedAt`, no del timestamp inicial de la request.
+16. trustGeneration cerca epoch C2 y anti-ABA.
+17. Origin change/delete/expiry/reverify invalidan Delivery/challenge C2 previos.
+18. Booking path same-origin no incrementa generation innecesariamente.
+19. Worker no inicia outbound sobre generation revocada; persisted fence linealizable.
+20. Exchange revalida generation/origin/status/freshness antes C1 y mint.
+21. Stale generation produce INVALID_PROOF.
+22. C2 bearer/challenge permanecen fragment.
+23. C2 sigue Business + Appointment + READ.
+24. Email C2 sólo guestContact.
+25. Business sin fresh trust falla antes de emitir artefactos C2 cuando es posible.
+26. OPTIONS decide elegibilidad CORS, nunca tenant authority.
+27. Preflight no depende de body/valores futuros de headers.
+28. Grant publicWeb es credentialless.
+29. Request browser real resuelve Business explícito 6.2.6-A.
+30. Origin browser debe coincidir con fresh trust del Business exacto.
+31. Binding ocurre antes de controller/side effect.
+32. Shared origin no rompe aislamiento.
+33. Requests sin Origin preservan headless 6.2.6-A.
+34. Public origin no se vuelve panel/session/Membership/admin authority.
+35. `/read` bearer-authorized es excepción CORS exacta, siempre credentialless y no depende de current publicWeb.
+36. CORS no equivale a autorización backend.
+37. GET Business Settings sigue read-only.
+38. C2 no conserva fallback global.
+39. Dynamic CORS DB lookup está rate-limited antes de Mongo y bounded a existencia.
+40. `business_config_public_web_origin_fresh` no se declara en el schema Mongoose y no puede materializarse por esa vía; su autoridad física es exclusivamente `PUBLIC_WEB_INDEX_SPEC` + migración + inspección/cutover gate.
+41. Índices legacy de BusinessConfig, incluido `business` unique, conservan su comportamiento histórico y no se desactivan globalmente.
+42. Capability READ ya mintada conserva lifetime C2 existente tras publicWeb revocation.
+43. Payment/CANCEL/RESCHEDULE permanecen fuera de alcance.
 
 ## 19. Matriz mínima de tests — implementada en el gate
 
@@ -851,12 +896,16 @@ El test superadmin se ejecuta en proceso independiente para no contaminarlo con 
 - wrong/absent TXT fail;
 - DNS error/timeout fail closed;
 - challenge exact expiry;
+- challenge vigente en T0, resolver suspendido y `T1 >= challengeExpiresAt` => `PUBLIC_WEB_CHALLENGE_EXPIRED`, estado sigue pending y no existe fresh trust;
+- `T1 < challengeExpiresAt` + TXT correcto => verifies con `verifiedAt = T1` y `validUntil = T1 + 30 días`;
 - stale rotate/origin lookup fail;
 - raw nunca persiste/reaparece;
 - exact validUntil fail;
 - verify no renueva verified;
 - reverify generation nueva;
 - same-origin booking path conserva generation.
+
+Los tests de carrera usan `nowProvider()` con T0/T1 controlados y promesa de resolver suspendido; no usan delays largos ni wall clock para establecer el límite.
 
 ### 19.4 C2 generations/races
 
@@ -891,9 +940,13 @@ El test superadmin se ejecuta en proceso independiente para no contaminarlo con 
 - 205 unknown-origin preflights demuestran máximo 200 aggregate lookups y posteriores 429 antes de DB;
 - fresh/expired/shared origins mantienen semántica correcta;
 - pipeline contiene `$limit:1`;
-- índice físico se prueba con `autoIndex:false`;
-- índice incompatible se rechaza sin drop/recreate;
-- remote startup falla si falta confirmación o índice.
+- production-like migration se prueba con `autoIndex:false`;
+- migración materializa exactamente `PUBLIC_WEB_INDEX_SPEC`, non-unique y sin partial/sparse/hidden/TTL/collation especial;
+- segunda ejecución de migration es idempotente;
+- índice incompatible con mismo nombre/modificadores incompatibles falla cerrado y no se reemplaza destructivamente;
+- conexión aislada con `autoIndex:true` + modelo BusinessConfig cargado/inicializado materializa el índice legacy `{ business: 1 }` unique pero **no** `business_config_public_web_origin_fresh`;
+- con el índice publicWeb aún ausente, el runtime cutover gate falla cerrado: connect/model load no lo auto-repara;
+- remote startup falla si falta confirmación o índice y acepta sólo el índice físico compatible.
 
 ### 19.7 Regression
 
@@ -931,22 +984,27 @@ El test superadmin se ejecuta en proceso independiente para no contaminarlo con 
 20. tests forman parte del gate oficial.
 21. `/read` ya mintado conserva lifetime C2 tras revocación publicWeb.
 22. lookup CORS está bounded/rate-limited e indexado físicamente.
-23. nueva revisión adversarial debe aprobar el HEAD final antes de Ready/merge.
+23. DNS proof que vence durante resolver no puede materializar verified y el trust TTL parte de `proofObservedAt`.
+24. el índice publicWeb no posee vía de creación automática mediante el schema Mongoose; migration/cutover son su única autoridad física.
+25. nueva revisión adversarial debe aprobar el HEAD final antes de Ready/merge.
 
 ## 21. Decisiones físicas adoptadas
 
 1. **Pending DNS challenge TTL:** 15 minutos.
-2. **Verified public trust TTL:** 30 días.
+2. **Verified public trust TTL:** 30 días, contado desde `proofObservedAt`.
 3. **DNS timeout:** 3 segundos. **Retry:** una resolución por invocación; sin retry automático/fallback; nuevo `/verify` explícito mientras siga vigente.
-4. **Verification rate limit:** 20/IP/15 min.
-5. **Public CORS lookup admission:** 200/IP/15 min antes de Mongo.
-6. **Generations:** enteros monotónicos en `BusinessConfig.publicWeb`; attempt incrementa por challenge, trust por epoch/revocación; tombstone/revision evita ABA.
-7. **Linearización:** persisted authority fence CSPRNG + trustGeneration + expiresAt, TTL 2 min, acquire/confirm/release por CAS predicates.
-8. **Dynamic CORS lookup:** aggregation existence-oriented, active Business, `$limit:1`, shared origins soportados.
-9. **Índice físico:** no unique `business_config_public_web_origin_fresh` sobre `verifiedOrigin + verificationStatus + verificationValidUntil`.
-10. **Storage policy:** `npm run migration:public-web-storage`, no destructive drop/recreate, test production-like `autoIndex:false`, remote startup gate `PUBLIC_WEB_6_2_6_B_CUTOVER=PUBLIC_WEB_6_2_6_B_STORAGE_READY` más inspección física real.
-11. **Bearer `/read`:** CORS credentialless independiente de current publicWeb; bearer exact-scope es authority.
-12. **Error C2 stale:** `GUEST_APPOINTMENT_CAPABILITY_INVALID_PROOF` uniforme.
+4. **Clock DNS:** `defaultNowProvider()` en runtime; `/verify` observa `requestObservedAt` antes del resolver y `proofObservedAt` después. `nowProvider()` inyectable permite T0/T1 deterministas; `now: Date` explícito mantiene provider fijo para compatibilidad de tests.
+5. **Verification rate limit:** 20/IP/15 min.
+6. **Public CORS lookup admission:** 200/IP/15 min antes de Mongo.
+7. **Generations:** enteros monotónicos en `BusinessConfig.publicWeb`; attempt incrementa por challenge, trust por epoch/revocación; tombstone/revision evita ABA.
+8. **Linearización:** persisted authority fence CSPRNG + trustGeneration + expiresAt, TTL 2 min, acquire/confirm/release por CAS predicates.
+9. **Dynamic CORS lookup:** aggregation existence-oriented, active Business, `$limit:1`, shared origins soportados.
+10. **Índice físico:** no unique `business_config_public_web_origin_fresh` sobre `verifiedOrigin + verificationStatus + verificationValidUntil`.
+11. **Autoridad única del índice:** `PUBLIC_WEB_INDEX_SPEC` vive en `Server/scripts/migrations/public-web-storage.js`; el índice publicWeb fue retirado de `BusinessConfig.schema.indexes()`. Su materialización/validación ocurre exclusivamente mediante `npm run migration:public-web-storage`, `assertPublicWebIndexesReady()` y `assertPublicWebRuntimeStorageReady()`/cutover gate.
+12. **No global autoIndex cut:** no se aplica `autoIndex:false` global a BusinessConfig para resolver este punto. Los índices históricos del schema, incluido `BusinessConfig.business` unique, permanecen intactos; sólo el índice nuevo publicWeb deja de tener vía autoIndex.
+13. **Storage policy:** no destructive drop/recreate, production-like `autoIndex:false`, remote startup gate `PUBLIC_WEB_6_2_6_B_CUTOVER=PUBLIC_WEB_6_2_6_B_STORAGE_READY` más inspección física real.
+14. **Bearer `/read`:** CORS credentialless independiente de current publicWeb; bearer exact-scope es authority.
+15. **Error C2 stale:** `GUEST_APPOINTMENT_CAPABILITY_INVALID_PROOF` uniforme.
 
 Ninguna decisión amplía capability ni convierte Origin en tenant authority.
 
@@ -977,27 +1035,42 @@ No pertenece a 6.2.6-B:
 
 ## 23. Restricción de esta corrección
 
-Esta corrección trabaja exclusivamente los bloqueantes adversariales de PR #32:
+Esta corrección trabaja exclusivamente los dos bloqueantes adversariales restantes de PR #32 sobre `43f85f58a3a8417bf4a74404067351d39a1f8847`:
 
-- capability READ ya canjeada vs publicWeb revocada;
-- lookup CORS dinámico antes del limiter global;
-- CI rojo por fixtures;
-- reconciliación documental/physical storage evidence.
+- DNS challenge expiry TOCTOU entre entrada de `/verify` y observación de la prueba después de `resolveTxt`;
+- segunda vía de materialización del índice publicWeb mediante Mongoose schema autoIndex antes de migration/cutover.
+
+Las correcciones adversariales anteriores —capability READ post-revocation, CORS admission pre-Mongo, shared origins, worker/revocation fence y C2 READ exact-scope— se preservan sin reimplementarlas.
 
 No se inicia ninguna capability nueva ni fase posterior.
 
 ## 24. Evidencia CI
 
-HEAD adversarial de entrada: `1a3654d209200737507c4022cc438ce6efb276a7`, CI #307 failure por fixtures shared-origin/superadmin.
+Baseline de esta corrección: HEAD `43f85f58a3a8417bf4a74404067351d39a1f8847`, CI #330 **success**.
 
-Correcciones:
+Correcciones técnicas:
 
-- shared-origin valida DTO público `id`, no reintroduce `_id`;
-- superadmin test aislado sin tocar auth limiter ni Membership authority;
-- fixture 6.2.6-A histórica usa ahora un publicWeb origin HTTPS realmente verificado en lugar de tratar `CORS_ORIGINS` como trust root;
-- nuevos tests cubren `/read` post-revocation, lookup admission, bounded aggregation y storage/index `autoIndex:false`.
+- `/verify` revalida challenge freshness en `proofObservedAt` después del resolver y el CAS exige `challengeExpiresAt > proofObservedAt`;
+- `verifiedAt`/`verificationValidUntil` parten de `proofObservedAt`;
+- nuevo `nowProvider()` permite T0/T1 deterministas sin delays reales;
+- `business_config_public_web_origin_fresh` fue retirado del schema Mongoose;
+- `PUBLIC_WEB_INDEX_SPEC` en la migración es la única definición física del índice publicWeb;
+- regresión `autoIndex:true` demuestra que aparece el índice legacy `business` unique pero no el publicWeb antes del gate.
 
-CI #326 sobre `db270dbf2c046d76fd14547b1edf352bdd9f66cf`: **success** para backend unit, backend integration, frontend checks/build y Gitleaks.
+CI #331 sobre `9b38fa4646a1a10dc43247654e749377dcfa8866` detectó una expectativa unitaria obsoleta que todavía trataba `BusinessConfig.schema.indexes()` como fuente normativa. No se reintrodujo el índice al schema: el test se corrigió para exigir ausencia de esa declaración y contrastar `PUBLIC_WEB_INDEX_SPEC`.
+
+CI #332 sobre `0c7fd717202b9c37cf7316f20ff8b16e10d6c385`: **success** para backend unit, backend integration, frontend checks/build y Gitleaks.
+
+Evidencia de integración en #332:
+
+- publicWeb storage: 5/5 tests verdes, incluidos migration exacta/idempotente, semantic mismatch fail-closed, `autoIndex:true` con legacy index presente/publicWeb ausente y remote cutover gate;
+- DNS expiry race: challenge que vence durante resolver => `PUBLIC_WEB_CHALLENGE_EXPIRED`; prueba antes del expiry => `verifiedAt = proofObservedAt`; 3/3 resultados del proceso verdes;
+- stale rotate y origin-change DNS races existentes continúan verdes;
+- CORS admission/bounded lookup continúa verde;
+- capability `/read` post-delete/expiry/reverify continúa verde y credentialless;
+- stale `/read/verify` continúa `INVALID_PROOF`;
+- worker/revocation fence y C2 generation tests continúan verdes;
+- `npm run test:guest-appointment-capability` continúa verde.
 
 Los commits documentales posteriores requieren nuevamente CI verde sobre el HEAD final exacto antes de la revisión adversarial. El resultado exacto de ese último run debe contrastarse en PR #32; este documento no puede auto-certificar un workflow que se ejecuta después de su propio commit.
 
@@ -1005,7 +1078,7 @@ Los commits documentales posteriores requieren nuevamente CI verde sobre el HEAD
 
 PR #31/contrato está merged en `master@ed7acfd5fed91b03cd65becd2af154f93dad027b`.
 
-PR #32 permanece **Draft**, abierto y sin merge. Los bloqueantes adversariales conocidos de esta corrección están implementados, pero 6.2.6-B no se declara cerrada hasta que:
+PR #32 permanece **Draft**, abierto y sin merge. Los dos bloqueantes adversariales restantes de esta corrección están implementados y tienen evidencia técnica en CI #332, pero 6.2.6-B no se declara cerrada hasta que:
 
 1. el HEAD final exacto tenga CI verde;
 2. una nueva revisión adversarial independiente apruebe código/tests/storage/documentación;
