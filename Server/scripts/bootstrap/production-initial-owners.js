@@ -43,8 +43,8 @@ const OWNER_VARIABLES = Object.freeze({
 
 const normalizeEmail = (value) =>
   typeof value === "string" ? value.trim().toLowerCase() : "";
-const objectIdKey = (value) =>
-  value instanceof mongo.ObjectId ? value.toHexString() : value?.toString?.() || null;
+const isObjectId = (value) => value instanceof mongo.ObjectId;
+const objectIdKey = (value) => (isObjectId(value) ? value.toHexString() : null);
 const hasValue = (value) =>
   value !== undefined && value !== null && String(value).trim() !== "";
 
@@ -289,7 +289,8 @@ export const verifyProductionOwnerReadyState = async (
     const matches = findOneBySlug(source.businesses ?? [], expected.slug);
     if (
       matches.length !== 1
-      || objectIdKey(matches[0]._id) === null
+      || !isObjectId(matches[0]._id)
+      || !isObjectId(matches[0].owner)
       || matches[0].name !== expected.name
       || matches[0].isActive !== true
       || matches[0].subscriptionStatus !== "active"
@@ -305,12 +306,12 @@ export const verifyProductionOwnerReadyState = async (
     const business = businessByKey.get(expected.businessKey);
     if (
       matches.length !== 1
-      || objectIdKey(matches[0]._id) === null
+      || !isObjectId(matches[0]._id)
       || matches[0].firstName !== expected.firstName
       || matches[0].lastName !== expected.lastName
       || matches[0].role !== "admin"
       || matches[0].isActive !== true
-      || hasValue(matches[0].business)
+      || Object.hasOwn(matches[0], "business")
     ) {
       findings.push(`userMismatch:${expected.key}`);
       continue;
@@ -333,6 +334,9 @@ export const verifyProductionOwnerReadyState = async (
     const matches = (source.memberships ?? []).filter((membership) => (
       user
       && business
+      && isObjectId(membership?._id)
+      && isObjectId(membership?.user)
+      && isObjectId(membership?.business)
       && objectIdKey(membership.user) === objectIdKey(user._id)
       && objectIdKey(membership.business) === objectIdKey(business._id)
     ));
@@ -663,6 +667,7 @@ export const main = async (argv = process.argv.slice(2)) => {
   });
   console.log("Bootstrap inicial productivo evaluado.");
   console.log(`Estado: ${result.plan.state}`);
+  console.log(`Can apply: ${result.plan.canApply}`);
   console.log(`Aplicado: ${result.applied}`);
   console.log(`Database: ${result.database}`);
   console.log(`Deployment SHA: ${result.deploymentSha}`);
@@ -671,7 +676,8 @@ export const main = async (argv = process.argv.slice(2)) => {
   console.log(`Índice Business.slug exacto: ${result.plan.storage.business.exactUniqueExists}`);
   console.log(`Índice User.email exacto: ${result.plan.storage.user.exactUniqueExists}`);
   console.log(`Índice Membership exacto: ${result.plan.storage.membership.exactUniqueExists}`);
-  return result.plan.state === "empty" && !result.plan.canApply ? 2 : 0;
+  if (options.mode === "plan") return result.plan.canApply ? 0 : 2;
+  return result.plan.state === "ready" ? 0 : 2;
 };
 
 const isDirectExecution =
