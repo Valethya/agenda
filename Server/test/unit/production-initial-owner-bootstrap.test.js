@@ -34,6 +34,8 @@ const ownerEnvironment = () => ({
   PRODUCTION_BOOTSTRAP_DAM_PASSWORD: "dam-owner-password",
 });
 
+const exactBusinessIndex = () => ({ name: "slug_1", key: { slug: 1 }, unique: true });
+const exactUserIndex = () => ({ name: "email_1", key: { email: 1 }, unique: true });
 const exactMembershipIndex = () => ({
   name: "user_1_business_1",
   key: { user: 1, business: 1 },
@@ -73,7 +75,9 @@ const readySource = (manifest) => {
   }));
   return {
     observedCollections: ["auditlogs", "businesses", "memberships", "users"],
-    indexes: [exactMembershipIndex()],
+    businessIndexes: [exactBusinessIndex()],
+    userIndexes: [exactUserIndex()],
+    membershipIndexes: [exactMembershipIndex()],
     businesses,
     users,
     memberships,
@@ -178,11 +182,13 @@ describe("production owner manifest and plan", () => {
     assert.equal(JSON.stringify(manifest).includes("worker"), false);
   });
 
-  it("plan ignora colecciones ajenas pero falla cerrado si Membership existente carece del índice", () => {
+  it("plan ignora colecciones ajenas y exige los tres índices únicos físicos", () => {
     assert.deepEqual(
       buildProductionOwnerPlan({
         observedCollections: ["auditlogs"],
-        indexes: [],
+        businessIndexes: [],
+        userIndexes: [],
+        membershipIndexes: [],
         businesses: [],
         users: [],
         memberships: [],
@@ -192,30 +198,40 @@ describe("production owner manifest and plan", () => {
         state: "empty",
         canApply: true,
         counts: { businesses: 0, users: 0, memberships: 0 },
-        membershipIndex: { exactUniqueExists: false, canCreateTransactionally: true },
+        storage: {
+          business: { exactUniqueExists: false, canCreateTransactionally: true },
+          user: { exactUniqueExists: false, canCreateTransactionally: true },
+          membership: { exactUniqueExists: false, canCreateTransactionally: true },
+        },
       },
     );
 
     const blocked = buildProductionOwnerPlan({
       observedCollections: ["auditlogs", "memberships"],
-      indexes: [],
+      businessIndexes: [],
+      userIndexes: [],
+      membershipIndexes: [],
       businesses: [],
       users: [],
       memberships: [],
     });
     assert.equal(blocked.state, "empty");
     assert.equal(blocked.canApply, false);
-    assert.equal(blocked.membershipIndex.canCreateTransactionally, false);
+    assert.equal(blocked.storage.membership.canCreateTransactionally, false);
 
     const readyStorage = buildProductionOwnerPlan({
-      observedCollections: ["memberships"],
-      indexes: [exactMembershipIndex()],
+      observedCollections: ["businesses", "memberships", "users"],
+      businessIndexes: [exactBusinessIndex()],
+      userIndexes: [exactUserIndex()],
+      membershipIndexes: [exactMembershipIndex()],
       businesses: [],
       users: [],
       memberships: [],
     });
     assert.equal(readyStorage.canApply, true);
-    assert.equal(readyStorage.membershipIndex.exactUniqueExists, true);
+    assert.equal(readyStorage.storage.business.exactUniqueExists, true);
+    assert.equal(readyStorage.storage.user.exactUniqueExists, true);
+    assert.equal(readyStorage.storage.membership.exactUniqueExists, true);
   });
 });
 
@@ -233,9 +249,10 @@ describe("production owner ready-state verification", () => {
     assert.equal(source.users.every((user) => user.business === undefined), true);
   });
 
-  it("rechaza User.business legacy, password mismatch, owner mismatch y datos extra", async () => {
+  it("rechaza índices ausentes, User.business legacy, password mismatch, owner mismatch y datos extra", async () => {
     const manifest = buildProductionOwnerManifest(ownerEnvironment());
     const source = readySource(manifest);
+    source.userIndexes = [];
     source.users[0].business = source.businesses[0]._id;
     source.users[1].password = "wrong";
     source.businesses[0].owner = new mongo.ObjectId();
@@ -248,6 +265,7 @@ describe("production owner ready-state verification", () => {
     );
     assert.equal(result.ready, false);
     assert.ok(result.findings.includes("userCountMismatch"));
+    assert.ok(result.findings.includes("userEmailUniqueIndexMissing"));
     assert.ok(result.findings.some((finding) => finding.startsWith("userMismatch:")));
     assert.ok(result.findings.some((finding) => finding.startsWith("passwordMismatch:")));
     assert.ok(result.findings.some((finding) => finding.startsWith("ownerMismatch:")));
