@@ -44,10 +44,11 @@ Resultado exacto permitido:
    - `businesses { slug: 1 } unique`;
    - `users { email: 1 } unique`;
    - `memberships { user: 1, business: 1 } unique`;
-11. `_id`, `Business.owner`, `Membership.user` y `Membership.business` deben ser BSON `ObjectId` físicos; strings hex equivalentes no satisfacen la verificación;
-12. los propietarios no pueden persistir `User.business`, ni siquiera como `null`.
+11. los índices single-field de `Business.slug` y `User.email` deben tener semántica exacta: no `sparse`, `partial`, `collation`, `hidden` ni TTL;
+12. `_id`, `Business.owner`, `Membership.user` y `Membership.business` deben ser BSON `ObjectId` físicos; strings hex equivalentes no satisfacen la verificación;
+13. los propietarios no pueden persistir `User.business`, ni siquiera como `null`.
 
-Si una colección de identidad ya existe pero carece de su índice único requerido, el bootstrap falla cerrado y no intenta reparar el storage de forma destructiva.
+Si una colección de identidad ya existe pero carece de su índice único requerido —o sólo posee una variante con semántica debilitada— el bootstrap falla cerrado y no intenta reparar el storage de forma destructiva.
 
 ## Concurrencia y atomicidad
 
@@ -114,6 +115,8 @@ Deployment SHA: <sha de master desplegado>
 
 `Can apply: true` es obligatorio. Si el estado es `occupied` o el storage es incompatible, el proceso devuelve código no-cero para que Railway detenga ese pre-deploy; no debe interpretarse como un plan exitoso.
 
+Los Git vars de Railway son parte del cerco. Si ese tipo de despliegue no proporciona `RAILWAY_GIT_COMMIT_SHA`/`RAILWAY_GIT_BRANCH`, el plan debe fallar sin escritura; no se eliminan esos guards como atajo.
+
 No continuar si el fingerprint no corresponde al destino esperado o si cualquiera de los tres índices no existe ni puede crearse de forma transaccional segura.
 
 ## Paso 2 — Preparar credenciales temporales
@@ -165,13 +168,18 @@ No se usa un dominio preview `*.vercel.app` para estas sesiones.
 
 ## Paso 5 — Limpieza obligatoria
 
-Tras verificar ambos accesos:
+Tras verificar ambos accesos, preparar **un único changeset de Railway** que contenga simultáneamente:
 
-1. eliminar las ocho variables `PRODUCTION_BOOTSTRAP_*` de Railway;
-2. eliminar el Pre-deploy Command de bootstrap;
-3. no dejar `apply` ni `plan` configurados en futuros deployments;
-4. conservar los gates operativos permanentes de otras fases, incluido `PUBLIC_WEB_6_2_6_B_CUTOVER=PUBLIC_WEB_6_2_6_B_STORAGE_READY`;
-5. no eliminar los índices físicos creados/verificados.
+1. eliminación de las ocho variables `PRODUCTION_BOOTSTRAP_*`;
+2. eliminación completa del Pre-deploy Command de bootstrap.
+
+Revisar que ambas partes estén en el mismo changeset y desplegarlo una sola vez. No desplegar primero la eliminación de variables dejando `apply` configurado, ni desplegar primero otro comando de bootstrap con las credenciales aún presentes.
+
+Después de la limpieza:
+
+- no dejar `apply` ni `plan` configurados en futuros deployments;
+- conservar los gates operativos permanentes de otras fases, incluido `PUBLIC_WEB_6_2_6_B_CUTOVER=PUBLIC_WEB_6_2_6_B_STORAGE_READY`;
+- no eliminar los índices físicos creados/verificados.
 
 El bootstrap queda en el repositorio como herramienta de recuperación/auditoría controlada, pero no forma parte del startup normal.
 
@@ -183,8 +191,8 @@ Detener la operación y revisar antes de cualquier nuevo `apply` si ocurre cualq
 - `Can apply: false`;
 - counts distintos de `0/0/0` o `2/2/2`;
 - fingerprint diferente;
-- deployment SHA diferente;
-- índice único faltante en una colección ya existente;
+- deployment SHA diferente o Git vars ausentes;
+- índice único faltante o con semántica no exacta en una colección ya existente;
 - referencias de identidad almacenadas como string u otro tipo distinto de BSON `ObjectId`;
 - error transaccional/commit incierto;
 - password mismatch en una re-ejecución;
