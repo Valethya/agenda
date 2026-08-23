@@ -122,6 +122,8 @@ con `scopeBusiness -> isAuthenticated -> getWorkers`.
 
 Ese endpoint interno actual es una lectura operacional de workers y **no queda adoptado como contrato de la futura superficie administrativa Team**. Su proyección y autorización no deben reutilizarse ciegamente para exponer email, miembros inactivos, rol administrativo, owner status o metadata de Membership.
 
+Estas tres superficies son además **deuda de cutover**, no APIs alternativas autorizadas por conservarse históricamente. Si contradicen el contrato nuevo, deben retirarse, endurecerse o reemplazarse dentro del mismo ciclo funcional que vuelve vigente la nueva política. La seguridad no puede depender de que React simplemente deje de invocarlas.
+
 ### 2.3 Creación actual
 
 `Server/src/services/user.service.js#createWorker()` actualmente:
@@ -212,7 +214,7 @@ Actualmente:
 - `Appointment.worker` referencia un `User` y `Appointment.business` fija tenant;
 - Availability valida Service + participante tenant + asignación al Service antes de consultar Shift/Block/Appointments.
 
-Estos recursos pueden seguir referenciando la identidad global `User` siempre que cada operación revalide el predicado correcto para su propósito. En particular, **crear nuevas reservas** y **operar Appointments ya asignadas** son decisiones distintas: `isBookable` participa en la primera y no debe revocar retroactivamente la segunda mientras la Membership siga activa y las demás políticas de acceso se cumplan.
+Estos recursos pueden seguir referenciando la identidad global `User` siempre que cada operación revalide el predicado correcto para su propósito. En particular, **crear nuevas reservas** y **operar Appointments ya asignadas** son decisiones distintas: `isBookable` y la presencia actual en `Service.workers` participan en la primera y no deben revocar retroactivamente la segunda mientras la Membership siga activa y las demás políticas de acceso se cumplan.
 
 ## 3. Invariantes obligatorias
 
@@ -242,6 +244,10 @@ Estos recursos pueden seguir referenciando la identidad global `User` siempre qu
 24. La lectura administrativa de Team es `admin`-only y se impone server-side.
 25. `isBookable=false` impide nuevas reservas, pero no revoca por sí solo las capacidades válidas sobre Appointments ya asignadas.
 26. `Membership.isActive=false` sí revoca la autoridad operacional tenant asociada a esa Membership.
+27. `Service.workers` es configuración/allowlist para **nuevas** reservas; no es una autoridad histórica sobre Appointments ya creadas.
+28. Retirar un User de `Service.workers` no revoca por sí solo existing Appointment actor capability ni modifica `Appointment.worker`.
+29. Ninguna ruta legacy puede permanecer como vía alternativa para saltarse onboarding, lifecycle Team o las proyecciones mínimas definidas aquí.
+30. El cutover funcional debe cerrar o endurecer superficies legacy incompatibles antes o en el mismo despliegue que vuelve vigente la política nueva; no se permite una ventana productiva con reglas contradictorias.
 
 ## 4. Vocabulario canónico
 
@@ -289,7 +295,7 @@ AND User activo
 AND Membership del mismo Business activa
 AND Membership.isBookable === true
 AND Service activo del mismo Business
-AND Service asigna ese User
+AND Service asigna actualmente ese User para nuevas reservas
 AND resto de condiciones operacionales requeridas
 ```
 
@@ -307,11 +313,18 @@ AND User activo
 AND Membership activa del User en ese Business
 AND Appointment pertenece al mismo Business
 AND Appointment.worker corresponde a ese User
-AND coherencia Service/Appointment requerida
+AND Appointment.service referencia un Service coherente con ese mismo Business
 AND política tenant/transición de estado vigente
 ```
 
-No debe exigir `Membership.isBookable === true`.
+No debe exigir:
+
+```text
+Membership.isBookable === true
+User actualmente presente en Service.workers
+```
+
+La relación histórica relevante para esa Appointment es su `Appointment.worker` persistido y la coherencia tenant de la propia Appointment/Service; la allowlist actual de catálogo no puede convertirse en revocación retroactiva.
 
 ### 4.7 Propiedad
 
@@ -346,6 +359,7 @@ Business.owner   != isBookable
 Service.workers  != Membership
 Shift exists     != isBookable
 Appointment.worker == User != future booking eligibility
+Service.workers current membership != historical Appointment assignment
 ```
 
 ## 6. Representación elegida
@@ -715,7 +729,7 @@ Desde el instante en que la mutación es efectiva, booking eligibility falla cer
 
 ### 11.4 Desactivar acceso tenant
 
-Mutación conceptual permitida sólo cuando las guardas de continuidad administrativa de 17.5 se cumplen:
+Mutación conceptual permitida sólo cuando las guardas de continuidad administrativa de 18.5 se cumplen:
 
 ```text
 Membership.isActive = false
@@ -758,9 +772,11 @@ Tampoco puede existir un fallback automático que convierta referencias preserva
 
 ### 11.6 Hard delete
 
-Queda fuera de la UI ordinaria de Equipo.
+Queda fuera de la UI y del lifecycle tenant ordinario de Equipo.
 
-El endpoint legacy `DELETE /api/users/workers/:id?hard=true` no debe convertirse en una acción normal de la futura pantalla. Cualquier lifecycle destructivo futuro requerirá contrato explícito separado, análisis de referencias históricas y autorización reforzada.
+El endpoint/mode legacy `DELETE /api/users/workers/:id?hard=true` **no puede permanecer disponible para un admin tenant ordinario como API alternativa** después del cutover Team. Debe retirarse de esa superficie o trasladarse en el futuro a una operación excepcional explícita con autorización reforzada y contrato separado.
+
+Este documento no define esa superficie excepcional. Hasta entonces, el lifecycle ordinario es desactivación preservando historia y respetando las guardas owner/último-admin.
 
 ## 12. Incorporación de nueva participación y frontera de onboarding
 
@@ -853,7 +869,7 @@ AND Membership(User, Business) existe
 AND Membership.isActive === true
 AND Membership.isBookable === true
 AND Service existe, está activo y pertenece al mismo Business
-AND Service incluye al User como profesional asignado
+AND Service incluye actualmente al User como profesional asignado
 AND cualquier otra condición vigente del contrato público
 ```
 
@@ -876,7 +892,7 @@ La proyección pública mínima de 6.2.6-A (`id`, `firstName`, `lastName`) no ne
 
 Una persona no agendable debe fallar como profesional disponible para **nuevas** reservas, aunque conserve Shift/Block históricos, aparezca en un array legacy de `Service.workers` o tenga Appointments históricas.
 
-Una selección obtenida antes de que `isBookable` fuera deshabilitado no concede derecho a crear una Appointment después de la revocación.
+Una selección obtenida antes de que `isBookable` fuera deshabilitado o antes de que el User fuera retirado de `Service.workers` no concede derecho a crear una Appointment después de esa revocación de booking eligibility.
 
 ## 14. Existing Appointment actor capability
 
@@ -886,9 +902,15 @@ Deshabilitar únicamente:
 isBookable: true -> false
 ```
 
+o retirar al User de la allowlist actual:
+
+```text
+Service.workers
+```
+
 no debe revocar por sí solo el acceso operacional legítimo a Appointments ya asignadas.
 
-Un profesional con `Membership.isBookable=false` puede continuar, cuando la política de transición lo permita:
+Un profesional con `Membership.isBookable=false` o que ya no esté actualmente asignado en `Service.workers` puede continuar, cuando la política de transición lo permita:
 
 - viendo sus Appointments existentes;
 - confirmándolas;
@@ -903,20 +925,29 @@ User activo
 + Business activo
 + Membership activa del User en ese Business
 + Appointment.business coherente
-+ Appointment.worker coherente con el actor cuando aplique
-+ Service/Appointment coherentes
++ Appointment.worker coherente con el actor
++ Appointment.service perteneciente/coherente con ese Business
 + política tenant y de transición de estado vigente
 ```
 
-No debe exigir `isBookable=true`.
+No debe exigir:
+
+```text
+isBookable=true
+User actualmente presente en Service.workers
+```
 
 Desactivar `Membership.isActive` sí revoca esta autoridad operacional tenant. Un admin con `isBookable=false` conserva sus capacidades admin porque éstas derivan de `Membership.role="admin"`, no de bookability.
 
-La implementación futura no debe reutilizar un único helper de `professional eligibility` para booking eligibility y existing Appointment actor capability si hacerlo convierte `isBookable` en una revocación retroactiva de acceso a citas ya asignadas.
+La implementación futura no debe reutilizar un único helper de `professional eligibility` para booking eligibility y existing Appointment actor capability si hacerlo convierte `isBookable` o `serviceIncludesProfessional(service, userId)` en una revocación retroactiva de acceso a citas ya asignadas.
 
-Cambiar `isBookable` nunca modifica `Appointment.worker` ni reescribe historial.
+Cambiar `isBookable` o retirar una asignación actual de Service nunca modifica `Appointment.worker` ni reescribe historial.
+
+Si en el futuro se necesita una revocación excepcional de acceso a Appointments existentes por motivos de seguridad, deberá ser una operación/lifecycle explícito diferente. No puede inferirse silenciosamente de retirar a la persona del catálogo de nuevas reservas.
 
 ## 15. Servicios
+
+### 15.1 `Service.workers` para nuevas reservas
 
 `Service.workers` es actualmente una allowlist de User IDs. Para incorporar o mantener a alguien como opción para **nuevas reservas**, la implementación futura debe validar booking eligibility del mismo Business.
 
@@ -927,6 +958,27 @@ La mera presencia de un User ID en `Service.workers` nunca concede:
 - agendabilidad;
 - acceso a otro tenant;
 - existing Appointment actor capability fuera de una Appointment coherente.
+
+Retirar a un User de `Service.workers`:
+
+- impide futuras selecciones/reservas de ese Service para esa persona;
+- no modifica `Appointment.worker` ya persistidos;
+- no reescribe ni borra historial;
+- no revoca por sí solo existing Appointment actor capability.
+
+### 15.2 Separación catálogo / asignación persistida
+
+La distinción normativa es:
+
+```text
+Service.workers
+= configuración actual para NUEVAS reservas
+
+Appointment.worker
+= asignación persistida de una Appointment YA creada
+```
+
+Por tanto, `serviceIncludesProfessional(service, userId)` puede seguir formando parte de booking eligibility para nuevas reservas, pero no puede usarse como requisito de autorización retroactiva sobre una Appointment existente.
 
 La UI de Servicios queda fuera de este PR y se abordará después de Equipo/onboarding.
 
@@ -1014,6 +1066,8 @@ Esa superficie:
 
 La existencia de esta proyección no concede acceso a Team admin.
 
+El actual `GET /api/internal/users/workers` no queda grandfathered por existir antes del contrato. Antes del cutover Team debe endurecerse a esta proyección mínima o ser sustituido. Un worker no puede conservar esa ruta como canal alternativo para leer PII administrativa.
+
 ### 17.3 Frontend no es enforcement
 
 Ocultar Equipo para workers, deshabilitar botones o filtrar datos en React nunca sustituye estas comprobaciones backend.
@@ -1082,7 +1136,7 @@ inventario
 -> plan determinista
 -> migración explícita
 -> verificación
--> cutover
+-> cutover coordinado
 -> una única fuente canónica
 ```
 
@@ -1091,6 +1145,7 @@ No:
 ```text
 nuevo campo opcional
 + fallback por role para siempre
++ rutas legacy incompatibles activas
 ```
 
 ### 19.2 Inventario obligatorio
@@ -1108,7 +1163,10 @@ Antes de mutar datos, auditar por Business:
 - Shift existentes;
 - Block existentes;
 - Appointment históricas;
-- seeds/fixtures/tests que crean Membership directamente.
+- seeds/fixtures/tests que crean Membership directamente;
+- consumidores actuales de `POST /api/users/workers`;
+- consumidores actuales de `DELETE /api/users/workers/:id` y `?hard=true`;
+- consumidores actuales de `GET /api/internal/users/workers` y su proyección real.
 
 ### 19.3 Reglas de backfill propuestas
 
@@ -1136,10 +1194,13 @@ La fase migratoria debe probar, como mínimo:
 - ninguna Membership inactiva queda `isBookable=true`;
 - ninguna referencia cross-tenant se transforma en elegibilidad;
 - booking eligibility usa el nuevo predicado;
-- existing Appointment actor capability no queda condicionado por `isBookable`;
-- fixtures y seeds dejan de depender de `role="worker"` como bookability implícita.
+- existing Appointment actor capability no queda condicionado por `isBookable` ni por presencia actual en `Service.workers`;
+- fixtures y seeds dejan de depender de `role="worker"` como bookability implícita;
+- no queda ninguna ruta legacy que pueda crear Membership fuera del onboarding autorizado;
+- no queda hard delete tenant-ordinario que evada el lifecycle Team;
+- ninguna proyección operacional accesible a workers expone PII administrativa.
 
-### 19.5 Cutover
+### 19.5 Cutover canónico
 
 Después de verificar storage:
 
@@ -1150,9 +1211,61 @@ Después de verificar storage:
 - el flujo legacy de auto-horarios debe quedar retirado;
 - el listado Team debe dejar de filtrar exclusivamente `role="worker"`;
 - el fallback por role debe eliminarse en el mismo ciclo de cutover;
-- las operaciones sobre Appointments existentes deben conservar su predicado separado sin `isBookable`.
+- las operaciones sobre Appointments existentes deben conservar su predicado separado sin `isBookable` ni `Service.workers` actual.
 
 El cutover de bookability **no autoriza** `email match -> Membership` para ningún User existente o inexistente.
+
+### 19.6 Política obligatoria: NO ALTERNATE LEGACY PATH
+
+Una política nueva no se considera funcionalmente vigente mientras una superficie legacy accesible permita contradecirla.
+
+#### `POST /api/users/workers`
+
+Antes o en el mismo cutover Team/bookability, este endpoint debe:
+
+- retirarse; o
+- deshabilitarse fail-closed; o
+- transformarse de manera que ya no pueda materializar nueva participación tenant fuera del onboarding autorizado.
+
+No puede conservar semántica equivalente a:
+
+```text
+admin
+-> email
+-> findByEmail global
+-> User existente o User nuevo
+-> Membership inmediata
+-> horarios automáticos
+```
+
+Mientras onboarding no exista, **ninguna ruta tenant-admin ordinaria** puede crear una Membership para una persona que todavía no pertenece al Business, incluso si existe un `User` global con email coincidente.
+
+#### `DELETE /api/users/workers/:id?hard=true`
+
+El modo hard delete debe salir de la superficie tenant ordinaria. Puede retirarse o, en una fase futura distinta, trasladarse a una operación excepcional explícita con autorización reforzada.
+
+No se define aquí esa superficie excepcional. Un admin tenant ordinario no puede usar un endpoint legacy para evadir soft deactivation, preservación histórica, guardas owner/último-admin ni futuras políticas Team.
+
+#### `GET /api/internal/users/workers`
+
+Antes del cutover Team debe:
+
+- endurecerse a una proyección operacional mínima compatible con 17.2; o
+- ser sustituido por otra superficie operacional tenant-scoped y mínima.
+
+No puede seguir siendo una vía alternativa mediante la cual un worker obtenga email, phone, miembros inactivos, owner metadata, Membership IDs innecesarios o metadata global de User.
+
+#### Atomicidad del cutover
+
+El cierre/hardening de estas superficies debe ocurrir **antes o en el mismo despliegue funcional** que vuelve vigente la nueva política. No se acepta una ventana productiva donde documentación/storage/Team apliquen onboarding/bookability/lifecycle nuevos mientras las rutas legacy sigan permitiendo lo contrario.
+
+La regla general es:
+
+```text
+NO ALTERNATE LEGACY PATH
+```
+
+Que una API ya no sea usada por React no la exime de las invariantes de seguridad.
 
 ## 20. Pruebas obligatorias de la futura implementación
 
@@ -1206,6 +1319,23 @@ La implementación funcional no será aceptable sin regresiones que cubran, como
 46. Cambiar bookability del owner no modifica ownership, role ni acceso.
 47. Una carrera que cambia owner/admin-count durante la desactivación falla cerrada o se serializa preservando invariantes.
 48. Errores DB/infraestructura de Team no se degradan silenciosamente a lista vacía.
+49. `POST /api/users/workers` legacy no puede crear Membership por email match después del cutover.
+50. Un User preexistente tampoco puede incorporarse mediante `POST /api/users/workers` legacy.
+51. Un User inexistente tampoco puede crearse mediante `POST /api/users/workers` antes del onboarding autorizado.
+52. Un admin tenant ordinario no puede ejecutar hard delete mediante la ruta legacy.
+53. Un worker no obtiene email/phone mediante `GET /api/internal/users/workers` tras el cutover/hardening.
+54. Una API no usada por React sigue sometida a las mismas invariantes de onboarding, lifecycle y proyección.
+55. No existe una ruta alternativa que permita saltarse onboarding.
+56. No existe una ruta alternativa que permita saltarse lifecycle Team.
+57. Profesional activo + Membership activa + `Appointment.worker=professional` conserva acceso permitido a la Appointment existente aunque `isBookable=false`.
+58. Ese mismo profesional conserva acceso permitido aunque ya no esté presente actualmente en `Service.workers`.
+59. Ese profesional no aparece en discovery ni recibe nuevas reservas cuando falla booking eligibility.
+60. Retirar Service assignment no modifica `Appointment.worker`.
+61. Retirar Service assignment no reescribe ni borra historial.
+62. `Membership.isActive=false` sí revoca existing Appointment actor capability.
+63. Appointment de otro Business sigue inaccesible aunque el actor esté asignado en otro contexto.
+64. Appointment cuyo `worker` es otra persona sigue inaccesible.
+65. `Service.workers` nunca se convierte en autoridad tenant ni en grant/revocación histórica implícita.
 
 ## 21. Relación con ADR-001 y contratos anteriores
 
@@ -1267,13 +1397,24 @@ Este PR no implementa:
 
 ## 23. Orden propuesto de implementación funcional
 
-### A. Storage y contrato de bookability
+### A. Storage y contrato de bookability/Appointment
 
 - añadir `Membership.isBookable`;
 - diseñar migración one-shot + verificación + cutover;
 - separar booking eligibility de existing Appointment actor capability;
 - retirar fallback por role y auto-horarios legacy;
 - preservar índice único.
+
+### A2. Cierre/hardening de superficies worker legacy incompatibles
+
+Antes o dentro del mismo cutover que A:
+
+- cerrar o transformar `POST /api/users/workers` para impedir nueva participación fuera del onboarding;
+- retirar hard delete de la superficie tenant ordinaria;
+- endurecer o sustituir `GET /api/internal/users/workers` por una proyección operacional mínima;
+- verificar que no existe otro path legacy equivalente que evada las mismas invariantes.
+
+A y A2 deben desplegarse sin ventana productiva contradictoria.
 
 ### B. Endpoints administrativos para Memberships ya existentes
 
@@ -1315,7 +1456,8 @@ La acción de incorporar una persona nueva sólo se habilita cuando C exista y h
 
 - administración de Service;
 - asignación explícita de profesionales con booking eligibility;
-- validación del predicado canónico.
+- validación del predicado canónico para nuevas reservas;
+- preservación de existing Appointment actor capability independientemente de cambios posteriores en `Service.workers`.
 
 ### F. Horarios / disponibilidad
 
@@ -1377,11 +1519,15 @@ Que el onboarding de esa persona para ese Business no está completado. No revel
 
 ### ¿Qué vuelve públicamente seleccionable a una persona?
 
-Booking eligibility: Business/User/Membership activos, `isBookable=true`, Service válido/asignado y demás condiciones del contrato público.
+Booking eligibility: Business/User/Membership activos, `isBookable=true`, Service válido/asignado actualmente y demás condiciones del contrato público.
 
 ### ¿`isBookable=false` revoca las citas ya asignadas?
 
 No. Existing Appointment actor capability se evalúa por separado y no exige `isBookable=true`; sí exige Membership activa y coherencia/autorización de la Appointment.
+
+### ¿Quitar a una persona de `Service.workers` revoca sus citas ya asignadas?
+
+No. `Service.workers` es allowlist/configuración para nuevas reservas. Las Appointments ya creadas conservan `Appointment.worker`; la capacidad del actor se decide por la Appointment, Business/User/Membership activos y la política de transición, no por pertenencia actual al catálogo del Service.
 
 ### ¿Qué fuente decide autoridad tenant?
 
@@ -1401,11 +1547,15 @@ No. La disponibilidad requiere configuración explícita posterior.
 
 ### ¿Puede Team usar hard delete?
 
-No. Hard delete queda fuera de la superficie ordinaria.
+No. Hard delete queda fuera del lifecycle tenant ordinario. La ruta legacy tampoco puede quedar disponible para un admin ordinario como bypass.
 
 ### ¿Puede un worker leer Team admin?
 
-No. Si necesita información operacional de profesionales, consume una proyección mínima distinta.
+No. Si necesita información operacional de profesionales, consume una proyección mínima distinta; el GET interno legacy debe endurecerse o sustituirse antes del cutover.
+
+### ¿Puede una ruta legacy seguir contradiciendo el contrato si el frontend ya no la usa?
+
+No. Rige `NO ALTERNATE LEGACY PATH`: toda superficie accesible debe respetar las mismas invariantes o cerrarse durante el cutover correspondiente.
 
 ### ¿Qué ocurre al reactivar una Membership en el futuro?
 
@@ -1421,12 +1571,13 @@ onboarding de nueva participación tenant
 participación tenant
 rol/autoridad tenant
 bookability para nuevas reservas
-asignación a Service
+asignación actual a Service para nuevas reservas
 horario/disponibilidad
+Appointment.worker persistido
 existing Appointment actor capability
 reserva
 ```
 
-Ninguno de esos conceptos debe volver a colapsarse bajo la palabra `worker` ni bajo una coincidencia de email.
+Ninguno de esos conceptos debe volver a colapsarse bajo la palabra `worker`, bajo una coincidencia de email ni bajo una ruta legacy alternativa.
 
-La secuencia funcional propuesta es deliberada: primero storage/bookability; después endpoints admin para Memberships ya existentes; luego onboarding seguro; recién entonces alta de nuevas personas en UI Equipo; después Servicios, Horarios/Disponibilidad y la primera reserva productiva end-to-end.
+La secuencia funcional propuesta es deliberada: storage/bookability y separación de predicados; cierre coordinado de superficies worker legacy incompatibles; endpoints Team admin para Memberships ya existentes; onboarding seguro; recién entonces alta de nuevas personas en UI Equipo; después Servicios, Horarios/Disponibilidad y la primera reserva productiva end-to-end. No puede existir una ventana productiva donde la política nueva diga una cosa y una ruta legacy accesible permita otra.
