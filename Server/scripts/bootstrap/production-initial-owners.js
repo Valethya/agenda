@@ -169,7 +169,12 @@ const isExactUniqueSingleFieldIndex = (index, field) => {
   return entries.length === 1
     && entries[0]?.[0] === field
     && entries[0]?.[1] === 1
-    && index?.unique === true;
+    && index?.unique === true
+    && index?.sparse !== true
+    && index?.partialFilterExpression === undefined
+    && index?.collation === undefined
+    && index?.hidden !== true
+    && index?.expireAfterSeconds === undefined;
 };
 
 const collectionCounts = (source) => ({
