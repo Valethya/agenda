@@ -54,6 +54,19 @@ const applyOptions = (plan) => ({
   confirm: PRODUCTION_OWNER_BOOTSTRAP_CONFIRMATION,
 });
 
+const hasExactUniqueSingle = (indexes, field) => indexes.some((index) => (
+  index.unique === true
+  && index.key?.[field] === 1
+  && Object.keys(index.key).length === 1
+));
+
+const hasExactMembershipUnique = (indexes) => indexes.some((index) => (
+  index.unique === true
+  && index.key?.user === 1
+  && index.key?.business === 1
+  && Object.keys(index.key).length === 2
+));
+
 test("production initial owner bootstrap creates exactly 2/2/2 and is idempotent", async () => {
   const uri = isolatedUri("success");
   await resetDatabase(uri);
@@ -66,6 +79,9 @@ test("production initial owner bootstrap creates exactly 2/2/2 and is idempotent
     assert.equal(plan.plan.state, "empty");
     assert.equal(plan.plan.canApply, true);
     assert.deepEqual(plan.plan.counts, { businesses: 0, users: 0, memberships: 0 });
+    assert.equal(plan.plan.storage.business.canCreateTransactionally, true);
+    assert.equal(plan.plan.storage.user.canCreateTransactionally, true);
+    assert.equal(plan.plan.storage.membership.canCreateTransactionally, true);
 
     const applied = await runProductionOwnerBootstrap({
       mongoUri: uri,
@@ -75,15 +91,20 @@ test("production initial owner bootstrap creates exactly 2/2/2 and is idempotent
     assert.equal(applied.applied, true);
     assert.equal(applied.plan.state, "ready");
     assert.deepEqual(applied.plan.counts, { businesses: 2, users: 2, memberships: 2 });
-    assert.equal(applied.plan.membershipIndex.exactUniqueExists, true);
+    assert.equal(applied.plan.storage.business.exactUniqueExists, true);
+    assert.equal(applied.plan.storage.user.exactUniqueExists, true);
+    assert.equal(applied.plan.storage.membership.exactUniqueExists, true);
 
     await withAdminConnection(uri, async (connection) => {
-      const [businesses, users, memberships, indexes] = await Promise.all([
-        connection.db.collection("businesses").find({}).toArray(),
-        connection.db.collection("users").find({}).toArray(),
-        connection.db.collection("memberships").find({}).toArray(),
-        connection.db.collection("memberships").listIndexes().toArray(),
-      ]);
+      const [businesses, users, memberships, businessIndexes, userIndexes, membershipIndexes] =
+        await Promise.all([
+          connection.db.collection("businesses").find({}).toArray(),
+          connection.db.collection("users").find({}).toArray(),
+          connection.db.collection("memberships").find({}).toArray(),
+          connection.db.collection("businesses").listIndexes().toArray(),
+          connection.db.collection("users").listIndexes().toArray(),
+          connection.db.collection("memberships").listIndexes().toArray(),
+        ]);
       assert.equal(businesses.length, 2);
       assert.equal(users.length, 2);
       assert.equal(memberships.length, 2);
@@ -92,12 +113,9 @@ test("production initial owner bootstrap creates exactly 2/2/2 and is idempotent
       assert.ok(users.every((user) => !Object.hasOwn(user, "business")));
       assert.ok(users.every((user) => !user.password.includes("owner-safe") && !user.password.includes("owner-password")));
       assert.ok(memberships.every((membership) => membership.role === "admin" && membership.isActive === true));
-      assert.ok(indexes.some((index) => (
-        index.unique === true
-        && index.key?.user === 1
-        && index.key?.business === 1
-        && Object.keys(index.key).length === 2
-      )));
+      assert.equal(hasExactUniqueSingle(businessIndexes, "slug"), true);
+      assert.equal(hasExactUniqueSingle(userIndexes, "email"), true);
+      assert.equal(hasExactMembershipUnique(membershipIndexes), true);
       for (const business of businesses) {
         assert.ok(users.some((user) => user._id.equals(business.owner)));
       }
@@ -128,6 +146,10 @@ test("production initial owner bootstrap blocks partial occupied state without m
 
     await withAdminConnection(uri, async (connection) => {
       await connection.db.createCollection("businesses");
+      await connection.db.collection("businesses").createIndex(
+        { slug: 1 },
+        { name: "slug_1", unique: true },
+      );
       await connection.db.collection("businesses").insertOne({
         name: "Unexpected",
         slug: "unexpected",
@@ -156,12 +178,12 @@ test("production initial owner bootstrap blocks partial occupied state without m
   }
 });
 
-test("existing empty Membership collection without exact unique index fails closed", async () => {
+test("existing empty identity collection without required unique index fails closed", async () => {
   const uri = isolatedUri("missing_index");
   await resetDatabase(uri);
   try {
     await withAdminConnection(uri, async (connection) => {
-      await connection.db.createCollection("memberships");
+      await connection.db.createCollection("users");
     });
 
     const plan = await runProductionOwnerBootstrap({
@@ -171,8 +193,8 @@ test("existing empty Membership collection without exact unique index fails clos
     });
     assert.equal(plan.plan.state, "empty");
     assert.equal(plan.plan.canApply, false);
-    assert.equal(plan.plan.membershipIndex.exactUniqueExists, false);
-    assert.equal(plan.plan.membershipIndex.canCreateTransactionally, false);
+    assert.equal(plan.plan.storage.user.exactUniqueExists, false);
+    assert.equal(plan.plan.storage.user.canCreateTransactionally, false);
 
     await assert.rejects(
       runProductionOwnerBootstrap({
@@ -180,13 +202,17 @@ test("existing empty Membership collection without exact unique index fails clos
         options: applyOptions(plan),
         environment: productionEnvironment(),
       }),
-      /storage Membership incompatible/u,
+      /storage de identidad incompatible/u,
     );
 
     await withAdminConnection(uri, async (connection) => {
-      const indexes = await connection.db.collection("memberships").listIndexes().toArray();
-      assert.equal(indexes.some((index) => index.key?.user === 1 && index.key?.business === 1), false);
-      assert.equal(await connection.db.collection("memberships").countDocuments({}), 0);
+      const userIndexes = await connection.db.collection("users").listIndexes().toArray();
+      assert.equal(hasExactUniqueSingle(userIndexes, "email"), false);
+      assert.equal(await connection.db.collection("users").countDocuments({}), 0);
+      const collections = (await connection.db.listCollections({}, { nameOnly: true }).toArray())
+        .map((item) => item.name);
+      assert.equal(collections.includes("businesses"), false);
+      assert.equal(collections.includes("memberships"), false);
     });
   } finally {
     await resetDatabase(uri);
