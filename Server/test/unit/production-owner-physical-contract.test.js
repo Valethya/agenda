@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { mongo } from "mongoose";
 import {
   buildProductionOwnerManifest,
+  buildProductionOwnerPlan,
   verifyProductionOwnerReadyState,
 } from "../../scripts/bootstrap/production-initial-owners.js";
 
@@ -65,6 +66,35 @@ const readySource = (manifest) => {
 };
 
 const verifier = async (password, hash) => hash === `hash:${password}`;
+
+test("production owner plan rejects weakened unique index semantics", () => {
+  const modifiers = [
+    { sparse: true },
+    { partialFilterExpression: { email: { $exists: true } } },
+    { collation: { locale: "en", strength: 2 } },
+    { hidden: true },
+    { expireAfterSeconds: 3600 },
+  ];
+
+  for (const modifier of modifiers) {
+    const plan = buildProductionOwnerPlan({
+      observedCollections: ["businesses", "memberships", "users"],
+      businessIndexes: [{ name: "slug_1", key: { slug: 1 }, unique: true }],
+      userIndexes: [{ name: "email_1", key: { email: 1 }, unique: true, ...modifier }],
+      membershipIndexes: [{
+        name: "user_1_business_1",
+        key: { user: 1, business: 1 },
+        unique: true,
+      }],
+      businesses: [],
+      users: [],
+      memberships: [],
+    });
+    assert.equal(plan.canApply, false);
+    assert.equal(plan.storage.user.exactUniqueExists, false);
+    assert.equal(plan.storage.user.canCreateTransactionally, false);
+  }
+});
 
 test("production owner ready-state requires BSON ObjectId references physically", async () => {
   const manifest = buildProductionOwnerManifest(ownerEnvironment());
