@@ -43,7 +43,9 @@ Resultado exacto permitido:
 10. existen físicamente —o pueden crearse transaccionalmente porque la colección aún no existe— los índices únicos:
    - `businesses { slug: 1 } unique`;
    - `users { email: 1 } unique`;
-   - `memberships { user: 1, business: 1 } unique`.
+   - `memberships { user: 1, business: 1 } unique`;
+11. `_id`, `Business.owner`, `Membership.user` y `Membership.business` deben ser BSON `ObjectId` físicos; strings hex equivalentes no satisfacen la verificación;
+12. los propietarios no pueden persistir `User.business`, ni siquiera como `null`.
 
 Si una colección de identidad ya existe pero carece de su índice único requerido, el bootstrap falla cerrado y no intenta reparar el storage de forma destructiva.
 
@@ -64,7 +66,7 @@ runtime/sha/fingerprint guards
 → create 2 Business
 → create 2 User sin User.business
 → create 2 Membership admin
-→ verify exact topology in transaction
+→ verify exact topology + BSON refs in transaction
 → release lock
 → commit
 → physical post-commit verification
@@ -104,14 +106,15 @@ El plan es read-only. Debe mostrar, como mínimo:
 
 ```text
 Estado: empty
+Can apply: true
 Business/User/Membership: 0/0/0
 Target fingerprint: <sha256>
 Deployment SHA: <sha de master desplegado>
 ```
 
-Además, `canApply` debe ser verdadero en la evaluación del script. Si una colección ya existe sin su índice requerido, el proceso sale bloqueado.
+`Can apply: true` es obligatorio. Si el estado es `occupied` o el storage es incompatible, el proceso devuelve código no-cero para que Railway detenga ese pre-deploy; no debe interpretarse como un plan exitoso.
 
-No continuar si el estado es `occupied`, si el fingerprint no corresponde al destino esperado o si el storage no puede aplicarse de forma segura.
+No continuar si el fingerprint no corresponde al destino esperado o si cualquiera de los tres índices no existe ni puede crearse de forma transaccional segura.
 
 ## Paso 2 — Preparar credenciales temporales
 
@@ -177,14 +180,16 @@ El bootstrap queda en el repositorio como herramienta de recuperación/auditorí
 Detener la operación y revisar antes de cualquier nuevo `apply` si ocurre cualquiera de estos casos:
 
 - `occupied` antes del primer apply;
+- `Can apply: false`;
 - counts distintos de `0/0/0` o `2/2/2`;
 - fingerprint diferente;
 - deployment SHA diferente;
 - índice único faltante en una colección ya existente;
+- referencias de identidad almacenadas como string u otro tipo distinto de BSON `ObjectId`;
 - error transaccional/commit incierto;
 - password mismatch en una re-ejecución;
 - `Business.owner` no coincide con el propietario esperado;
-- aparece `User.business` en alguno de los propietarios;
+- aparece `User.business` en alguno de los propietarios, incluso `null`;
 - aparece cualquier worker/usuario extra en la baseline inicial.
 
 No ejecutar `seed-production.js` ni alterar manualmente MongoDB como atajo.
