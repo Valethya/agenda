@@ -1,12 +1,12 @@
 # ADR-001 — Autoridad multitenant e identidad progresiva del cliente
 
-**Estado:** aprobado para autoridad multitenant e identidad progresiva; precisión Equipo/agendabilidad en revisión documental  
+**Estado:** aprobado para autoridad multitenant e identidad progresiva; precisión Equipo/agendabilidad en revisión documental
 **Fecha original:** 21 de julio de 2026  
-**Última revisión:** 23 de agosto de 2026  
-**Base histórica de contraste 6.2.5-A:** `master@2d0a25d3d85d731b6b37e253f04145f658727a33`  
-**HEAD adversarial histórico de entrada 6.2.5-A:** `0505f10202ba68cb20eae2b4493312f24d0e9302`  
-**PR precedente histórico de 6.2.5-A:** #25 merged/closed, HEAD `c326846d6a46c4a30dc6ad1ae05308d40b6f459a`  
-**Cierre 6.2.5-A:** PR #26 merged/closed, HEAD `3594212d6c3865bf4e0446b701f95f73b060590e`  
+**Última revisión:** 23 de agosto de 2026
+**Base histórica de contraste 6.2.5-A:** `master@2d0a25d3d85d731b6b37e253f04145f658727a33`
+**HEAD adversarial histórico de entrada 6.2.5-A:** `0505f10202ba68cb20eae2b4493312f24d0e9302`
+**PR precedente histórico de 6.2.5-A:** #25 merged/closed, HEAD `c326846d6a46c4a30dc6ad1ae05308d40b6f459a`
+**Cierre 6.2.5-A:** PR #26 merged/closed, HEAD `3594212d6c3865bf4e0446b701f95f73b060590e`
 **Ámbito:** autorización, identidad, clientes y multitenencia
 
 Las decisiones anteriores compatibles permanecen vigentes. El código de `master` es fuente de verdad para el estado runtime.
