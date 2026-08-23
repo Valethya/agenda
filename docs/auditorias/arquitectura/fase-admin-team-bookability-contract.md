@@ -1,11 +1,11 @@
 # Contrato inicial de administración de Equipo y agendabilidad
 
-**Proyecto:** ATMÓSFERA Agenda  
-**Estado:** definición documental inicial; implementación funcional pendiente  
-**Fecha:** 23 de agosto de 2026  
-**Baseline verificada:** `master@5743bdb9fa530bb3f989893fe6ebdf1a3caa07ad`  
-**Precedente operativo:** PR #33 `feat(ops): add one-shot production owner bootstrap`, merged en la baseline anterior  
-**Ámbito:** Equipo, autoridad tenant y capacidad operacional de ser profesional agendable  
+**Proyecto:** ATMÓSFERA Agenda
+**Estado:** definición documental inicial; implementación funcional pendiente
+**Fecha:** 23 de agosto de 2026
+**Baseline verificada:** `master@5743bdb9fa530bb3f989893fe6ebdf1a3caa07ad`
+**Precedente operativo:** PR #33 `feat(ops): add one-shot production owner bootstrap`, merged en la baseline anterior
+**Ámbito:** Equipo, autoridad tenant y capacidad operacional de ser profesional agendable
 **Naturaleza:** exclusivamente documental
 
 Este documento especializa ADR-001 para separar de forma explícita la **autoridad tenant** de la **capacidad operacional de ser agendable**. No implementa schemas, rutas, migraciones, UI, servicios, horarios, disponibilidad ni reservas nuevas.
