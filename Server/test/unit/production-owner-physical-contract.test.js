@@ -76,7 +76,7 @@ test("production owner ready-state requires BSON ObjectId references physically"
   const result = await verifyProductionOwnerReadyState(source, manifest, verifier);
   assert.equal(result.ready, false);
   assert.ok(result.findings.includes("businessMismatch:atmosfera"));
-  assert.ok(result.findings.includes("membershipMismatch:dam"));
+  assert.ok(result.findings.includes("membershipMismatch:dam:admin"));
 });
 
 test("production owner ready-state rejects persisted User.business even when null", async () => {
