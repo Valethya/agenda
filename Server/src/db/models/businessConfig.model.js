@@ -1,5 +1,41 @@
 import mongoose from "mongoose";
 import { DEFAULT_SLOT_DURATION_MINUTES } from "../../config/businessConfig.defaults.js";
+import { PUBLIC_WEB_VERIFICATION_METHOD } from "../../config/publicWeb.constants.js";
+
+const publicWebSchema = new mongoose.Schema(
+  {
+    websiteUrl: { type: String, default: null },
+    bookingUrl: { type: String, default: null },
+    verificationStatus: {
+      type: String,
+      enum: ["unconfigured", "pending", "verified"],
+      default: "unconfigured",
+      required: true,
+    },
+    verifiedOrigin: { type: String, default: null },
+    verifiedAt: { type: Date, default: null },
+    verificationValidUntil: { type: Date, default: null },
+    trustGeneration: { type: Number, min: 0, default: 0, required: true },
+    verificationMethod: {
+      type: String,
+      enum: [PUBLIC_WEB_VERIFICATION_METHOD],
+      default: PUBLIC_WEB_VERIFICATION_METHOD,
+      required: true,
+    },
+    challengeHash: { type: String, default: null, select: false },
+    challengeIssuedAt: { type: Date, default: null },
+    challengeExpiresAt: { type: Date, default: null },
+    verificationAttemptGeneration: { type: Number, min: 0, default: 0, required: true },
+    // Persisted short lease used only to linearize C2 outbound authorization
+    // against trust-revoking admin commands. It is server-owned and not a grant.
+    authorityFence: {
+      token: { type: String, default: null, select: false },
+      trustGeneration: { type: Number, default: null },
+      expiresAt: { type: Date, default: null },
+    },
+  },
+  { _id: false },
+);
 
 const businessConfigSchema = new mongoose.Schema(
   {
@@ -60,12 +96,22 @@ const businessConfigSchema = new mongoose.Schema(
         default: ["calendario", "horarios", "clientes", "servicios", "equipo", "reportes"],
       },
     },
+    publicWeb: {
+      type: publicWebSchema,
+      default: () => ({}),
+    },
   },
   {
     timestamps: true,
     versionKey: false,
   }
 );
+
+// The 6.2.6-B publicWeb freshness index is intentionally NOT declared on the
+// Mongoose schema. Its physical authority is exclusively PUBLIC_WEB_INDEX_SPEC
+// + migration:public-web-storage + the runtime cutover gate. Historical schema
+// indexes (including the unique BusinessConfig.business index above) remain
+// managed exactly as before.
 
 const BusinessConfigModel = mongoose.model("BusinessConfig", businessConfigSchema);
 

@@ -24,6 +24,7 @@ const dependencies = (overrides = {}) => {
       database: () => ({ marker: "db" }),
       availabilityGate: async () => { calls.push("availability-gate"); },
       guestCapabilityGate: async () => { calls.push("c2-gate"); },
+      publicWebGate: async () => { calls.push("public-web-gate"); },
       appInstance,
       listenPort: 3210,
       socketInit: () => { calls.push("socket"); },
@@ -55,6 +56,21 @@ test("6.2.5-C2 failed storage gate blocks listen, socket and worker", async () =
   assert.deepEqual(fixture.calls, ["connect", "availability-gate", "c2-gate"]);
 });
 
+test("6.2.6-B failed publicWeb storage gate blocks listen, socket and worker", async () => {
+  const fixture = dependencies({
+    publicWebGate: async () => {
+      fixture.calls.push("public-web-gate");
+      throw new Error("PUBLIC_WEB_STORAGE_BLOCKED");
+    },
+  });
+
+  await assert.rejects(startServerLifecycle(fixture.options), /PUBLIC_WEB_STORAGE_BLOCKED/u);
+  assert.deepEqual(
+    fixture.calls,
+    ["connect", "availability-gate", "c2-gate", "public-web-gate"],
+  );
+});
+
 test("6.2.5-C2 listen failure does not initialize socket or worker", async () => {
   const fixture = dependencies();
   fixture.server.listening = false;
@@ -67,23 +83,43 @@ test("6.2.5-C2 listen failure does not initialize socket or worker", async () =>
   };
 
   await assert.rejects(startServerLifecycle(fixture.options), /EADDRINUSE/u);
-  assert.deepEqual(fixture.calls, ["connect", "availability-gate", "c2-gate", "listen"]);
+  assert.deepEqual(
+    fixture.calls,
+    ["connect", "availability-gate", "c2-gate", "public-web-gate", "listen"],
+  );
 });
 
-test("6.2.5-C2 startup opens HTTP only after both gates and stops worker on server close", async () => {
+test("6.2.6-B startup opens HTTP only after all storage gates and stops worker on close", async () => {
   const fixture = dependencies();
   const server = await startServerLifecycle(fixture.options);
 
   assert.equal(server, fixture.server);
   assert.deepEqual(
     fixture.calls,
-    ["connect", "availability-gate", "c2-gate", "listen", "socket", "worker-start"],
+    [
+      "connect",
+      "availability-gate",
+      "c2-gate",
+      "public-web-gate",
+      "listen",
+      "socket",
+      "worker-start",
+    ],
   );
 
   server.emit("close");
   assert.deepEqual(
     fixture.calls,
-    ["connect", "availability-gate", "c2-gate", "listen", "socket", "worker-start", "worker-stop"],
+    [
+      "connect",
+      "availability-gate",
+      "c2-gate",
+      "public-web-gate",
+      "listen",
+      "socket",
+      "worker-start",
+      "worker-stop",
+    ],
   );
 
   server.emit("close");

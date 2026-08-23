@@ -2,14 +2,14 @@
 
 **Proyecto:** ATMÓSFERA Agenda  
 **Fase:** 6.2.6-B  
-**Estado:** contrato documental corregido tras revisión adversarial; implementación funcional no iniciada  
-**Tipo de iteración:** document-only  
-**Baseline verificada:** `master@ea43c0da9a11355811b5bf0c52210af86fdac335`  
-**Baseline provenance:** merge aprobado de PR #30 / 6.2.6-A, `feat(6.2.6-A): formalize headless public booking contract`  
-**HEAD adversarial de partida:** `056c3d7775cbe0aaa2717db1d0efcb37d9642a24`  
+**Estado:** contrato aprobado preservado; implementación funcional en PR #32 Draft con correcciones adversariales; pendiente nueva revisión adversarial independiente  
+**Tipo de iteración:** implementación funcional + reconciliación adversarial  
+**Contrato documental aprobado:** PR #31, HEAD `3f3623f099446615039584601d6c6a7f3f4a8be0`  
+**Baseline funcional verificada:** `master@ed7acfd5fed91b03cd65becd2af154f93dad027b`, merge aprobado de PR #31  
+**HEAD adversarial de entrada de esta corrección:** `43f85f58a3a8417bf4a74404067351d39a1f8847`  
 **Fecha:** 22 de agosto de 2026
 
-> Este documento define el contrato que deberá implementarse y revisarse adversarialmente en una iteración posterior. No declara 6.2.6-B implementada ni 6.2.6 completa cerrada. Esta corrección no modifica comportamiento runtime.
+> El contrato normativo aprobado se conserva. Los apartados de implementación física y estado se reconciliaron con PR #32. Este documento no declara 6.2.6-B cerrada ni autoriza Ready/merge; el siguiente gate es CI verde sobre el HEAD final exacto y una nueva revisión adversarial independiente.
 
 ## 1. Objetivo
 
@@ -39,7 +39,7 @@ verified public origin -> máximo un Business
 
 Un mismo origin puede estar legítimamente verificado y fresh para múltiples Businesses. `verifiedOrigin` no es una clave tenant global, no debe tener un índice global `unique` y no sustituye los identificadores públicos explícitos definidos en 6.2.6-A.
 
-La autoridad final debe quedar expresada como:
+La autoridad final queda expresada como:
 
 ```text
 Business
@@ -64,27 +64,40 @@ verified public origin
   -> session/admin authority
 ```
 
-## 2. Baseline y contraste contra `master`
+## 2. Baseline y contraste
 
-La baseline revisada permanece vigente: `master` apunta a `ea43c0da9a11355811b5bf0c52210af86fdac335`, merge commit de PR #30 / 6.2.6-A.
+El contrato documental fue aprobado en PR #31 sobre el HEAD `3f3623f099446615039584601d6c6a7f3f4a8be0` y fusionado en `master@ed7acfd5fed91b03cd65becd2af154f93dad027b`. Esa es la baseline funcional de PR #32.
 
-El HEAD adversarial de partida de PR #31 continúa siendo `056c3d7775cbe0aaa2717db1d0efcb37d9642a24`; no existía delta posterior antes de esta corrección. CI #291 sobre ese HEAD estaba en `success`.
+### 2.1 Estado histórico observado al aprobar el contrato
 
-### 2.1 Estado observado en la baseline
+1. `BusinessConfig` era único por `business` y todavía no contenía `websiteUrl`, `bookingUrl` ni domain verification.
+2. Business Settings era internal-only. `PUT /api/business-settings` exigía sesión, Business activo, Membership vigente y `admin`.
+3. `scopeBusiness` revalidaba Membership desde persistencia y aplicaba trusted authenticated panel origin. `User.role`/`User.business` legacy no sustituían Membership.
+4. `updateBusinessConfigSchema` era strict y rechazaba propiedades desconocidas.
+5. `GET /api/business-settings` usaba defaults read-only y no materializaba configuración.
+6. C2 usaba `GUEST_APPOINTMENT_ACCESS_ORIGIN` y construía `<origin>/appointment-access#...`; bearer/challenge permanecían en fragment.
+7. El worker C2 obtenía el destino sólo de `Appointment.guestContact` Appointment-scoped y no usaba `Appointment.client` ni `User.email` como fallback.
+8. C2 implementaba end-to-end únicamente READ para exactamente Business + Appointment + READ.
+9. La política CORS construía el allowlist desde `CORS_ORIGINS` + `FRONTEND_URL`; únicamente `FRONTEND_URL` obtenía respuestas credentialed.
+10. `exchangeGuestAppointmentReadChallenge()` validaba Delivery, job/generation C2 y challenge C1 antes de emitir READ, todavía sin public-web trust generation.
+11. El contrato público 6.2.6-A podía resolver Business por query, body o `x-business-id`/`x-business-slug`; un preflight `OPTIONS` no conoce body ni valores futuros de headers, por lo que preflight y tenant binding debían permanecer separados.
 
-1. `BusinessConfig` continúa siendo único por `business` y no contiene `websiteUrl`, `bookingUrl` ni domain verification.
-2. Business Settings continúa internal-only. `PUT /api/business-settings` exige sesión, Business activo, Membership vigente y `admin`.
-3. `scopeBusiness` revalida Membership desde persistencia y aplica trusted authenticated panel origin. `User.role`/`User.business` legacy no sustituyen Membership.
-4. `updateBusinessConfigSchema` es strict y rechaza propiedades desconocidas.
-5. `GET /api/business-settings` usa defaults read-only y no materializa configuración.
-6. C2 usa actualmente `GUEST_APPOINTMENT_ACCESS_ORIGIN` y construye `<origin>/appointment-access#...`; el bearer/challenge permanece en fragment.
-7. El worker C2 obtiene el destino sólo de `Appointment.guestContact` Appointment-scoped y no usa `Appointment.client` ni `User.email` como fallback.
-8. C2 implementa end-to-end únicamente READ para exactamente Business + Appointment + READ.
-9. La política CORS actual construye el allowlist desde `CORS_ORIGINS` + `FRONTEND_URL`; únicamente `FRONTEND_URL` obtiene respuestas credentialed (`Access-Control-Allow-Credentials: true`). Un origin público admitido por CORS no adquiere por ello authority de sesión.
-10. `exchangeGuestAppointmentReadChallenge()` valida Delivery entregada, job/generation C2 y challenge C1 antes de emitir la capability READ; actualmente no existe todavía vínculo con una public-web trust generation.
-11. El contrato público 6.2.6-A puede resolver Business mediante identificadores explícitos en query, body o `x-business-id`/`x-business-slug`. Un preflight `OPTIONS` no contiene el body futuro ni conoce el valor futuro de esos headers, por lo que CORS preflight y tenant binding de la request real deben permanecer como decisiones separadas.
+### 2.2 Estado funcional implementado en PR #32
 
-No se detectó contradicción de runtime con estas premisas. Los bloqueantes detectados eran contractuales.
+PR #32 implementa ese contrato sin ampliar capability scope:
+
+- `BusinessConfig.publicWeb` persistido tenant-scoped;
+- URL policy HTTPS/443/same-origin;
+- DNS TXT server-side, challenge CSPRNG hash-only y freshness;
+- `verificationAttemptGeneration` y `trustGeneration` separados;
+- comandos configure/verify/reverify/rotate/delete;
+- CORS dinámico credentialless con preflight separado del tenant binding real;
+- shared origins;
+- C2 cutover sin fallback global;
+- Job/Delivery ligados a publicWeb generation/origin;
+- persisted authority fence worker/revocation y exchange/mint;
+- lookup CORS bounded y protegido antes de Mongo;
+- índice físico no unique gobernado exclusivamente por `PUBLIC_WEB_INDEX_SPEC`, migración explícita y runtime cutover gate; no existe declaración de ese índice en el schema Mongoose.
 
 ## 3. Threat model
 
@@ -119,13 +132,17 @@ El diseño debe resistir, como mínimo:
 - respuestas DNS incorrectas, ausentes o fallidas;
 - stale DNS result tras cambiar/rotar configuración;
 - un origin que fue verificado legítimamente pero cuya prueba ya expiró;
+- un challenge que estaba vigente al iniciar `/verify` pero expira mientras el resolver DNS está en curso;
 - una Delivery C2 emitida bajo trust generation N y utilizada después de N+1;
 - revocación durante el procesamiento del worker;
 - enlace ya enviado cuya trust generation se revoca antes del exchange;
 - filtración del raw DNS challenge por persistencia, GET, logs o errores;
 - fallback accidental a la variable global C2 después del cutover;
 - cross-Business origin leakage;
-- ampliación accidental de C2 a CANCEL, RESCHEDULE o PAYMENT.
+- ampliación accidental de C2 a CANCEL, RESCHEDULE o PAYMENT;
+- Origins desconocidos que intentan usar el preflight dinámico como amplificador de consultas MongoDB;
+- una revocación publicWeb posterior que intenta acortar incorrectamente una READ capability ya canjeada;
+- una conexión runtime que intentara materializar el índice publicWeb por `autoIndex` antes de la migración/cutover explícitos.
 
 ### 3.3 Semántica de la prueba DNS y freshness
 
@@ -140,17 +157,15 @@ AND now < verificationValidUntil
 AND trustGeneration == generation vigente
 ```
 
-`verifiedAt` registra cuándo se obtuvo la prueba. `verificationValidUntil` limita cuánto tiempo esa prueba puede respaldar nuevas operaciones C2.
+`verifiedAt` registra cuándo se obtuvo la prueba. `verificationValidUntil` limita cuánto tiempo esa prueba puede respaldar nuevas operaciones C2 y browser trust-bound.
 
-6.2.6-B no requiere monitoring periódico ni background jobs. La expiración puede verificarse de forma lazy al resolver trust, al autorizar CORS público, al vincular una request browser con el Business explícitamente resuelto, al iniciar/revalidar un delivery C2 y al realizar exchange.
+6.2.6-B no requiere monitoring periódico ni background jobs. La expiración se verifica lazy al resolver trust, autorizar CORS público, bindear la request browser real, iniciar/revalidar delivery C2 y realizar exchange.
 
-Una trust expirada falla cerrada aunque el documento físico aún conserve temporalmente `verificationStatus = verified` hasta que una escritura posterior materialice la transición. Ningún path de authority puede omitir el predicado temporal cuando publicWeb trust sea parte de su decisión.
+Una trust expirada falla cerrada aunque el documento físico conserve temporalmente `verificationStatus = verified`.
 
-## 4. Modelo conceptual
+## 4. Modelo conceptual y físico
 
-`BusinessConfig` continúa siendo la ubicación natural del estado porque ya existe un único documento tenant-scoped por Business.
-
-Modelo conceptual equivalente:
+`BusinessConfig` continúa siendo la ubicación natural porque existe un único documento tenant-scoped por Business.
 
 ```text
 BusinessConfig.publicWeb
@@ -164,22 +179,26 @@ BusinessConfig.publicWeb
   trustGeneration                    server-owned revocation epoch
 
   verificationMethod                 server-owned constant: dns_txt
-  challengeHash                      server-owned secret derivation
+  challengeHash                      server-owned secret derivation, select:false
   challengeIssuedAt                  server-owned
   challengeExpiresAt                 server-owned
   verificationAttemptGeneration      server-owned DNS TOCTOU fence
+
+  authorityFence.token               server-owned, select:false
+  authorityFence.trustGeneration     server-owned
+  authorityFence.expiresAt           server-owned
 ```
 
-Los nombres físicos pueden variar durante implementación, pero estas dos revisions no pueden colapsarse semánticamente:
+Las revisions no se colapsan:
 
 - `verificationAttemptGeneration`: cerca una prueba DNS concreta y evita que un lookup viejo verifique un challenge/configuración nueva;
-- `trustGeneration`: identifica el epoch de confianza pública que atraviesa C2 y permite invalidar Deliveries/challenges C2 ya emitidos.
+- `trustGeneration`: identifica el epoch de confianza pública que atraviesa C2 e invalida Deliveries/challenges C2 ya emitidos.
+
+Ambas se representan como enteros monotónicos. El estado unconfigured conserva revision suficiente para que delete/recreate no reutilice una generation anterior.
 
 ### 4.1 Estado derivado `unconfigured`
 
-`unconfigured` representa ausencia de una pareja válida `websiteUrl + bookingUrl` y ausencia de trust efectiva.
-
-No es obligatorio persistir literalmente la palabra `unconfigured`, pero el DTO debe proyectarla de forma estable. Para impedir replay después de delete, la implementación puede conservar metadata server-owned de revision aunque las URLs hayan sido limpiadas.
+`unconfigured` representa ausencia de pareja `websiteUrl + bookingUrl` y ausencia de trust efectiva. El DTO lo proyecta de forma estable; metadata server-owned puede persistir para anti-ABA.
 
 ### 4.2 Client-owned
 
@@ -192,11 +211,9 @@ El cliente administrativo puede proponer exclusivamente:
 }
 ```
 
-No puede escribir campos de verificación, freshness, generation ni CORS authority.
-
 ### 4.3 Server-owned
 
-Son server-owned y deben rechazarse si aparecen en un DTO de escritura:
+Deben rechazarse en DTO de escritura:
 
 - `verificationStatus`;
 - `verifiedAt`;
@@ -209,24 +226,19 @@ Son server-owned y deben rechazarse si aparecen en un DTO de escritura:
 - `challengeIssuedAt`;
 - `challengeExpiresAt`;
 - `verificationAttemptGeneration`;
-- cualquier alias que permita simular `verified`, extender freshness o seleccionar una generation.
+- `authorityFence`;
+- cualquier alias que simule verified/extienda freshness/seleccione generation.
 
 ## 5. Normalización y validación URL
 
-Toda normalización ocurre server-side mediante una única política compartida por escritura, comparación, CORS público, binding browser de la request real y resolución C2.
-
-La normalización nunca confía en headers como fuente de tenant authority. El header estándar `Origin` puede participar únicamente en la política CORS/binding browser definida en §11.
+Toda normalización ocurre server-side mediante una única política compartida por escritura, comparación, CORS público, binding browser y resolución C2.
 
 ### 5.1 Política de puertos MVP
 
-El MVP adopta una política cerrada:
-
 - protocolo exactamente `https:`;
 - puerto efectivo exactamente 443;
-- puerto omitido o `:443` explícito son equivalentes y se normalizan al origin canónico sin puerto explícito;
-- cualquier puerto HTTPS no estándar, incluido `:8443`, se rechaza.
-
-Motivo: la prueba DNS demuestra control del hostname, no control de un servicio TCP concreto en cada puerto. Restringir a 443 evita convertir una prueba de hostname en una afirmación más amplia sobre endpoints arbitrarios.
+- puerto omitido o `:443` explícito son equivalentes;
+- cualquier otro puerto HTTPS, incluido `:8443`, se rechaza.
 
 ### 5.2 `websiteUrl`
 
@@ -237,12 +249,12 @@ Requisitos:
 - puerto efectivo 443;
 - sin username/password;
 - sin query/fragment;
-- pathname únicamente vacío o `/` antes de normalizar;
+- pathname únicamente vacío o `/`;
 - hostname DNS válido;
 - no IP literals;
 - no `localhost` ni single-label;
 - no wildcards;
-- persistencia como origin canónico, por ejemplo `https://negocio.cl`.
+- persistencia como origin canónico.
 
 ### 5.3 `bookingUrl`
 
@@ -253,23 +265,9 @@ Requisitos:
 - puerto efectivo 443;
 - sin username/password;
 - sin query/fragment;
-- puede contener path;
+- path permitido;
 - no wildcard host;
 - `URL.origin` normalizado exactamente igual al `websiteUrl` normalizado.
-
-Válido:
-
-```text
-websiteUrl = https://negocio.cl
-bookingUrl = https://negocio.cl/reservar
-```
-
-Inválidos:
-
-```text
-https://otro-dominio.cl/reservar
-https://negocio.cl:8443/reservar
-```
 
 ### 5.4 Igualdad de origin
 
@@ -281,9 +279,7 @@ https://negocio.cl
 != http://negocio.cl
 ```
 
-`:443` explícito puede normalizarse al mismo origin; cualquier otro puerto se rechaza antes de la comparación.
-
-La igualdad de origin no implica igualdad de Business. Dos Businesses distintos pueden tener el mismo `verifiedOrigin` si cada uno posee su propia prueba tenant-scoped fresh.
+`:443` explícito normaliza al mismo origin. La igualdad de origin no implica igualdad de Business.
 
 ## 6. Lifecycle, freshness y generations
 
@@ -298,9 +294,7 @@ unconfigured
   -> verified
 ```
 
-`effective-expired` puede ser una condición derivada y no necesita ser un valor persistido adicional.
-
-Transiciones relevantes:
+Transiciones:
 
 ```text
 pending  -- origin cambia --> pending, challenge nuevo
@@ -309,230 +303,201 @@ verified -- booking path cambia same-origin --> verified, conserva trustGenerati
 verified -- reverify --> pending, trustGeneration N -> N+1
 verified -- now >= verificationValidUntil --> trust N inválida inmediatamente
 pending  -- challenge rota --> pending, verificationAttemptGeneration nueva
-*        -- delete --> unconfigured, trustGeneration avanza
+*        -- delete --> unconfigured, trustGeneration avanza cuando corresponde
 ```
 
 ### 6.1 Crear o cambiar configuración
 
-`PUT /api/business-settings/public-web` debe:
+`PUT /api/business-settings/public-web`:
 
-1. autorizar tenant admin;
-2. validar DTO strict;
-3. normalizar URLs;
-4. comprobar same-origin y puerto 443;
-5. comparar contra estado actual;
-6. aplicar transición atómica.
+1. autoriza tenant admin;
+2. valida DTO strict;
+3. normaliza URLs;
+4. comprueba same-origin/443;
+5. compara estado actual;
+6. aplica transición atómica.
 
-Si el origin se crea o cambia:
-
-- cualquier trust efectiva previa queda revocada;
-- `trustGeneration` avanza;
-- `verifiedOrigin`, `verifiedAt` y `verificationValidUntil` dejan de respaldar authority;
-- se genera challenge DNS CSPRNG nuevo;
-- **el raw nunca se persiste**;
-- se persiste exclusivamente hash/derivación suficiente;
-- `verificationAttemptGeneration` avanza;
-- el estado queda `pending`.
-
-La revocación y la nueva configuración son una sola mutación lógica.
+Origin nuevo/cambiado revoca trust previa, incrementa `trustGeneration`, crea challenge CSPRNG, persiste sólo hash, incrementa attempt generation y queda pending.
 
 ### 6.2 Cambio sólo de booking path same-origin
 
-Si el origin normalizado no cambia:
+Con origin igual:
 
-- una trust fresh conserva `verified`;
-- conserva `verifiedAt` y `verificationValidUntil`;
-- conserva `trustGeneration`;
+- trust fresh conserva verified/verifiedAt/validUntil/trustGeneration;
 - no genera challenge nuevo;
-- no invalida Deliveries C2 de esa generation innecesariamente.
-
-Si estaba `pending`, conserva el challenge/attempt generation vigente salvo rotación explícita.
+- pending conserva challenge vigente salvo rotate explícito.
 
 ### 6.3 PUT idéntico
 
-Misma representación normalizada:
-
-- no rota challenge;
-- no cambia `verifiedAt`/`verificationValidUntil`;
-- no cambia `trustGeneration`;
-- no vuelve a exponer raw challenge.
+No rota challenge, no renueva freshness, no cambia generations y no re-expone raw.
 
 ### 6.4 Expiración del challenge DNS pending
 
-`challengeExpiresAt` es server-owned y distinto de `verificationValidUntil`.
+La freshness del challenge se comprueba dos veces durante `/verify`:
 
-- `challengeExpiresAt <= now` impide verificar ese challenge;
-- expirarlo no produce trust;
-- rotar genera raw nuevo one-time y `verificationAttemptGeneration` nueva.
+1. antes de iniciar el resolver, contra `requestObservedAt`;
+2. después de obtener y validar el TXT, contra un `proofObservedAt` nuevo.
+
+En ambos límites la regla es estricta:
+
+```text
+challengeExpiresAt <= instante observado
+-> PUBLIC_WEB_CHALLENGE_EXPIRED
+```
+
+Por tanto, un challenge que estaba vigente al entrar pero vence mientras `resolveTxt()` está en curso no puede convertirse en trust verificada. Rotate crea raw nuevo y attempt generation nueva.
+
+**Valor físico:** 15 minutos, centralizado en `PUBLIC_WEB_CHALLENGE_TTL_MS`.
 
 ### 6.5 Freshness de trust verified
 
-Una verificación exitosa debe fijar server-side:
+El instante autoritativo de una verificación exitosa es `proofObservedAt`, obtenido **después** del resolver y de comprobar el TXT, no el timestamp inicial de la request.
 
 ```text
-verifiedAt = now
-verificationValidUntil = now + VERIFIED_TRUST_TTL
+verifiedAt = proofObservedAt
+verificationValidUntil = proofObservedAt + 30 días
 ```
 
-El valor exacto de `VERIFIED_TRUST_TTL` queda pendiente de aprobación humana, pero su existencia es obligatoria.
+**Valor físico:** 30 días, centralizado en `PUBLIC_WEB_VERIFIED_TRUST_TTL_MS` y distinto de C1/C2.
 
 Cuando `now >= verificationValidUntil`:
 
-- el origin deja de ser una trust root efectiva inmediatamente;
-- C2 no puede emitir nuevos enlaces;
-- CORS dinámico no puede considerar esa prueba fresh;
-- una request browser con `Origin` no puede usar esa prueba para bindearse al Business;
-- exchanges de Deliveries ligadas a esa generation fallan como invalid proof;
-- no existe fallback al origin global;
+- origin deja de ser trust root efectiva;
+- C2 no emite nuevos enlaces;
+- CORS dinámico no lo considera fresh;
+- request browser trust-bound no puede bindearse al Business;
+- exchanges de Deliveries de esa generation fallan invalid proof;
+- no existe fallback global;
 - se requiere nueva prueba DNS.
-
-No se necesita job periódico: cada frontera que dependa de publicWeb trust debe comparar `now` con `verificationValidUntil`.
 
 ### 6.6 Re-verification explícita
 
-Debe existir un comando explícito para renovar una trust ya verified o efectivamente expirada:
-
-```text
-POST /api/business-settings/public-web/reverify
-```
-
-Semántica:
-
-1. exige configuración existente cuyo origin no cambió;
-2. revoca el epoch de trust actual y avanza `trustGeneration`;
-3. limpia la capacidad de la prueba anterior para respaldar C2;
-4. genera un challenge DNS nuevo;
-5. persiste sólo hash/derivación;
-6. avanza `verificationAttemptGeneration`;
-7. deja estado `pending`;
-8. devuelve raw challenge sólo en esta respuesta one-time.
-
-La renovación crea deliberadamente una ventana fail-closed hasta que la nueva prueba DNS complete `/verify`.
-
-`POST /verify` no puede ser un no-op permanente sobre `verified`: sólo comprueba un challenge pending vigente. Si se invoca estando verified sin haber iniciado re-verification, debe devolver un error estable equivalente a `PUBLIC_WEB_REVERIFICATION_REQUIRED` o `PUBLIC_WEB_NOT_PENDING` y no extender la freshness.
+`POST /api/business-settings/public-web/reverify` revoca epoch actual, incrementa trust generation, genera challenge/attempt nuevos y deja pending. `/verify` sobre verified no renueva por no-op.
 
 ### 6.7 Verificación exitosa y TOCTOU DNS
 
-`POST /verify` debe capturar:
+`POST /verify` separa dos instantes: `requestObservedAt` y `proofObservedAt`.
+
+Primero valida freshness inicial y captura el snapshot:
 
 ```text
 origin
 challengeHash
 verificationAttemptGeneration
 trustGeneration
+challengeExpiresAt
 ```
 
-resolver TXT server-side y efectuar un conditional write únicamente si esos valores continúan vigentes.
+Después resuelve TXT fuera del write y comprueba la prueba DNS. Una vez obtenida la prueba, lee un `proofObservedAt` nuevo y exige:
 
-Una verificación exitosa:
+```text
+challengeExpiresAt > proofObservedAt
+```
 
-- confirma TXT exacto;
-- fija `verifiedOrigin` al origin actual;
-- fija `verifiedAt` y `verificationValidUntil`;
-- consume/elimina `challengeHash` utilizable;
-- no cambia `trustGeneration` nuevamente si la generation fue creada al configurar/reverify;
-- descarta cualquier resultado DNS de attempt generation vieja.
+El CAS final vuelve a exigir físicamente:
+
+```text
+status == pending
+origin == snapshot.origin
+challengeHash == snapshot.challengeHash
+verificationAttemptGeneration == snapshot.verificationAttemptGeneration
+trustGeneration == snapshot.trustGeneration
+challengeExpiresAt > proofObservedAt
+```
+
+Sólo después de superar ese CAS se materializa verified con `verifiedAt = proofObservedAt` y `verificationValidUntil = proofObservedAt + PUBLIC_WEB_VERIFIED_TRUST_TTL_MS`.
+
+**Clock/testability:** producción usa `defaultNowProvider()` y lee el reloj en ambos límites. Los tests pueden inyectar `nowProvider()` para producir T0/T1 distintos sin sleeps reales ni dependencia del wall clock. Por compatibilidad con pruebas deterministas existentes, un `now: Date` explícito se adapta a un provider fijo y conserva la semántica previa cuando no se necesita simular avance temporal.
+
+Si el challenge vence durante `resolveTxt`, el error adoptado es `PUBLIC_WEB_CHALLENGE_EXPIRED`; el documento permanece pending, no se escriben `verifiedOrigin`, `verifiedAt` ni `verificationValidUntil`, y no aparece posteriormente una fresh trust derivada de ese intento.
 
 ## 7. Contrato DNS TXT
 
-Único método de 6.2.6-B: DNS TXT.
-
-No existe HTTP `/.well-known`, redirect verification ni HTTP fetch.
+Único método de 6.2.6-B: DNS TXT. No existe HTTP `/.well-known`, redirect verification ni HTTP fetch.
 
 ### 7.1 Record
 
-Para `websiteUrl = https://negocio.cl`:
-
 ```text
+websiteUrl = https://negocio.cl
 recordName  = _agenda-verification.negocio.cl
 recordType  = TXT
 recordValue = agenda-verification=<challenge>
 ```
 
-Para subdominio:
-
-```text
-websiteUrl = https://agenda.negocio.cl
-recordName = _agenda-verification.agenda.negocio.cl
-```
-
 ### 7.2 Challenge raw: política obligatoria
-
-La política ya no es preferencia sino invariante:
 
 ```text
 raw challenge
   -> memoria transitoria
-  -> respuesta one-time de emisión/rotación/reverify
+  -> respuesta one-time
   -> nunca persistencia
 
 hash/derivación(raw challenge)
   -> persistencia server-owned
 ```
 
-El raw challenge:
+Implementación física:
 
-- nunca se persiste;
-- nunca aparece en `GET /business-settings`;
-- nunca aparece en errores;
-- nunca aparece en logs;
-- nunca puede reconstruirse desde el hash.
+```text
+crypto.randomBytes(32).toString("base64url")
+SHA-256(Business + origin + verificationAttemptGeneration + raw)
+```
 
-Durante `/verify`, los TXT candidatos con prefijo exacto `agenda-verification=` se derivan/hash-ean y se comparan contra la derivación vigente. TXT completos con el secret no deben loggearse.
+La comparación usa `timingSafeEqual` sobre hashes válidos. Raw nunca aparece en GET, errores, logs ni DB.
 
 ### 7.3 Resolver server-side e inyectable
 
-Interfaz conceptual:
-
-```text
-resolveTxt(recordName) -> TXT records
-```
-
-Requisitos:
+`resolveTxt(recordName)` usa `node:dns` por defecto y es inyectable en tests.
 
 - sólo DNS TXT;
-- no HTTP fetch;
-- recordName derivado del hostname normalizado server-side;
-- fake resolver inyectable para tests;
-- errores/timeout sanitizados;
-- DNS error permanece fail-closed;
-- challenge/attempt generation vieja no verifica estado nuevo.
+- no HTTP;
+- recordName derivado server-side;
+- timeout sanitizado;
+- error fail-closed;
+- attempt generation vieja no verifica estado nuevo.
+
+**Timeout físico:** 3 segundos (`PUBLIC_WEB_DNS_TIMEOUT_MS`).
+
+**Retry físico:** una resolución DNS por invocación de `/verify`; no existe retry automático interno. El operador puede repetir `/verify` mientras el challenge siga pending/vigente y el rate limit lo permita.
 
 ## 8. Autoridad para configurar y verificar
 
-Configurar, reverify, rotate, delete o verify es tenant-interno.
-
 Cada comando exige:
 
-- User/sesión autenticada vigente;
-- Business vigente y activo;
-- Business de contexto de sesión;
-- Membership vigente para ese Business;
+- sesión autenticada vigente;
+- Business vigente/activo de contexto;
+- Membership vigente;
 - `Membership.role = admin`;
-- trusted authenticated panel origin vigente.
+- trusted authenticated panel origin.
 
 No conceden authority:
 
-- `Business.owner` por sí solo;
-- `User.role` o `User.business` legacy;
+- `Business.owner`;
+- `User.role`/`User.business` legacy;
 - seleccionar Business sin Membership;
-- `businessId` aportado para sustituir tenant de sesión;
+- businessId aportado para sustituir tenant de sesión;
 - verified public origin;
 - CORS permitido;
 - cookie incidental;
-- `Origin`, `Host`, `Referer`, slug, email, Appointment o CustomerProfile.
+- Origin/Host/Referer/slug/email/Appointment/CustomerProfile.
 
 `superadmin` sigue separado y no se convierte implícitamente en Membership admin.
 
 ## 9. Comandos y DTOs
 
-El PUT genérico de BusinessConfig no puede escribir server-owned trust fields.
-
-### 9.1 Configurar public web
+Comandos implementados:
 
 ```text
-PUT /api/business-settings/public-web
+PUT    /api/business-settings/public-web
+POST   /api/business-settings/public-web/verify
+POST   /api/business-settings/public-web/reverify
+POST   /api/business-settings/public-web/verification-challenge/rotate
+DELETE /api/business-settings/public-web
 ```
+
+Rate limit dedicado de verify/reverify/rotate: **20 por IP / 15 minutos**.
+
+### 9.1 Configurar public web
 
 Request strict:
 
@@ -543,195 +508,46 @@ Request strict:
 }
 ```
 
-Respuesta al emitir challenge nuevo:
-
-```json
-{
-  "status": "success",
-  "data": {
-    "publicWeb": {
-      "websiteUrl": "https://negocio.cl",
-      "bookingUrl": "https://negocio.cl/reservar",
-      "verificationStatus": "pending",
-      "verificationMethod": "dns_txt",
-      "verifiedOrigin": null,
-      "verifiedAt": null,
-      "verificationValidUntil": null,
-      "trustGeneration": 1,
-      "dnsVerification": {
-        "recordType": "TXT",
-        "recordName": "_agenda-verification.negocio.cl",
-        "recordValue": "agenda-verification=<one-time-challenge>",
-        "challengeExpiresAt": "<server timestamp>"
-      }
-    }
-  }
-}
-```
-
-`recordValue` sólo aparece cuando este mismo comando acaba de emitir un raw nuevo.
+`recordValue` sólo aparece cuando ese mismo comando acaba de emitir un raw nuevo.
 
 ### 9.2 Verificar challenge pending
 
-```text
-POST /api/business-settings/public-web/verify
-```
-
-Request strict: `{}`.
-
-Sólo opera sobre `pending` con challenge vigente. Tras TXT correcto devuelve, conceptualmente:
-
-```json
-{
-  "publicWeb": {
-    "websiteUrl": "https://negocio.cl",
-    "bookingUrl": "https://negocio.cl/reservar",
-    "verificationStatus": "verified",
-    "verificationMethod": "dns_txt",
-    "verifiedOrigin": "https://negocio.cl",
-    "verifiedAt": "<server timestamp>",
-    "verificationValidUntil": "<server timestamp>",
-    "trustGeneration": 1,
-    "dnsVerification": null
-  }
-}
-```
-
-Invocar `/verify` estando verified no renueva ni extiende nada y no se trata como éxito idempotente de renovación.
+Request strict `{}`. Sólo pending vigente. Verified requiere reverify explícito.
 
 ### 9.3 Re-verification / renewal
 
-```text
-POST /api/business-settings/public-web/reverify
-```
-
-Request strict: `{}`.
-
-Produce `pending`, avanza `trustGeneration`, crea attempt generation/challenge nuevos y devuelve raw DNS sólo one-time.
-
-Si ya está `pending`, no debe re-exponer el raw existente. El operador que perdió el raw usa `/verification-challenge/rotate`.
+Produce pending, avanza trust generation, crea attempt/challenge nuevo. Si ya está pending no re-expone raw; se usa rotate.
 
 ### 9.4 Rotar challenge pending
 
-```text
-POST /api/business-settings/public-web/verification-challenge/rotate
-```
-
-Sólo `pending`.
-
-- invalida challenge/hash anteriores;
-- avanza `verificationAttemptGeneration`;
-- no avanza `trustGeneration` si ya no existe una trust efectiva que revocar;
-- devuelve raw nuevo one-time;
-- conserva URLs.
+Sólo pending. Invalida challenge/hash anterior, avanza attempt generation, conserva URLs y no avanza trust generation innecesariamente.
 
 ### 9.5 Limpiar configuración
 
-```text
-DELETE /api/business-settings/public-web
-```
-
-Idempotente respecto del estado visible.
-
-Debe:
-
-- limpiar URLs y pending challenge material;
-- revocar trust efectiva;
-- avanzar `trustGeneration` cuando exista un epoch anterior que deba invalidarse;
-- invalidar cualquier Delivery/challenge C2 de generations anteriores;
-- proyectar `unconfigured`.
-
-Una implementación puede conservar una revision/tombstone server-owned para que delete no haga posible reutilizar una generation anterior.
+DELETE visible es idempotente. Limpia URLs/challenge, revoca trust y conserva revision server-owned para anti-ABA.
 
 ## 10. GET Business Settings
 
-`GET /api/business-settings` sigue semánticamente read-only:
+`GET /api/business-settings` sigue read-only:
 
 - no materializa BusinessConfig;
 - no genera/rota challenge;
 - no resuelve DNS;
 - no renueva freshness;
-- no produce `verified`.
+- no produce verified.
 
-Shape estable:
+Unconfigured proyecta URLs null/status unconfigured/method dns_txt/trustGeneration 0 para Business nunca configurado. Pending proyecta recordType/name/challengeExpiresAt y `recordValue:null`. Verified proyecta verifiedOrigin/verifiedAt/validUntil.
 
-### 10.1 Unconfigured
-
-```json
-{
-  "publicWeb": {
-    "websiteUrl": null,
-    "bookingUrl": null,
-    "verificationStatus": "unconfigured",
-    "verificationMethod": "dns_txt",
-    "verifiedOrigin": null,
-    "verifiedAt": null,
-    "verificationValidUntil": null,
-    "trustGeneration": 0,
-    "dnsVerification": null
-  }
-}
-```
-
-`trustGeneration` puede ser mayor que 0 después de revocaciones previas; 0 es el default de un Business nunca configurado.
-
-### 10.2 Pending
-
-```json
-{
-  "publicWeb": {
-    "websiteUrl": "https://negocio.cl",
-    "bookingUrl": "https://negocio.cl/reservar",
-    "verificationStatus": "pending",
-    "verificationMethod": "dns_txt",
-    "verifiedOrigin": null,
-    "verifiedAt": null,
-    "verificationValidUntil": null,
-    "trustGeneration": 2,
-    "dnsVerification": {
-      "recordType": "TXT",
-      "recordName": "_agenda-verification.negocio.cl",
-      "recordValue": null,
-      "challengeExpiresAt": "<server timestamp>"
-    }
-  }
-}
-```
-
-### 10.3 Verified
-
-```json
-{
-  "publicWeb": {
-    "websiteUrl": "https://negocio.cl",
-    "bookingUrl": "https://negocio.cl/reservar",
-    "verificationStatus": "verified",
-    "verificationMethod": "dns_txt",
-    "verifiedOrigin": "https://negocio.cl",
-    "verifiedAt": "<server timestamp>",
-    "verificationValidUntil": "<server timestamp>",
-    "trustGeneration": 2,
-    "dnsVerification": null
-  }
-}
-```
-
-Nunca exponer:
-
-- `challengeHash`;
-- raw challenge;
-- `verificationAttemptGeneration` si no es necesario para UX;
-- resolver internals;
-- stack/driver details.
+Nunca expone challengeHash, raw, attemptGeneration, fence token ni resolver internals.
 
 ## 11. CORS público credentialless
 
-6.2.6-B integra verified public origins con la superficie headless pública sin mezclarlos con la frontera autenticada. El contrato separa explícitamente dos decisiones distintas:
+6.2.6-B separa:
 
-1. **CORS preflight eligibility:** si el navegador puede recibir un grant CORS credentialless para una route class pública/headless desde ese Origin;
-2. **tenant binding de la request real:** si la operación real, una vez resuelto su Business explícito, puede continuar desde ese Origin concreto.
+1. **CORS preflight eligibility**;
+2. **tenant binding de la request real**.
 
-Un preflight exitoso nunca sustituye el segundo paso.
+Preflight exitoso nunca sustituye el segundo paso.
 
 ### 11.1 Invariantes
 
@@ -748,275 +564,178 @@ verified public origin
   != admin authority
 ```
 
-Sólo la política interna server-controlled vigente del panel puede conceder `Access-Control-Allow-Credentials: true`. En la baseline, esa política está vinculada a `FRONTEND_URL`; 6.2.6-B no la sustituye.
+Sólo la política server-controlled del panel puede conceder credentials, salvo que una ruta defina explícitamente una política más restrictiva como `/read` (siempre credentialless).
 
-Un origin público verificado debe recibir, cuando corresponda, CORS únicamente para rutas públicas/headless y con `credentials:false` semántico; nunca obtiene `Access-Control-Allow-Credentials: true` por `publicWeb`.
+### 11.2 Cardinalidad
 
-La verificación DNS de un origin no lo añade a `assertTrustedAuthenticatedOrigin` ni a ninguna allowlist credentialed.
+`verifiedOrigin` no lleva índice unique. Origin no sustituye businessId/slug. Lookup por Origin puede encontrar 0/1/múltiples Businesses.
 
-### 11.2 Cardinalidad: `verifiedOrigin` no identifica un Business único
+### 11.3 Preflight `OPTIONS`
 
-El contrato del MVP es:
+Para route class pública/headless trust-bound:
 
 ```text
-Business -> máximo un verified public origin
+route class
+AND Origin normalizado
+AND existe >=1 Business activo con trust fresh para Origin
+-> CORS credentialless elegible
 ```
 
-No existe la garantía inversa. Está permitido, por ejemplo:
+No selecciona tenant, no depende de body ni de valores futuros de headers y no concede authority.
+
+### 11.4 Request real browser: binding exacto
+
+Con header Origin, primero se resuelve Business explícito según 6.2.6-A y después, antes de controller/side effect, se exige:
 
 ```text
-Business A
-websiteUrl = https://estudio.cl
-bookingUrl = https://estudio.cl/a/reservar
-
-Business B
-websiteUrl = https://estudio.cl
-bookingUrl = https://estudio.cl/b/reservar
-```
-
-si A y B han demostrado por separado control del mismo hostname y ambas trust permanecen fresh.
-
-Por tanto:
-
-- `verifiedOrigin` no lleva índice global `unique`;
-- Origin no sustituye `businessId`/slug ni los mecanismos públicos explícitos de 6.2.6-A;
-- una búsqueda server-side por Origin puede producir cero, uno o múltiples Businesses;
-- CORS no puede tratar `Origin -> Business` como una función unívoca;
-- el aislamiento tenant continúa dependiendo del Business explícitamente resuelto y del scoping/repositorios del backend.
-
-### 11.3 Preflight `OPTIONS`: sólo elegibilidad CORS
-
-Un preflight no contiene el body de la futura request. `Access-Control-Request-Headers` puede declarar nombres de headers futuros, pero no sus valores. Por ello `OPTIONS` no intenta resolver el Business futuro cuando éste sólo será conocido por body o por el valor de un custom header.
-
-Para una route class que el servidor clasifica como pública/headless y compatible con CORS dinámico, la elegibilidad conceptual es:
-
-```text
-route class pública/headless
-AND request Origin normalizado válido
-AND existe >= 1 Business cuya publicWeb trust para ese mismo Origin sea fresh
--> CORS preflight elegible credentialless
-```
-
-Una trust cuenta como fresh para esta decisión sólo si, para ese Business:
-
-```text
-verificationStatus == verified
-AND verifiedOrigin == origin actual de websiteUrl
-AND verifiedOrigin == request Origin normalizado
-AND now < verificationValidUntil
-AND trustGeneration es la vigente para ese estado
-```
-
-Si no existe ninguna trust fresh para ese Origin, 6.2.6-B no concede el grant CORS dinámico.
-
-El preflight:
-
-- no selecciona tenant;
-- no valida ownership de Business;
-- no concede tenant authority;
-- no concede session authority;
-- no concede Membership/admin authority;
-- no habilita rutas internas;
-- no autoriza side effects;
-- no depende del body inexistente;
-- no depende del valor futuro de `x-business-id`, `x-business-slug` u otro custom header;
-- no usa `Referer` ni cookies como prueba de domain trust;
-- mantiene `credentials:false` para este grant público.
-
-Un preflight permitido significa únicamente que el navegador puede intentar la request pública posterior. No afirma que esa request posterior esté autorizada para ningún Business concreto.
-
-### 11.4 Request real browser: binding exacto al Business resuelto
-
-Cuando la request pública real presenta header `Origin`, primero conserva el contrato público existente para resolver el Business explícito mediante los mecanismos de 6.2.6-A. Después y **antes de cualquier controller o side effect público afectado**, debe comprobar server-side:
-
-```text
-Business explícitamente resuelto
+Business resuelto
 AND request Origin normalizado
-AND Business.publicWeb.verificationStatus == verified
-AND Business.publicWeb.verifiedOrigin == origin actual de websiteUrl
-AND Business.publicWeb.verifiedOrigin == request Origin normalizado
-AND now < Business.publicWeb.verificationValidUntil
-AND Business.publicWeb.trustGeneration es la vigente
+AND status verified
+AND verifiedOrigin == websiteUrl origin
+AND verifiedOrigin == request Origin
+AND now < verificationValidUntil
+AND trustGeneration vigente
 ```
 
-Sólo entonces puede continuar la operación browser.
-
-Ejemplo de mismatch:
-
-```text
-Origin = https://a.cl
-Business solicitado = B
-B.verifiedOrigin = https://b.cl
-```
-
-Resultado obligatorio:
-
-```text
-reject fail-closed
-antes de controller/side effect
-sin creación ni mutación parcial
-```
-
-El hecho de que `https://a.cl` haya superado un preflight porque existe una trust fresh para Business A no concede permiso para operar Business B.
-
-El Business sigue siendo el tenant explícito; `Origin` funciona aquí como binding adicional de navegador a la publicWeb trust de **ese mismo Business**, no como selector de tenant.
+Mismatch falla cerrado antes de mutación.
 
 ### 11.5 Shared origin válido
 
-Si:
-
-```text
-Business A verifiedOrigin = https://estudio.cl fresh
-Business B verifiedOrigin = https://estudio.cl fresh
-```
-
-entonces:
-
-```text
-OPTIONS desde https://estudio.cl
--> elegible credentialless
-
-request real desde https://estudio.cl + Business A explícito
--> puede continuar si el resto del contrato A es válido
-
-request real desde https://estudio.cl + Business B explícito
--> puede continuar si el resto del contrato B es válido
-```
-
-A y B no comparten datos ni autoridad por compartir Origin. Cada request resuelve un Business concreto y todos los recursos siguen tenant-scoped por ese Business.
+Business A y B pueden compartir `https://estudio.cl` si ambos demostraron DNS. Preflight puede permitir el origin; cada request real resuelve Business A o B explícitamente y mantiene aislamiento tenant.
 
 ### 11.6 Requests públicas sin `Origin`
 
-Se preserva expresamente el contrato headless de 6.2.6-A para server-to-server, CLI, backend-to-backend y otros callers non-browser/same-origin compatibles que no presentan header `Origin`.
-
-```text
-absence of Origin
-!= invalid public request
-```
-
-La ausencia de `Origin` no dispara una comprobación CORS inexistente ni convierte `publicWeb` en autenticación general de la API pública.
-
-Una request pública sin `Origin`:
-
-- sigue exigiendo Business explícito según 6.2.6-A;
-- sigue sometida a validación, tenant scoping y ownership propios de la ruta;
-- no obtiene session/Membership/admin authority;
-- no necesita demostrar un browser-origin binding sólo por existir 6.2.6-B;
-- no puede usar esta excepción para acceder a rutas internas, que conservan sus fronteras independientes.
-
-Las operaciones que por su propio contrato sí dependen de publicWeb trust —por ejemplo el destino C2 después del cutover— continúan exigiendo esa trust aunque el caller no presente `Origin`. Esta sección sólo evita usar CORS como autenticación general de la API headless.
+Se preserva 6.2.6-A para server-to-server/CLI/backend callers. Ausencia de Origin no es autenticación ni invalida por sí sola la request pública. Sigue requiriéndose Business explícito y contrato de la ruta.
 
 ### 11.7 Cookies incidentales y panel authority
 
-Incluso si un navegador envía accidentalmente una cookie administrativa desde un verified public origin:
+PublicWeb nunca vuelve credentialed una ruta ni abre internal routes. `FRONTEND_URL` conserva política independiente de panel para las rutas que correspondan.
 
-- el CORS público no se vuelve credentialed;
-- la cookie no convierte una ruta pública en interna;
-- las rutas internas continúan exigiendo trusted authenticated panel origin + sesión + Membership según su política;
-- el origin público no obtiene internal/admin data.
+### 11.8 `/read` bearer-authorized después del exchange
 
-Si un mismo string de origin coincide también con `FRONTEND_URL`, cualquier permiso credentialed existe por la política independiente del panel, no por `publicWeb.verified`.
+`POST /api/guest-appointments/read` consume una capability READ ya emitida. Su authority es exclusivamente:
 
-CORS continúa siendo una política de navegador, no una primitive de autorización backend. Clientes no-browser no quedan autorizados por poder falsificar u omitir `Origin`; siguen sujetos al contrato de la ruta y al tenant explícito.
+```text
+Business + Appointment + READ + bearer
+```
+
+El preflight no conoce el bearer futuro y **no** puede depender de current publicWeb freshness. Por eso esa ruta exacta admite CORS credentialless desde un Origin sintácticamente válido sin consultar publicWeb.
+
+- `/read` no usa `bindExplicitPublicBusinessOrigin`;
+- nunca devuelve `Access-Control-Allow-Credentials:true`, incluso si Origin == `FRONTEND_URL`;
+- cookie admin incidental no concede nada;
+- bearer ausente/inválido falla por validación/`GUEST_APPOINTMENT_CAPABILITY_INVALID_PROOF`;
+- no se amplía este tratamiento a otras rutas.
+
+`/read/challenge` y `/read/verify` continúan fresh-trust-bound para browser callers.
+
+### 11.9 Admisión pre-lookup y lookup bounded
+
+El CORS middleware necesita Mongo antes del limiter global `/api`, por lo que existe un limiter dedicado **antes** del lookup dinámico:
+
+```text
+PUBLIC_WEB_CORS_LOOKUP_RATE_LIMIT = 200
+PUBLIC_WEB_CORS_LOOKUP_RATE_WINDOW_MS = 15 min
+```
+
+Después del presupuesto responde `429 PUBLIC_WEB_CORS_RATE_LIMITED` sin consultar MongoDB.
+
+Se omiten del lookup/limiter dinámico las requests sin Origin, rutas no dinámicas, `/read` bearer-authorized y `FRONTEND_URL` (política panel independiente).
+
+El lookup es existence-oriented mediante agregación:
+
+```text
+$match verifiedOrigin/status/validUntil/websiteUrl/generation
+$lookup Business por _id
+$unwind
+$match Business.isActive=true
+$limit: 1
+$project _id
+```
+
+No materializa todos los Businesses que comparten Origin.
 
 ## 12. Errores públicos estables
 
-Los nombres exactos pueden alinearse con el envelope común durante implementación, pero deben existir códigos sanitizados equivalentes:
+Códigos sanitizados equivalentes:
 
 | HTTP | Código | Semántica |
 |---|---|---|
-| 400 | `PUBLIC_WEB_INVALID_URL` | URL o puerto viola contrato |
-| 400 | `PUBLIC_WEB_ORIGIN_MISMATCH` | bookingUrl no same-origin |
+| 400 | `PUBLIC_WEB_INVALID_URL` | URL/puerto viola contrato |
+| 400 | `PUBLIC_WEB_ORIGIN_MISMATCH` | booking no same-origin |
 | 400 | `VALIDATION_ERROR` | DTO strict inválido |
 | 401 | `UNAUTHENTICATED` | sin sesión válida |
 | 403 | `TENANT_ADMIN_REQUIRED` | sin Membership admin |
 | 403 | `TRUSTED_AUTHENTICATED_ORIGIN_REQUIRED` | falla panel origin |
 | 409 | `PUBLIC_WEB_UNCONFIGURED` | falta configuración |
 | 409 | `PUBLIC_WEB_NOT_PENDING` | operación requiere pending |
-| 409 | `PUBLIC_WEB_REVERIFICATION_REQUIRED` | verify sobre verified no renueva trust |
-| 409 | `PUBLIC_WEB_CHALLENGE_EXPIRED` | challenge DNS vencido |
+| 409 | `PUBLIC_WEB_REVERIFICATION_REQUIRED` | verify sobre verified |
+| 409 | `PUBLIC_WEB_CHALLENGE_EXPIRED` | challenge vencido, incluido expiry durante `resolveTxt` |
 | 409 | `PUBLIC_WEB_VERIFICATION_NOT_PROVEN` | TXT no coincide |
-| 409 | `PUBLIC_WEB_STATE_CHANGED` | attempt/trust generation cambió |
+| 409 | `PUBLIC_WEB_STATE_CHANGED` | attempt/trust state cambió |
 | 409 | `PUBLIC_WEB_TRUST_EXPIRED` | trust administrativa expirada |
-| 429 | `RATE_LIMITED` | límite de comando costoso |
+| 429 | `PUBLIC_WEB_CORS_RATE_LIMITED` / limiter de comando | rate limit |
 | 503 | `PUBLIC_WEB_DNS_UNAVAILABLE` | resolver falló/timeout |
 
-C2 no debe filtrar cuál de estas razones invalidó un proof. Una Delivery/challenge ligada a generation vieja, expirada o revocada debe producir el mismo `GUEST_APPOINTMENT_CAPABILITY_INVALID_PROOF` que otros proofs inválidos.
-
-Nunca incluir raw challenge, TXT completos, stack o resolver internals.
+C2 stale proof siempre usa `GUEST_APPOINTMENT_CAPABILITY_INVALID_PROOF` sin filtrar la causa.
 
 ## 13. Idempotencia y concurrencia
 
 ### 13.1 PUT
 
-Misma pareja normalizada: no-op semántico; no renueva freshness ni generation.
+Misma pareja normalizada: no-op, sin renewal/generation change.
 
 ### 13.2 Verify
 
-`POST /verify` sólo verifica `pending`. `verified -> verified` no es un renewal idempotente; requiere `/reverify`.
+Sólo pending. Verified requiere reverify.
 
 ### 13.3 Delete
 
-Delete visible es idempotente, pero debe conservar suficiente revision server-owned para que una generation revocada no reaparezca.
+Visible idempotente, con revision server-owned anti-replay.
 
 ### 13.4 DNS fence
 
 ```text
-read pending attemptGeneration A / trustGeneration N
+read attempt A / trust N / challengeExpiresAt E en T0
 -> resolve DNS
--> conditional write WHERE attemptGeneration=A
-                         AND trustGeneration=N
+-> proofObservedAt = T1
+-> exigir E > T1
+-> conditional write WHERE attempt=A
+                         AND trust=N
                          AND origin=expected
                          AND status=pending
+                         AND challengeExpiresAt > T1
 ```
 
-No blind update de `status=verified`.
+El timestamp de entrada no puede autorizar una prueba DNS observada después de la expiración.
 
 ### 13.5 Trust generation y linearización de delivery
 
-La implementación futura debe definir una frontera de autorización de envío linealizable respecto de revocación de `trustGeneration`.
+Mecanismo físico implementado: `BusinessConfig.publicWeb.authorityFence` con token CSPRNG `select:false`, `trustGeneration` y `expiresAt`.
 
-Semántica obligatoria:
+TTL del fence: **2 minutos**.
 
-- si la revocación N -> N+1 se confirma antes de que el worker cruce la frontera autorizada de envío, el worker N no puede enviar;
-- una vez confirmada la revocación, ningún nuevo outbound delivery puede comenzar bajo N;
-- el worker debe revalidar origin + generation + status + freshness inmediatamente antes del side effect externo;
-- el mecanismo físico puede ser CAS/fence/lease/mutex tenant-scoped equivalente, pero un simple snapshot leído al inicio del job no basta;
-- cualquier espera/reclaim que haga perder el fence obliga a revalidar antes del envío.
+Semántica:
 
-Esto evita la carrera `read N -> admin revokes N -> worker sends N`.
+- acquire sólo si status/origin/generation/freshness siguen vigentes y no existe fence activo;
+- confirm exige mismo token/generation y freshness;
+- release sólo por token/generation propietario;
+- revocaciones/config changes requieren no-active-fence;
+- si revocación N->N+1 confirma antes del fence autorizado, outbound N no puede comenzar;
+- wait/reclaim/fence expiry obliga revalidar;
+- si el proveedor externo ya aceptó el correo antes de la revocación, no puede retirarse, pero exchange queda inválido.
 
-Si un delivery ya fue aceptado externamente antes de que la revocación linealice, el correo no puede retirarse, pero su exchange debe quedar invalidado inmediatamente por la nueva generation.
+El exchange usa el mismo fence antes del mint para cerrar el TOCTOU entre segunda revalidación y creación de capability.
 
 ## 14. Comportamiento C2 final
 
 ### 14.1 Resolver trust snapshot
 
-El resolver C2 debe devolver un snapshot equivalente a:
-
-```text
-{
-  origin,
-  trustGeneration,
-  verificationValidUntil
-}
-```
-
-sólo si:
-
-```text
-Business vigente
-AND publicWeb.verificationStatus == verified
-AND publicWeb.verifiedOrigin == origin actual de websiteUrl
-AND now < publicWeb.verificationValidUntil
-AND trustGeneration vigente
-```
-
-Si no, fail closed.
+Devuelve `{origin, trustGeneration, verificationValidUntil}` sólo para Business activo con publicWeb verified/coherent/fresh.
 
 ### 14.2 Delivery/job ligados a trustGeneration
 
-Todo job/Delivery C2 que llegue a la fase de emisión debe conservar el snapshot de public-web trust utilizado, como mínimo:
+Job/Delivery conservan como mínimo:
 
 ```text
 business
@@ -1024,178 +743,123 @@ publicWebTrustGeneration
 trustedOrigin
 ```
 
-Puede almacenar además `verificationValidUntil` como snapshot diagnóstico, pero authority siempre se revalida contra el estado actual.
+Una Delivery N no es válida bajo N+1. Delete/origin change/expiry/reverify invalidan Delivery/challenge N; same-origin booking path no incrementa generation si trust sigue fresh.
 
-Una Delivery emitida bajo generation N no puede ser válida bajo N+1.
-
-Revocan N para C2:
-
-- origin change;
-- delete;
-- trust expiry;
-- inicio de re-verification/renewal;
-- cualquier revocación explícita futura del mismo trust epoch.
-
-No revoca N innecesariamente:
-
-- cambiar únicamente `bookingUrl` path dentro del mismo origin mientras la trust sigue fresh.
-
-### 14.3 Fragment y scope C2 permanecen intactos
-
-URL:
+### 14.3 Fragment y scope C2
 
 ```text
 https://negocio.cl/appointment-access#businessId=...&appointmentId=...&verificationId=...&purpose=...&challenge=...
 ```
 
-No mover bearer/challenge a query. No `returnUrl` público.
-
-Authority sigue exactamente:
-
-```text
-one Business + one Appointment + READ
-```
-
-No CANCEL, RESCHEDULE ni PAYMENT.
+Bearer/challenge siguen en fragment. Authority sigue exactamente Business + Appointment + READ.
 
 ### 14.4 Destino de email
 
-Únicamente `Appointment.guestContact` coherente con el Business.
-
-No fallback a `Appointment.client`, `User.email`, CustomerProfile, owner o request body.
+Sólo `Appointment.guestContact`. No fallback a Appointment.client/User.email/CustomerProfile/owner/body.
 
 ## 15. Orden de operaciones y worker race
 
-Orden objetivo:
-
 ```text
-1. claim/reconcile job C2
-2. resolve fresh trust snapshot {origin, trustGeneration, validUntil}
-3. si no existe -> fail closed antes de issueVerificationForBusiness()
-4. cargar Appointment tenant-scoped + guestContact
-5. emitir C1 challenge
-6. crear/adjuntar Delivery ligada a trustGeneration + trustedOrigin
-7. construir access URL desde trustedOrigin
-8. adquirir/cruzar frontera de delivery autorizada para esa misma generation
-9. revalidar status=verified + same origin + same generation + freshness
-10. sólo entonces iniciar side effect externo
-11. enviar exclusivamente a guestContact
+1. claim/reconcile job
+2. resolve fresh trust snapshot
+3. fail closed si no existe
+4. load Appointment tenant-scoped + guestContact
+5. issue C1
+6. Delivery ligada a generation/origin
+7. build URL
+8. acquire persisted authority fence
+9. confirm fence + revalidate status/origin/generation/freshness
+10. iniciar outbound side effect
+11. enviar sólo a guestContact
 ```
 
-La frontera de los pasos 8-10 debe estar serializada/fenced respecto de revocaciones del mismo Business. No basta comprobar trust una vez al inicio.
-
-En cualquier pérdida de generation/freshness/fence:
-
-- marcar/fallar el intento según reglas C2 existentes;
-- revocar artefactos C1 emitidos si corresponde;
-- no enviar email;
-- no exponer bearer;
-- no usar fallback.
+Pérdida de generation/freshness/fence: no send, no fallback, no bearer, artefactos fallan/revocan según C2.
 
 ## 16. Exchange C2 y revocación post-delivery
 
-`exchangeGuestAppointmentReadChallenge()` debe añadir una revalidación server-side de public-web trust antes de consumir el proof C1 y antes de crear la capability READ.
-
-Debe comprobar que la Delivery entregada:
+Antes de consumir C1 y antes de mint READ se revalida:
 
 ```text
-business == Business solicitado
-publicWebTrustGeneration == trustGeneration vigente
-trustedOrigin == verifiedOrigin actual
+Delivery.business == Business solicitado
+Delivery.publicWebTrustGeneration == trustGeneration vigente
+Delivery.trustedOrigin == verifiedOrigin actual
 verificationStatus == verified
 now < verificationValidUntil
 ```
 
-Si cualquiera falla:
+Fallo => `GUEST_APPOINTMENT_CAPABILITY_INVALID_PROOF`.
 
-```text
-GUEST_APPOINTMENT_CAPABILITY_INVALID_PROOF
-```
+Un correo/Delivery N queda inútil para exchange tras N+1, delete, origin change, expiry o reverify.
 
-aunque:
+### 16.1 Capability READ ya canjeada
 
-- el correo se haya entregado correctamente;
-- el C1 challenge no haya alcanzado su TTL natural;
-- la Appointment siga existiendo;
-- el mismo hostname vuelva a aparecer posteriormente.
+Una READ capability canjeada válidamente **antes** de publicWeb revocation conserva su lifetime C2 existente. La revocación invalida Delivery/challenge exchange futuro; no revoca retroactivamente el bearer ya mintado.
 
-Consecuencia: un correo emitido bajo generation N queda criptográficamente inútil para exchange después de N+1.
-
-Este blocker atraviesa Delivery/challenge exchange. No redefine en esta iteración la vida de una capability READ que ya fue canjeada válidamente antes de la revocación; esa capability conserva el contrato C2 existente salvo decisión posterior explícita.
+La superficie HTTP respeta esto: `/read` ya no depende de fresh publicWeb, mientras `/read/verify` stale continúa `INVALID_PROOF`.
 
 ## 17. Cutover desde trust root global
 
-Estado actual:
-
-```text
-C2 -> GUEST_APPOINTMENT_ACCESS_ORIGIN global
-```
-
-Estado final:
+Estado final implementado:
 
 ```text
 C2 -> BusinessConfig.publicWeb fresh verified trust tenant-scoped
 ```
 
-Cutover obligatorio:
-
-1. implementar persistencia/lifecycle/freshness/generations;
-2. implementar DNS verification + re-verification;
-3. implementar CORS público credentialless con preflight eligibility separada del tenant binding de la request real;
-4. ligar C2 Delivery/job a `trustGeneration`;
-5. revalidar generation antes de outbound delivery y en exchange;
-6. cambiar C2 para depender sólo del resolver tenant-scoped;
-7. eliminar la lectura runtime de `GUEST_APPOINTMENT_ACCESS_ORIGIN` del flujo C2.
-
-No se acepta estado final:
+No se acepta ni existe runtime final:
 
 ```text
 verifiedOrigin ?? GUEST_APPOINTMENT_ACCESS_ORIGIN
 ```
 
-No backfill implícito de trust desde la variable global. Cada Business requiere su prueba DNS propia, incluso cuando comparte el mismo Origin con otro Business.
+No backfill implícito. Cada Business demuestra DNS aunque comparta Origin.
 
 ## 18. Invariantes de seguridad
 
-1. Máximo un origin público verificado por Business en el MVP.
-2. `verifiedOrigin` no es globalmente unique entre Businesses; un mismo origin puede estar fresh-verified para múltiples Businesses.
-3. HTTPS obligatorio y puerto efectivo 443; puertos no estándar rechazados.
-4. `bookingUrl` exact same-origin con `websiteUrl`.
-5. Sin username/password/query/fragment; website sin path significativo.
+1. Máximo un origin público por Business en MVP.
+2. `verifiedOrigin` no es globalmente unique; shared origins permitidos.
+3. HTTPS/443; puertos no estándar rechazados.
+4. booking exact same-origin.
+5. Sin credentials/query/fragment; website sin path significativo.
 6. No wildcard/IP/localhost/single-label.
-7. Sólo DNS TXT server-side puede producir verified.
-8. Raw DNS challenge nunca se persiste, aparece en GET, errores ni logs.
-9. Persistencia contiene sólo hash/derivación suficiente.
-10. Verified trust posee `verifiedAt` y `verificationValidUntil` server-owned.
-11. `now >= verificationValidUntil` invalida authority aun sin background job.
-12. Existe re-verification explícita; `/verify` no extiende trust verified por no-op.
-13. `verificationAttemptGeneration` cerca DNS TOCTOU.
-14. `trustGeneration` cerca el epoch de public trust que atraviesa C2.
-15. Origin change, delete, expiry/reverification invalidan Deliveries/challenges C2 de generations anteriores.
-16. Same-origin booking path change no incrementa trust generation innecesariamente.
-17. Worker no puede iniciar outbound delivery sobre una generation revocada; debe existir fence linealizable.
-18. Exchange revalida generation + origin + status + freshness.
-19. Stale generation produce C2 `INVALID_PROOF` aunque C1 TTL siga vigente.
-20. C2 mantiene bearer/challenge en fragment.
-21. C2 sigue exactamente Business + Appointment + READ.
-22. Email C2 sigue sólo a `Appointment.guestContact`.
-23. Business sin fresh verified trust falla cerrado antes de emitir artefactos C2 cuando sea posible.
-24. `OPTIONS` decide únicamente elegibilidad CORS, nunca tenant authority.
-25. Preflight no depende del body ni del valor futuro de custom headers.
-26. El grant CORS público dinámico permanece credentialless y nunca concede `Access-Control-Allow-Credentials: true` por `publicWeb`.
-27. La request browser real vuelve a resolver el Business explícitamente según 6.2.6-A.
-28. Una request browser con `Origin` sólo continúa si ese Origin coincide con la publicWeb trust fresh del mismo Business resuelto.
-29. El binding Origin + Business ocurre antes de cualquier controller o side effect público afectado.
-30. Shared origin A/B no rompe aislamiento tenant; Origin no se usa como tenant identifier único.
-31. Requests públicas sin `Origin` conservan el contrato headless 6.2.6-A y siguen exigiendo Business explícito.
-32. Verified public origin no se convierte en trusted panel/credentialed/session/Membership/admin authority.
-33. Sólo política interna del panel puede conceder `Access-Control-Allow-Credentials: true`.
-34. CORS no equivale a autorización backend.
-35. GET Business Settings continúa read-only.
-36. Estado final C2 no conserva fallback global.
-37. Payment/CANCEL/RESCHEDULE permanecen fuera de alcance.
+7. Sólo DNS TXT server-side produce verified.
+8. Raw challenge nunca persiste/GET/error/log.
+9. Sólo hash/derivación persistida.
+10. Verified trust tiene verifiedAt/validUntil server-owned.
+11. `now >= validUntil` invalida authority.
+12. Reverify explícito; verify no renueva verified.
+13. attemptGeneration cerca DNS TOCTOU.
+14. Un challenge debe seguir vigente en `proofObservedAt`, después del resolver DNS; el CAS exige el mismo límite temporal.
+15. `verifiedAt` y `verificationValidUntil` se derivan de `proofObservedAt`, no del timestamp inicial de la request.
+16. trustGeneration cerca epoch C2 y anti-ABA.
+17. Origin change/delete/expiry/reverify invalidan Delivery/challenge C2 previos.
+18. Booking path same-origin no incrementa generation innecesariamente.
+19. Worker no inicia outbound sobre generation revocada; persisted fence linealizable.
+20. Exchange revalida generation/origin/status/freshness antes C1 y mint.
+21. Stale generation produce INVALID_PROOF.
+22. C2 bearer/challenge permanecen fragment.
+23. C2 sigue Business + Appointment + READ.
+24. Email C2 sólo guestContact.
+25. Business sin fresh trust falla antes de emitir artefactos C2 cuando es posible.
+26. OPTIONS decide elegibilidad CORS, nunca tenant authority.
+27. Preflight no depende de body/valores futuros de headers.
+28. Grant publicWeb es credentialless.
+29. Request browser real resuelve Business explícito 6.2.6-A.
+30. Origin browser debe coincidir con fresh trust del Business exacto.
+31. Binding ocurre antes de controller/side effect.
+32. Shared origin no rompe aislamiento.
+33. Requests sin Origin preservan headless 6.2.6-A.
+34. Public origin no se vuelve panel/session/Membership/admin authority.
+35. `/read` bearer-authorized es excepción CORS exacta, siempre credentialless y no depende de current publicWeb.
+36. CORS no equivale a autorización backend.
+37. GET Business Settings sigue read-only.
+38. C2 no conserva fallback global.
+39. Dynamic CORS DB lookup está rate-limited antes de Mongo y bounded a existencia.
+40. `business_config_public_web_origin_fresh` no se declara en el schema Mongoose y no puede materializarse por esa vía; su autoridad física es exclusivamente `PUBLIC_WEB_INDEX_SPEC` + migración + inspección/cutover gate.
+41. Índices legacy de BusinessConfig, incluido `business` unique, conservan su comportamiento histórico y no se desactivan globalmente.
+42. Capability READ ya mintada conserva lifetime C2 existente tras publicWeb revocation.
+43. Payment/CANCEL/RESCHEDULE permanecen fuera de alcance.
 
-## 19. Matriz mínima de tests futuros
+## 19. Matriz mínima de tests — implementada en el gate
 
 ### 19.1 URL validation y ports
 
@@ -1207,9 +871,9 @@ No backfill implícito de trust desde la variable global. Cada Business requiere
 | website con path | reject |
 | booking otro origin | reject |
 | `https://negocio.cl:8443` | reject |
-| `https://negocio.cl:443` | allow + normaliza a origin estándar |
+| `https://negocio.cl:443` | allow + normaliza |
 | IP/localhost/single-label/wildcard | reject |
-| casing/default port/IDN equivalente | normalización determinista |
+| casing/default port | determinista |
 
 ### 19.2 Tenant authority
 
@@ -1218,138 +882,140 @@ No backfill implícito de trust desde la variable global. Cada Business requiere
 | admin A configura A | allow |
 | worker A | 403 |
 | admin B intenta A | deny |
-| owner sin Membership admin | 403 |
+| owner sin Membership admin | deny |
 | User.role legacy | no authority |
-| superadmin sin Membership admin | no authority tenant implícita |
-| public verified origin intenta endpoint interno | no authority |
+| superadmin sin Membership admin | no tenant admin |
+| public verified origin intenta interno | no authority |
 
-### 19.3 Verification, freshness y re-verification
+El test superadmin se ejecuta en proceso independiente para no contaminarlo con el auth limiter real de 5 intentos/IP/10 min. No existe bypass productivo ni Membership artificial.
 
-| Caso | Resultado esperado |
-|---|---|
-| config nueva | pending |
-| TXT exacto | verified + `verifiedAt` + `verificationValidUntil` |
-| TXT incorrecto/ausente | no verified |
-| DNS error/timeout | fail closed |
-| challenge expirado | no verifica |
-| challenge viejo tras rotate | no verifica |
-| raw después de emisión | no existe en persistencia/GET/log/error |
-| freshness vigente | resolver C2 permite trust |
-| `now == verificationValidUntil` | expirada, fail closed |
-| verification expirada | bloquea C2 |
-| `/verify` sobre verified | no renueva por no-op |
-| `/reverify` | revoca generation anterior y crea pending/challenge nuevo |
-| re-verification exitosa | renueva `verifiedAt`/`verificationValidUntil` bajo generation nueva |
-| origin cambia durante DNS lookup | resultado viejo no aplica |
-| same-origin booking path change | conserva trustGeneration/freshness |
+### 19.3 Verification/freshness
 
-### 19.4 C2 generation y races
+- config nueva pending;
+- exact TXT verifies;
+- wrong/absent TXT fail;
+- DNS error/timeout fail closed;
+- challenge exact expiry;
+- challenge vigente en T0, resolver suspendido y `T1 >= challengeExpiresAt` => `PUBLIC_WEB_CHALLENGE_EXPIRED`, estado sigue pending y no existe fresh trust;
+- `T1 < challengeExpiresAt` + TXT correcto => verifies con `verifiedAt = T1` y `validUntil = T1 + 30 días`;
+- stale rotate/origin lookup fail;
+- raw nunca persiste/reaparece;
+- exact validUntil fail;
+- verify no renueva verified;
+- reverify generation nueva;
+- same-origin booking path conserva generation.
 
-| Caso | Resultado esperado |
-|---|---|
-| Business A origin A / B origin B | links aislados |
-| worker lee generation N, admin cambia a N+1 antes de delivery | no se envía enlace N |
-| worker espera/reclaim y pierde fence N | revalida y no envía |
-| email creado/entregado bajo N, luego origin revocado | exchange N = `INVALID_PROOF` |
-| delete después de delivery N | exchange N = `INVALID_PROOF` |
-| origin change después de delivery N | exchange N = `INVALID_PROOF` |
-| trust expiry después de delivery N | exchange N = `INVALID_PROOF` |
-| reverify N -> N+1 | challenges N inválidos |
-| same-origin booking path change | Delivery N sigue válida si trust sigue fresh |
-| C1 challenge aún dentro de TTL pero trust generation vieja | `INVALID_PROOF` |
-| request Host/Origin/Referer/returnUrl arbitrario | no altera destination |
-| fragment C2 | bearer/challenge sólo fragment |
-| destination | sólo `guestContact` |
-| Appointment.client/User.email | nunca fallback |
-| capability | exactamente READ |
+Los tests de carrera usan `nowProvider()` con T0/T1 controlados y promesa de resolver suspendido; no usan delays largos ni wall clock para establecer el límite.
 
-### 19.5 CORS, preflight y tenant binding
+### 19.4 C2 generations/races
 
-| Caso | Resultado esperado |
-|---|---|
-| A fresh `https://a.cl`, preflight desde `https://a.cl` a route class pública | allow credentialless |
-| Origin sin ninguna publicWeb trust fresh | no grant dinámico 6.2.6-B |
-| Origin anteriormente verified pero `now >= verificationValidUntil` | no grant dinámico 6.2.6-B |
-| `OPTIONS` sin body ni valor de business header | decide por route class + Origin + existencia de trust fresh; no tenant authority |
-| `Access-Control-Request-Headers: x-business-id` sin valor futuro | no intenta inferir tenant desde el nombre del header |
-| A fresh `https://a.cl`, B fresh `https://b.cl`, request real Origin A + Business B | reject antes del controller/side effect |
-| mismatch anterior sobre POST mutable | ninguna creación/mutación parcial |
-| Business A y B fresh con shared `https://estudio.cl` | preflight shared origin allow credentialless |
-| shared `https://estudio.cl` + request real Business A | allow si scoping/contrato A válido |
-| shared `https://estudio.cl` + request real Business B | allow si scoping/contrato B válido |
-| shared origin A/B | datos permanecen tenant-scoped; no cross-Business leakage |
-| request pública válida server-to-server sin `Origin` + Business explícito | conserva conducta headless 6.2.6-A |
-| request sin `Origin` pero sin Business explícito | sigue fallando según 6.2.6-A |
-| verified public origin con cookie admin incidental | no obtiene rutas internas |
-| verified public origin | sin `Access-Control-Allow-Credentials: true` por publicWeb |
-| verified origin intenta convertirse en trusted authenticated origin | reject/no authority |
-| `FRONTEND_URL` legítimo | conserva conducta credentialed existente por política independiente |
-| preflight permitido + request real tenant inválido | request real fail closed; preflight no autoriza |
-| caller non-browser falsifica/omite Origin | CORS no le concede authority; manda el contrato backend de la ruta |
+- worker N + admin revoke N antes de fence => no send;
+- wait/reclaim pierde fence => revalida/no send;
+- delivered N + delete/origin change/expiry/reverify => exchange INVALID_PROOF;
+- C1 aún vigente + stale publicWeb => INVALID_PROOF;
+- destination sólo guestContact;
+- fragment preservado;
+- READ único action implementado.
 
-### 19.6 Regression
+### 19.5 CORS/preflight/tenant binding
 
-- C1 permanece intacto;
-- `Appointment.guestContact` permanece Appointment-scoped y único destination C2;
-- C2 READ permanece Business + Appointment + READ;
-- Business Settings GET sigue read-only y defaults no materializan;
-- `DEFAULT_SLOT_DURATION_MINUTES` no cambia;
-- booking headless 6.2.6-A permanece intacto, incluidos callers públicos sin `Origin`;
-- Membership continúa siendo authority tenant;
-- trusted authenticated panel boundary permanece independiente;
-- Payment initiation/authority no se amplían;
-- CANCEL/RESCHEDULE permanecen fuera de alcance.
+- fresh origin preflight credentialless;
+- unknown/expired origin no grant;
+- OPTIONS sin body/valor de business header;
+- `Access-Control-Request-Headers` no infiere tenant;
+- A Origin + B Business reject antes controller;
+- mismatch mutable no deja partial mutation;
+- shared Origin A/B funciona para ambos con data isolation;
+- no-Origin server-to-server preserva 6.2.6-A;
+- public cookie no abre internal;
+- publicWeb nunca ACAC true;
+- FRONTEND_URL conserva política independiente fuera de `/read`;
+- `/read` preflight funciona sin current publicWeb y nunca es credentialed;
+- arbitrary Origin + invalid/missing bearer no obtiene datos;
+- delete/expiry/reverify después de mint no acortan capability READ ya emitida;
+- stale `/read/verify` sigue INVALID_PROOF.
 
-## 20. Criterios de aceptación funcional futuros
+### 19.6 Lookup DoS/storage
 
-6.2.6-B funcional no podrá considerarse cerrada hasta que:
+- 205 unknown-origin preflights demuestran máximo 200 aggregate lookups y posteriores 429 antes de DB;
+- fresh/expired/shared origins mantienen semántica correcta;
+- pipeline contiene `$limit:1`;
+- production-like migration se prueba con `autoIndex:false`;
+- migración materializa exactamente `PUBLIC_WEB_INDEX_SPEC`, non-unique y sin partial/sparse/hidden/TTL/collation especial;
+- segunda ejecución de migration es idempotente;
+- índice incompatible con mismo nombre/modificadores incompatibles falla cerrado y no se reemplaza destructivamente;
+- conexión aislada con `autoIndex:true` + modelo BusinessConfig cargado/inicializado materializa el índice legacy `{ business: 1 }` unique pero **no** `business_config_public_web_origin_fresh`;
+- con el índice publicWeb aún ausente, el runtime cutover gate falla cerrado: connect/model load no lo auto-repara;
+- remote startup falla si falta confirmación o índice y acepta sólo el índice físico compatible.
 
-1. BusinessConfig represente un único public origin por Business con lifecycle seguro, sin imponer unicidad global del origin entre Businesses.
-2. URL normalization aplique HTTPS/443/same-origin determinista.
-3. sólo tenant admin configure/verify/reverify/rotate/delete.
-4. DNS TXT sea único método y resolver sea server-side/injectable.
-5. raw challenge jamás se persista ni reaparezca después de la respuesta one-time.
-6. verified trust tenga freshness acotada server-owned.
-7. re-verification renueve mediante nueva prueba DNS real.
-8. `trustGeneration` invalide C2 stale deliveries/challenges.
-9. worker delivery esté fenced frente a revocación concurrente.
-10. exchange revalide generation/origin/status/freshness.
-11. same-origin booking path preserve trust sin invalidación innecesaria.
-12. CORS headless separe preflight eligibility credentialless de tenant binding exacto de la request real.
-13. un shared origin pueda servir a múltiples Businesses sin convertirse en tenant identifier ni romper aislamiento.
-14. requests públicas sin `Origin` conserven el contrato 6.2.6-A y no requieran CORS como autenticación general.
-15. `FRONTEND_URL` conserve su política legítima e independiente de credenciales.
-16. verified public origin nunca adquiera authenticated/session/admin authority.
-17. Business sin fresh verified trust falle cerrado en las operaciones que contractualmente dependen de publicWeb trust.
-18. `GUEST_APPOINTMENT_ACCESS_ORIGIN` deje de ser trust root runtime C2.
-19. fragment, guestContact y READ scope C2 permanezcan intactos.
-20. tests de freshness, worker race, post-delivery revocation, shared-origin, preflight/request binding y no-Origin formen parte del gate oficial.
-21. una revisión adversarial posterior apruebe código + tests + cutover.
+### 19.7 Regression
 
-## 21. Decisiones que requieren revisión humana antes de implementar
+- C1 intacto;
+- guestContact único destination;
+- C2 READ exact-scope;
+- GET Settings read-only;
+- 6.2.6-A/no-Origin intactos;
+- Membership authority intacta;
+- panel origin independiente;
+- Payment initiation/authority no ampliados;
+- CANCEL/RESCHEDULE fuera de alcance.
 
-El contrato fija las garantías; permanecen como parámetros de implementación a aprobar:
+## 20. Criterios de aceptación funcional
 
-1. **TTL numérico del challenge DNS pending.**
-2. **TTL numérico de verified public trust (`verificationValidUntil - verifiedAt`).** Debe ser acotado y distinto del TTL C1/C2.
-3. **Timeout/retry policy del resolver DNS.**
-4. **Rate limit de `/verify`, `/reverify` y rotate.**
-5. **Política adicional para hostnames especiales/reservados**, sobre los bloqueos ya definidos.
-6. **Representación física de `verificationAttemptGeneration` y `trustGeneration`.** Debe demostrar conditional writes y no permitir ABA/replay tras delete/recreate.
-7. **Mecanismo físico de linearización worker vs revocation.** CAS/fence/lease/mutex equivalente que impida comenzar un outbound send tras revocación confirmada.
-8. **Mecanismo físico de lookup CORS dinámico por Origin.** Debe soportar cero/uno/múltiples Businesses por Origin, decidir `OPTIONS` sólo por elegibilidad fresh de al menos una trust, mantener `credentials:false` y realizar el binding exacto contra el Business recién en la request real.
-9. **Envelope exacto de errores.** Los códigos contractuales deben integrarse sin exponer estado sensible.
+1. BusinessConfig representa un public origin por Business sin unicidad global inversa.
+2. URL policy HTTPS/443/same-origin determinista.
+3. Sólo tenant admin configura/verify/reverify/rotate/delete.
+4. DNS TXT server-side/injectable único método.
+5. Raw challenge sólo respuesta one-time.
+6. Freshness acotada server-owned.
+7. Reverify exige nueva prueba.
+8. trustGeneration invalida stale Delivery/challenge.
+9. worker delivery fenced contra revocación.
+10. exchange revalida antes C1 y mint.
+11. same-origin booking path preserva trust.
+12. CORS separa preflight de tenant binding.
+13. shared origin soportado sin tenant confusion.
+14. no-Origin preserva headless.
+15. FRONTEND_URL conserva política independiente.
+16. public origin no adquiere auth/admin authority.
+17. Business sin fresh trust falla donde corresponde.
+18. `GUEST_APPOINTMENT_ACCESS_ORIGIN` dejó de ser trust root runtime C2.
+19. fragment/guestContact/READ intactos.
+20. tests forman parte del gate oficial.
+21. `/read` ya mintado conserva lifetime C2 tras revocación publicWeb.
+22. lookup CORS está bounded/rate-limited e indexado físicamente.
+23. DNS proof que vence durante resolver no puede materializar verified y el trust TTL parte de `proofObservedAt`.
+24. el índice publicWeb no posee vía de creación automática mediante el schema Mongoose; migration/cutover son su única autoridad física.
+25. nueva revisión adversarial debe aprobar el HEAD final antes de Ready/merge.
 
-Ninguno autoriza ampliar la capability ni convertir Origin en tenant authority.
+## 21. Decisiones físicas adoptadas
+
+1. **Pending DNS challenge TTL:** 15 minutos.
+2. **Verified public trust TTL:** 30 días, contado desde `proofObservedAt`.
+3. **DNS timeout:** 3 segundos. **Retry:** una resolución por invocación; sin retry automático/fallback; nuevo `/verify` explícito mientras siga vigente.
+4. **Clock DNS:** `defaultNowProvider()` en runtime; `/verify` observa `requestObservedAt` antes del resolver y `proofObservedAt` después. `nowProvider()` inyectable permite T0/T1 deterministas; `now: Date` explícito mantiene provider fijo para compatibilidad de tests.
+5. **Verification rate limit:** 20/IP/15 min.
+6. **Public CORS lookup admission:** 200/IP/15 min antes de Mongo.
+7. **Generations:** enteros monotónicos en `BusinessConfig.publicWeb`; attempt incrementa por challenge, trust por epoch/revocación; tombstone/revision evita ABA.
+8. **Linearización:** persisted authority fence CSPRNG + trustGeneration + expiresAt, TTL 2 min, acquire/confirm/release por CAS predicates.
+9. **Dynamic CORS lookup:** aggregation existence-oriented, active Business, `$limit:1`, shared origins soportados.
+10. **Índice físico:** no unique `business_config_public_web_origin_fresh` sobre `verifiedOrigin + verificationStatus + verificationValidUntil`.
+11. **Autoridad única del índice:** `PUBLIC_WEB_INDEX_SPEC` vive en `Server/scripts/migrations/public-web-storage.js`; el índice publicWeb fue retirado de `BusinessConfig.schema.indexes()`. Su materialización/validación ocurre exclusivamente mediante `npm run migration:public-web-storage`, `assertPublicWebIndexesReady()` y `assertPublicWebRuntimeStorageReady()`/cutover gate.
+12. **No global autoIndex cut:** no se aplica `autoIndex:false` global a BusinessConfig para resolver este punto. Los índices históricos del schema, incluido `BusinessConfig.business` unique, permanecen intactos; sólo el índice nuevo publicWeb deja de tener vía autoIndex.
+13. **Storage policy:** no destructive drop/recreate, production-like `autoIndex:false`, remote startup gate `PUBLIC_WEB_6_2_6_B_CUTOVER=PUBLIC_WEB_6_2_6_B_STORAGE_READY` más inspección física real.
+14. **Bearer `/read`:** CORS credentialless independiente de current publicWeb; bearer exact-scope es authority.
+15. **Error C2 stale:** `GUEST_APPOINTMENT_CAPABILITY_INVALID_PROOF` uniforme.
+
+Ninguna decisión amplía capability ni convierte Origin en tenant authority.
 
 ## 22. Deuda fuera de alcance
 
 No pertenece a 6.2.6-B:
 
-- múltiples verified origins por Business;
+- múltiples origins por Business;
 - wildcard domains;
 - HTTP well-known/fetch/redirect verification;
-- monitoring/reverification periódica o background continuous checks;
+- monitoring/reverification periódica;
 - certificate management/custom domain provisioning;
 - DNS provider integrations;
 - OAuth Client;
@@ -1361,28 +1027,61 @@ No pertenece a 6.2.6-B:
 - PAYMENT capability;
 - nuevo Webpay initiation;
 - refund/reconciliation workflow;
-- rediseño amplio de Payments;
-- CSRF general de 6.3;
+- rediseño amplio Payments;
+- CSRF general 6.3;
 - Holiday tenantization;
 - 6.3;
 - 6.4.
 
-La reverificación **explícita y bajo demanda** y la freshness acotada sí pertenecen a 6.2.6-B; únicamente el monitoring periódico queda fuera.
+## 23. Restricción de esta corrección
 
-Compartir un mismo verified origin entre múltiples Businesses no constituye “múltiples origins por Business” y está expresamente permitido por este contrato.
+Esta corrección trabaja exclusivamente los dos bloqueantes adversariales restantes de PR #32 sobre `43f85f58a3a8417bf4a74404067351d39a1f8847`:
 
-## 23. Restricción de esta iteración
+- DNS challenge expiry TOCTOU entre entrada de `/verify` y observación de la prueba después de `resolveTxt`;
+- segunda vía de materialización del índice publicWeb mediante Mongoose schema autoIndex antes de migration/cutover.
 
-Esta iteración modifica únicamente documentación Markdown y, si corresponde, metadata documental del PR.
+Las correcciones adversariales anteriores —capability READ post-revocation, CORS admission pre-Mongo, shared origins, worker/revocation fence y C2 READ exact-scope— se preservan sin reimplementarlas.
 
-No se implementan modelos, controllers, repositories, services, routes, middleware, resolver DNS, CORS runtime, tests, worker C2, manifests, workflows ni cutover.
+No se inicia ninguna capability nueva ni fase posterior.
 
-## 24. Estado de cierre documental
+## 24. Evidencia CI
 
-6.2.6-A está merged en `master@ea43c0da9a11355811b5bf0c52210af86fdac335`.
+Baseline de esta corrección: HEAD `43f85f58a3a8417bf4a74404067351d39a1f8847`, CI #330 **success**.
 
-6.2.6-B continúa como bloque activo exclusivamente documental. Los bloqueantes de freshness, cross-C2 generation/revocation y separación inequívoca entre CORS preflight eligibility y tenant binding de la request real quedan incorporados al contrato, pero **ninguno está implementado en runtime**.
+Correcciones técnicas:
 
-6.2.6 completa continúa abierta.
+- `/verify` revalida challenge freshness en `proofObservedAt` después del resolver y el CAS exige `challengeExpiresAt > proofObservedAt`;
+- `verifiedAt`/`verificationValidUntil` parten de `proofObservedAt`;
+- nuevo `nowProvider()` permite T0/T1 deterministas sin delays reales;
+- `business_config_public_web_origin_fresh` fue retirado del schema Mongoose;
+- `PUBLIC_WEB_INDEX_SPEC` en la migración es la única definición física del índice publicWeb;
+- regresión `autoIndex:true` demuestra que aparece el índice legacy `business` unique pero no el publicWeb antes del gate.
 
-**Document-only contract iteration. No runtime behavior changed.**
+CI #331 sobre `9b38fa4646a1a10dc43247654e749377dcfa8866` detectó una expectativa unitaria obsoleta que todavía trataba `BusinessConfig.schema.indexes()` como fuente normativa. No se reintrodujo el índice al schema: el test se corrigió para exigir ausencia de esa declaración y contrastar `PUBLIC_WEB_INDEX_SPEC`.
+
+CI #332 sobre `0c7fd717202b9c37cf7316f20ff8b16e10d6c385`: **success** para backend unit, backend integration, frontend checks/build y Gitleaks.
+
+Evidencia de integración en #332:
+
+- publicWeb storage: 5/5 tests verdes, incluidos migration exacta/idempotente, semantic mismatch fail-closed, `autoIndex:true` con legacy index presente/publicWeb ausente y remote cutover gate;
+- DNS expiry race: challenge que vence durante resolver => `PUBLIC_WEB_CHALLENGE_EXPIRED`; prueba antes del expiry => `verifiedAt = proofObservedAt`; 3/3 resultados del proceso verdes;
+- stale rotate y origin-change DNS races existentes continúan verdes;
+- CORS admission/bounded lookup continúa verde;
+- capability `/read` post-delete/expiry/reverify continúa verde y credentialless;
+- stale `/read/verify` continúa `INVALID_PROOF`;
+- worker/revocation fence y C2 generation tests continúan verdes;
+- `npm run test:guest-appointment-capability` continúa verde.
+
+Los commits documentales posteriores requieren nuevamente CI verde sobre el HEAD final exacto antes de la revisión adversarial. El resultado exacto de ese último run debe contrastarse en PR #32; este documento no puede auto-certificar un workflow que se ejecuta después de su propio commit.
+
+## 25. Estado de cierre
+
+PR #31/contrato está merged en `master@ed7acfd5fed91b03cd65becd2af154f93dad027b`.
+
+PR #32 permanece **Draft**, abierto y sin merge. Los dos bloqueantes adversariales restantes de esta corrección están implementados y tienen evidencia técnica en CI #332, pero 6.2.6-B no se declara cerrada hasta que:
+
+1. el HEAD final exacto tenga CI verde;
+2. una nueva revisión adversarial independiente apruebe código/tests/storage/documentación;
+3. exista autorización posterior explícita para cualquier Ready/merge.
+
+**No marcar Ready. No hacer merge. 6.2.6 completa continúa abierta.**
