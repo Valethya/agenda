@@ -9,10 +9,7 @@ import {
   assertMembershipBaselineLockOwnership,
   assertMembershipBaselineTransactionSupport,
   buildMembershipBaselineManifestFromOwners,
-  ensureCollectionsAndMembershipIndex,
   ensureMembershipBaselineLockCollection,
-  readMembershipBaselineMetadata,
-  readMembershipBaselineSource,
   releaseMembershipBaselineLock,
   runMembershipBaselineTransaction,
 } from "./membership-baseline.js";
@@ -28,6 +25,7 @@ export const PRODUCTION_OWNER_BOOTSTRAP_CONFIRMATION =
   "CREATE_INITIAL_PRODUCTION_OWNERS";
 
 const SHA_PATTERN = /^[0-9a-f]{40}$/u;
+const OWNER_COLLECTIONS = Object.freeze(["businesses", "users", "memberships"]);
 const OWNER_VARIABLES = Object.freeze({
   atmosfera: Object.freeze({
     firstName: "PRODUCTION_BOOTSTRAP_ATMOSFERA_FIRST_NAME",
@@ -166,27 +164,93 @@ export const validateProductionOwnerRuntime = (
   return { deploymentSha };
 };
 
+const isExactUniqueSingleFieldIndex = (index, field) => {
+  const entries = Object.entries(index?.key ?? {});
+  return entries.length === 1
+    && entries[0]?.[0] === field
+    && entries[0]?.[1] === 1
+    && index?.unique === true;
+};
+
 const collectionCounts = (source) => ({
   businesses: source.businesses?.length ?? 0,
   users: source.users?.length ?? 0,
   memberships: source.memberships?.length ?? 0,
 });
 
+const storageStatus = (source) => {
+  const observed = new Set(source.observedCollections ?? []);
+  const businessIndexReady = (source.businessIndexes ?? []).some((index) =>
+    isExactUniqueSingleFieldIndex(index, "slug"));
+  const userIndexReady = (source.userIndexes ?? []).some((index) =>
+    isExactUniqueSingleFieldIndex(index, "email"));
+  const membershipIndexReady = (source.membershipIndexes ?? []).some(isExactMembershipUniqueIndex);
+  return {
+    business: {
+      exactUniqueExists: businessIndexReady,
+      canCreateTransactionally: !observed.has("businesses"),
+    },
+    user: {
+      exactUniqueExists: userIndexReady,
+      canCreateTransactionally: !observed.has("users"),
+    },
+    membership: {
+      exactUniqueExists: membershipIndexReady,
+      canCreateTransactionally: !observed.has("memberships"),
+    },
+  };
+};
+
+const storageCanApply = (storage) => Object.values(storage).every((status) => (
+  status.exactUniqueExists || status.canCreateTransactionally
+));
+
+export const readProductionOwnerSource = async (db, { session } = {}) => {
+  const observedCollections = (await db.listCollections({}, { nameOnly: true }).toArray())
+    .map((collection) => collection.name)
+    .sort();
+  const observed = new Set(observedCollections);
+  const readIndexes = async (collection) => (
+    observed.has(collection)
+      ? db.collection(collection).listIndexes().toArray()
+      : []
+  );
+  const [businesses, users, memberships, businessIndexes, userIndexes, membershipIndexes] =
+    await Promise.all([
+      observed.has("businesses")
+        ? db.collection("businesses").find({}, { session }).toArray()
+        : [],
+      observed.has("users")
+        ? db.collection("users").find({}, { session }).toArray()
+        : [],
+      observed.has("memberships")
+        ? db.collection("memberships").find({}, { session }).toArray()
+        : [],
+      readIndexes("businesses"),
+      readIndexes("users"),
+      readIndexes("memberships"),
+    ]);
+  return {
+    observedCollections,
+    businesses,
+    users,
+    memberships,
+    businessIndexes,
+    userIndexes,
+    membershipIndexes,
+  };
+};
+
 export const buildProductionOwnerPlan = (source) => {
   const counts = collectionCounts(source);
   const empty = Object.values(counts).every((count) => count === 0);
-  const membershipsCollectionExists = source.observedCollections?.includes("memberships") === true;
-  const exactMembershipIndex = source.indexes?.some(isExactMembershipUniqueIndex) === true;
-  const membershipStorageReady = exactMembershipIndex || !membershipsCollectionExists;
+  const storage = storageStatus(source);
   return {
     version: PRODUCTION_OWNER_BOOTSTRAP_VERSION,
     state: empty ? "empty" : "occupied",
-    canApply: empty && membershipStorageReady,
+    canApply: empty && storageCanApply(storage),
     counts,
-    membershipIndex: {
-      exactUniqueExists: exactMembershipIndex,
-      canCreateTransactionally: !membershipsCollectionExists,
-    },
+    storage,
   };
 };
 
@@ -207,9 +271,10 @@ export const verifyProductionOwnerReadyState = async (
   if (counts.businesses !== 2) findings.push("businessCountMismatch");
   if (counts.users !== 2) findings.push("userCountMismatch");
   if (counts.memberships !== 2) findings.push("membershipCountMismatch");
-  if (!source.indexes?.some(isExactMembershipUniqueIndex)) {
-    findings.push("membershipUniqueIndexMissing");
-  }
+  const storage = storageStatus(source);
+  if (!storage.business.exactUniqueExists) findings.push("businessSlugUniqueIndexMissing");
+  if (!storage.user.exactUniqueExists) findings.push("userEmailUniqueIndexMissing");
+  if (!storage.membership.exactUniqueExists) findings.push("membershipUniqueIndexMissing");
 
   const businessByKey = new Map();
   const userByKey = new Map();
@@ -278,7 +343,72 @@ export const verifyProductionOwnerReadyState = async (
     ready: findings.length === 0,
     findings: [...new Set(findings)].sort(),
     counts,
+    storage,
   };
+};
+
+const createCollectionWithUniqueIndex = async (
+  db,
+  {
+    collection,
+    key,
+    name,
+    session,
+  },
+) => {
+  await db.createCollection(collection, { session });
+  await db.collection(collection).createIndex(key, {
+    unique: true,
+    name,
+    session,
+  });
+};
+
+export const ensureProductionOwnerStorage = async (
+  db,
+  source,
+  {
+    assertOwnership = async () => {},
+    session,
+  } = {},
+) => {
+  const storage = storageStatus(source);
+  const definitions = [
+    {
+      collection: "businesses",
+      status: storage.business,
+      key: { slug: 1 },
+      name: "slug_1",
+    },
+    {
+      collection: "users",
+      status: storage.user,
+      key: { email: 1 },
+      name: "email_1",
+    },
+    {
+      collection: "memberships",
+      status: storage.membership,
+      key: { user: 1, business: 1 },
+      name: "user_1_business_1",
+    },
+  ];
+
+  for (const definition of definitions) {
+    if (definition.status.exactUniqueExists) continue;
+    if (!definition.status.canCreateTransactionally) {
+      throw new Error(
+        `Bootstrap productivo bloqueado: índice único requerido ausente en ${definition.collection}`,
+      );
+    }
+    await assertOwnership();
+    await createCollectionWithUniqueIndex(db, {
+      collection: definition.collection,
+      key: definition.key,
+      name: definition.name,
+      session,
+    });
+  }
 };
 
 export const createProductionOwnerDocuments = async (
@@ -348,15 +478,30 @@ const openConnection = async (mongoUri) => {
   return connection;
 };
 
-const sourceWithCreatedMembershipIndex = (source) => ({
-  ...source,
-  indexes: source.indexes.some(isExactMembershipUniqueIndex)
-    ? source.indexes
-    : [
-      ...source.indexes,
-      { name: "user_1_business_1", key: { user: 1, business: 1 }, unique: true },
-    ],
-});
+const sourceWithPlannedIndexes = (source) => {
+  const observed = new Set(source.observedCollections ?? []);
+  const next = {
+    ...source,
+    observedCollections: [...new Set([...observed, ...OWNER_COLLECTIONS])].sort(),
+    businessIndexes: [...(source.businessIndexes ?? [])],
+    userIndexes: [...(source.userIndexes ?? [])],
+    membershipIndexes: [...(source.membershipIndexes ?? [])],
+  };
+  if (!next.businessIndexes.some((index) => isExactUniqueSingleFieldIndex(index, "slug"))) {
+    next.businessIndexes.push({ name: "slug_1", key: { slug: 1 }, unique: true });
+  }
+  if (!next.userIndexes.some((index) => isExactUniqueSingleFieldIndex(index, "email"))) {
+    next.userIndexes.push({ name: "email_1", key: { email: 1 }, unique: true });
+  }
+  if (!next.membershipIndexes.some(isExactMembershipUniqueIndex)) {
+    next.membershipIndexes.push({
+      name: "user_1_business_1",
+      key: { user: 1, business: 1 },
+      unique: true,
+    });
+  }
+  return next;
+};
 
 export const runProductionOwnerBootstrap = async ({
   mongoUri,
@@ -381,7 +526,7 @@ export const runProductionOwnerBootstrap = async ({
     const targetFingerprint = fingerprintMongoTarget(mongoUri, database);
 
     if (validatedOptions.mode === "plan") {
-      const source = await readMembershipBaselineSource(connection.db);
+      const source = await readProductionOwnerSource(connection.db);
       return {
         applied: false,
         database,
@@ -408,8 +553,7 @@ export const runProductionOwnerBootstrap = async ({
           assertMembershipBaselineLockOwnership(connection.db, { ownerId, session });
         await assertOwnership();
 
-        const metadata = await readMembershipBaselineMetadata(connection.db);
-        const source = await readMembershipBaselineSource(connection.db, { metadata, session });
+        const source = await readProductionOwnerSource(connection.db, { session });
         const plan = buildProductionOwnerPlan(source);
 
         if (plan.state === "occupied") {
@@ -424,11 +568,11 @@ export const runProductionOwnerBootstrap = async ({
           return { applied: false, ready };
         }
         if (!plan.canApply) {
-          throw new Error("Bootstrap productivo bloqueado: storage Membership incompatible");
+          throw new Error("Bootstrap productivo bloqueado: storage de identidad incompatible");
         }
 
         mutationStarted = true;
-        await ensureCollectionsAndMembershipIndex(connection.db, source, {
+        await ensureProductionOwnerStorage(connection.db, source, {
           assertOwnership,
           session,
         });
@@ -439,21 +583,9 @@ export const runProductionOwnerBootstrap = async ({
         });
         await assertOwnership();
 
-        const verificationMetadata = {
-          observedCollections: [...new Set([
-            ...metadata.observedCollections,
-            "businesses",
-            "users",
-            "memberships",
-          ])].sort(),
-          indexes: sourceWithCreatedMembershipIndex(source).indexes,
-        };
-        const verificationSource = await readMembershipBaselineSource(connection.db, {
-          metadata: verificationMetadata,
-          session,
-        });
+        const verificationSource = await readProductionOwnerSource(connection.db, { session });
         const ready = await verifyProductionOwnerReadyState(
-          verificationSource,
+          sourceWithPlannedIndexes(verificationSource),
           manifest,
           passwordVerifier,
         );
@@ -472,8 +604,7 @@ export const runProductionOwnerBootstrap = async ({
       }
     });
 
-    const postMetadata = await readMembershipBaselineMetadata(connection.db);
-    const postSource = await readMembershipBaselineSource(connection.db, { metadata: postMetadata });
+    const postSource = await readProductionOwnerSource(connection.db);
     const postVerification = await verifyProductionOwnerReadyState(
       postSource,
       manifest,
@@ -491,7 +622,7 @@ export const runProductionOwnerBootstrap = async ({
         state: "ready",
         canApply: false,
         counts: postVerification.counts,
-        membershipIndex: { exactUniqueExists: true, canCreateTransactionally: false },
+        storage: postVerification.storage,
       },
     };
   } finally {
@@ -527,7 +658,9 @@ export const main = async (argv = process.argv.slice(2)) => {
   console.log(`Deployment SHA: ${result.deploymentSha}`);
   console.log(`Target fingerprint: ${result.targetFingerprint}`);
   console.log(`Business/User/Membership: ${result.plan.counts.businesses}/${result.plan.counts.users}/${result.plan.counts.memberships}`);
-  console.log(`Índice Membership exacto: ${result.plan.membershipIndex.exactUniqueExists}`);
+  console.log(`Índice Business.slug exacto: ${result.plan.storage.business.exactUniqueExists}`);
+  console.log(`Índice User.email exacto: ${result.plan.storage.user.exactUniqueExists}`);
+  console.log(`Índice Membership exacto: ${result.plan.storage.membership.exactUniqueExists}`);
   return result.plan.state === "empty" && !result.plan.canApply ? 2 : 0;
 };
 
