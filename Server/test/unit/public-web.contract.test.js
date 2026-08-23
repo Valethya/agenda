@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import BusinessConfig from "../../src/db/models/businessConfig.model.js";
+import { PUBLIC_WEB_INDEX_SPEC } from "../../scripts/migrations/public-web-storage.js";
 import {
   PUBLIC_WEB_AUTHORITY_FENCE_TTL_MS,
   PUBLIC_WEB_CHALLENGE_TTL_MS,
@@ -105,15 +106,24 @@ test("6.2.6-B public web contract", async (t) => {
     assert.equal(emptyPublicWebCommandSchema.safeParse({ body: { force: true } }).success, false);
   });
 
-  await t.test("schema keeps DNS secret/fence server-only and shared origins non-unique", () => {
+  await t.test("schema keeps DNS secret/fence server-only while publicWeb index authority stays external", () => {
     assert.equal(BusinessConfig.schema.path("publicWeb.challengeHash").options.select, false);
     assert.equal(BusinessConfig.schema.path("publicWeb.authorityFence.token").options.select, false);
     assert.ok(BusinessConfig.schema.path("publicWeb.verificationAttemptGeneration"));
     assert.ok(BusinessConfig.schema.path("publicWeb.trustGeneration"));
 
-    const originIndex = BusinessConfig.schema.indexes().find(([fields]) => fields["publicWeb.verifiedOrigin"] === 1);
-    assert.ok(originIndex);
-    assert.notEqual(originIndex[1].unique, true);
+    const schemaIndexes = BusinessConfig.schema.indexes();
+    const schemaPublicWebIndex = schemaIndexes.find(([fields, options]) => (
+      options?.name === PUBLIC_WEB_INDEX_SPEC.name
+      || JSON.stringify(Object.entries(fields)) === JSON.stringify(Object.entries(PUBLIC_WEB_INDEX_SPEC.key))
+    ));
+    assert.equal(schemaPublicWebIndex, undefined);
+    assert.deepEqual(PUBLIC_WEB_INDEX_SPEC.key, {
+      "publicWeb.verifiedOrigin": 1,
+      "publicWeb.verificationStatus": 1,
+      "publicWeb.verificationValidUntil": 1,
+    });
+    assert.equal(Object.hasOwn(PUBLIC_WEB_INDEX_SPEC, "unique"), false);
   });
 
   await t.test("fresh-origin preflight lookup is existence-oriented and bounded to one result", () => {
