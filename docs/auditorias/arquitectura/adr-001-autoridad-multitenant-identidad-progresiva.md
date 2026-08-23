@@ -2,7 +2,7 @@
 
 **Estado:** aprobado para autoridad multitenant; ampliación 6.2.5-A propuesta para revisión  
 **Fecha original:** 21 de julio de 2026  
-**Última revisión:** 13 de agosto de 2026  
+**Última revisión:** 23 de agosto de 2026  
 **Base de contraste 6.2.5-A:** `master@2d0a25d3d85d731b6b37e253f04145f658727a33`  
 **HEAD adversarial de entrada:** `0505f10202ba68cb20eae2b4493312f24d0e9302`  
 **PR precedente verificado:** #25 merged/closed, HEAD `c326846d6a46c4a30dc6ad1ae05308d40b6f459a`  
@@ -14,6 +14,7 @@ Documentos relacionados:
 
 - [`fase-6.2.5-a-identidad-progresiva-cliente.md`](./fase-6.2.5-a-identidad-progresiva-cliente.md)
 - [`adr-002-agenda-headless-gestion-publica.md`](./adr-002-agenda-headless-gestion-publica.md)
+- [`fase-admin-team-bookability-contract.md`](./fase-admin-team-bookability-contract.md)
 
 **Relación con ADR-002:** 6.2.5-A complementa ADR-002 y no lo debilita. Para gestión pública de Appointment, ADR-002 ya congela una credencial asociada a **Appointment + Business + una acción**, con operaciones separadas y least privilege.
 
@@ -58,6 +59,8 @@ Un User puede ser cliente de A, admin de B y worker de C. Son capacidades indepe
 - `Business.owner` expresa propiedad, no autoridad;
 - seleccionar Business aporta contexto, no permisos;
 - Membership no representa clientes ni Client authority.
+
+**Precisión de Equipo/agendabilidad (23 de agosto de 2026):** `Membership.role` responde únicamente qué autoridad/acceso posee la identidad dentro del Business. Ser profesional agendable es una capacidad operacional tenant-scoped ortogonal al rol, formalizada en [`fase-admin-team-bookability-contract.md`](./fase-admin-team-bookability-contract.md). Por tanto, `role="worker"` no implica por sí solo ser agendable y `role="admin"` no impide serlo. Un admin/owner que presta servicios conserva `role="admin"`; no se crea una segunda Membership para el mismo `User + Business`.
 
 ### 3. `superadmin`
 
@@ -362,6 +365,7 @@ Ninguno de esos módulos concede Client authority implícita. Payment permanece 
 21. Crear Appointment/Verification/claim/binding no implica marketing consent.
 22. Secrets/PII no convierten AuditLog/analytics en fuente de exposición o correlación cross-tenant.
 23. Loyalty/Subscription/CRM/analytics no son fuentes implícitas de Client authority.
+24. `Membership.role` define autoridad/acceso tenant; la agendabilidad es una capacidad operacional ortogonal y nunca se infiere permanentemente de `role`, `User.role`, `User.business` ni `Business.owner`.
 
 ## Consecuencias
 
