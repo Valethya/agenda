@@ -39,6 +39,8 @@ const requireDate = (value, name = "date") => {
   return value;
 };
 
+const defaultNowProvider = () => new Date();
+
 const asId = (value) => (value?._id ?? value)?.toString?.() || "";
 
 const hashChallenge = ({ businessId, origin, attemptGeneration, raw }) => crypto
@@ -246,11 +248,12 @@ const txtProofMatches = ({ records, businessId, origin, attemptGeneration, chall
 
 export const verifyPublicWeb = async ({
   businessId,
-  now = new Date(),
+  now,
+  nowProvider = now === undefined ? defaultNowProvider : () => now,
   resolveTxt = defaultResolveTxt,
   dnsTimeoutMs = PUBLIC_WEB_DNS_TIMEOUT_MS,
 }) => {
-  const scopedNow = requireDate(now, "now");
+  const requestObservedAt = requireDate(nowProvider(), "requestObservedAt");
   const config = await getCommandConfig(businessId);
   const current = config.publicWeb;
   if (!current?.websiteUrl || normalizedStatus(current) === "unconfigured") {
@@ -259,7 +262,11 @@ export const verifyPublicWeb = async ({
   if (normalizedStatus(current) !== "pending") {
     throw publicWebError(409, PUBLIC_WEB_ERROR_CODES.REVERIFICATION_REQUIRED, "Inicia re-verification antes de verificar nuevamente");
   }
-  if (!(current.challengeExpiresAt instanceof Date) || current.challengeExpiresAt.getTime() <= scopedNow.getTime() || !current.challengeHash) {
+  if (
+    !(current.challengeExpiresAt instanceof Date)
+    || current.challengeExpiresAt.getTime() <= requestObservedAt.getTime()
+    || !current.challengeHash
+  ) {
     throw publicWebError(409, PUBLIC_WEB_ERROR_CODES.CHALLENGE_EXPIRED, "El challenge DNS ya expiró");
   }
 
@@ -292,21 +299,29 @@ export const verifyPublicWeb = async ({
     throw publicWebError(409, PUBLIC_WEB_ERROR_CODES.VERIFICATION_NOT_PROVEN, "No se pudo demostrar el control DNS requerido");
   }
 
-  const validUntil = new Date(scopedNow.getTime() + PUBLIC_WEB_VERIFIED_TRUST_TTL_MS);
+  // DNS proof freshness is authorized at the instant the proof has actually
+  // been observed, not at request entry. An injected fixed `now` preserves
+  // deterministic legacy tests; production reads the default clock again here.
+  const proofObservedAt = requireDate(nowProvider(), "proofObservedAt");
+  if (snapshot.challengeExpiresAt.getTime() <= proofObservedAt.getTime()) {
+    throw publicWebError(409, PUBLIC_WEB_ERROR_CODES.CHALLENGE_EXPIRED, "El challenge DNS ya expiró");
+  }
+
+  const validUntil = new Date(proofObservedAt.getTime() + PUBLIC_WEB_VERIFIED_TRUST_TTL_MS);
   const updated = await businessConfigRepository.compareAndSetPublicWeb({
     businessId,
     match: {
       "publicWeb.verificationStatus": "pending",
       "publicWeb.websiteUrl": snapshot.origin,
       "publicWeb.challengeHash": snapshot.challengeHash,
-      "publicWeb.challengeExpiresAt": { $gt: scopedNow },
+      "publicWeb.challengeExpiresAt": { $gt: proofObservedAt },
       "publicWeb.verificationAttemptGeneration": snapshot.attemptGeneration,
       "publicWeb.trustGeneration": snapshot.trustGeneration,
     },
     set: {
       "publicWeb.verificationStatus": "verified",
       "publicWeb.verifiedOrigin": snapshot.origin,
-      "publicWeb.verifiedAt": scopedNow,
+      "publicWeb.verifiedAt": proofObservedAt,
       "publicWeb.verificationValidUntil": validUntil,
       "publicWeb.challengeHash": null,
       "publicWeb.challengeIssuedAt": null,

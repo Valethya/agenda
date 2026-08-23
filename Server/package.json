@@ -21,7 +21,7 @@
     "test:tenant-resource-isolation": "node --test test/tenantResourceIsolation.test.js",
     "test:customer-profile-persistence": "node --test test/customerProfilePersistence.test.js",
     "test:client-contact-verification": "node --test test/clientContactVerification.test.js",
-    "test:public-web-trust": "node --test test/publicWebStorage.test.js && node --test test/publicWebTrust.test.js && node --test test/publicWebSuperadminAuthority.test.js && node --test test/publicWebCorsAdmission.test.js && node --test test/publicWebCapabilityHttp.test.js && node --test test/publicWebC2Revocation.test.js",
+    "test:public-web-trust": "node --test test/publicWebStorage.test.js && node --test test/publicWebDnsExpiryRace.test.js && node --test test/publicWebTrust.test.js && node --test test/publicWebSuperadminAuthority.test.js && node --test test/publicWebCorsAdmission.test.js && node --test test/publicWebCapabilityHttp.test.js && node --test test/publicWebC2Revocation.test.js",
     "test:guest-appointment-capability": "node --test test/guestAppointmentCapability.test.js && node --test test/guestAppointmentCapabilityHardening.test.js",
     "test:guest-appointment-capability-storage": "node --test test/guestAppointmentCapabilityStorage.test.js && node --test test/guestAppointmentCapabilityStorageCutover.test.js",
     "test:availability-migration-e2e": "node --test test/availabilityTenantizationMigration.test.js",

@@ -107,15 +107,11 @@ const businessConfigSchema = new mongoose.Schema(
   }
 );
 
-// Shared origins are deliberately supported; this index is non-unique.
-businessConfigSchema.index(
-  {
-    "publicWeb.verifiedOrigin": 1,
-    "publicWeb.verificationStatus": 1,
-    "publicWeb.verificationValidUntil": 1,
-  },
-  { name: "business_config_public_web_origin_fresh" },
-);
+// The 6.2.6-B publicWeb freshness index is intentionally NOT declared on the
+// Mongoose schema. Its physical authority is exclusively PUBLIC_WEB_INDEX_SPEC
+// + migration:public-web-storage + the runtime cutover gate. Historical schema
+// indexes (including the unique BusinessConfig.business index above) remain
+// managed exactly as before.
 
 const BusinessConfigModel = mongoose.model("BusinessConfig", businessConfigSchema);
 
