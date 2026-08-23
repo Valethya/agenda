@@ -255,7 +255,7 @@ describe("production owner ready-state verification", () => {
     source.userIndexes = [];
     source.users[0].business = source.businesses[0]._id;
     source.users[1].password = "wrong";
-    source.businesses[0].owner = new mongo.ObjectId();
+    source.businesses[1].owner = new mongo.ObjectId();
     source.users.push({ _id: new mongo.ObjectId(), email: ["extra@example.test"] });
 
     const result = await verifyProductionOwnerReadyState(
