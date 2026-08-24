@@ -8,7 +8,16 @@ import {
   isMembershipBookabilityRemoteRuntime,
 } from "../../src/db/membership-bookability-cutover-gate.js";
 
-const makeDb = ({ isBookable = false, indexes = null } = {}) => {
+const clone = (value) => {
+  if (value instanceof mongo.ObjectId) return new mongo.ObjectId(value.toHexString());
+  if (Array.isArray(value)) return value.map(clone);
+  if (value && typeof value === "object") {
+    return Object.fromEntries(Object.entries(value).map(([key, entry]) => [key, clone(entry)]));
+  }
+  return value;
+};
+
+const makeDb = ({ includeIsBookable = true, isBookable = false, indexes = null } = {}) => {
   const user = new mongo.ObjectId();
   const business = new mongo.ObjectId();
   const membership = {
@@ -18,7 +27,7 @@ const makeDb = ({ isBookable = false, indexes = null } = {}) => {
     role: "admin",
     isActive: true,
   };
-  if (isBookable !== undefined) membership.isBookable = isBookable;
+  if (includeIsBookable) membership.isBookable = isBookable;
   const data = {
     memberships: [membership],
     users: [{ _id: user, isActive: true }],
@@ -29,9 +38,9 @@ const makeDb = ({ isBookable = false, indexes = null } = {}) => {
       toArray: async () => ["memberships", "users", "businesses"].map((name) => ({ name })),
     }),
     collection: (name) => ({
-      find: () => ({ toArray: async () => structuredClone(data[name]) }),
+      find: () => ({ toArray: async () => clone(data[name]) }),
       listIndexes: () => ({
-        toArray: async () => structuredClone(indexes ?? [
+        toArray: async () => clone(indexes ?? [
           { name: "_id_", key: { _id: 1 }, unique: true },
           { name: "user_1_business_1", key: { user: 1, business: 1 }, unique: true },
         ]),
@@ -70,7 +79,7 @@ test("runtime remoto exige confirmación literal", async () => {
 
 test("runtime remoto rechaza campo ausente o tipo no boolean", async () => {
   await assert.rejects(
-    assertMembershipBookabilityRuntimeStorageReady(makeDb({ isBookable: undefined }), readyEnv),
+    assertMembershipBookabilityRuntimeStorageReady(makeDb({ includeIsBookable: false }), readyEnv),
     /sin boolean canónico/,
   );
   await assert.rejects(
