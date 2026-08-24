@@ -41,7 +41,11 @@ export const findAll = async (query = {}) => {
 };
 
 export const create = async (data) => {
-  return await Membership.create(data);
+  const canonicalData = {
+    ...data,
+    isBookable: typeof data?.isBookable === "boolean" ? data.isBookable : false,
+  };
+  return await Membership.create(canonicalData);
 };
 
 export const countByUser = async (userId) => {
