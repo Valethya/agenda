@@ -84,8 +84,8 @@ export async function seedTestData() {
     business: business._id,
   });
 
-  await Membership.create({ user: admin._id, business: business._id, role: 'admin' });
-  await Membership.create({ user: worker._id, business: business._id, role: 'worker' });
+  await Membership.create({ user: admin._id, business: business._id, role: 'admin', isBookable: false });
+  await Membership.create({ user: worker._id, business: business._id, role: 'worker', isBookable: true });
 
   const service = await Service.create({
     ...TEST_SERVICE,
@@ -138,8 +138,8 @@ export async function seedTestData() {
     isActive: true,
   });
 
-  await Membership.create({ user: userB._id, business: businessB._id, role: 'admin' });
-  await Membership.create({ user: workerB._id, business: businessB._id, role: 'worker' });
+  await Membership.create({ user: userB._id, business: businessB._id, role: 'admin', isBookable: false });
+  await Membership.create({ user: workerB._id, business: businessB._id, role: 'worker', isBookable: true });
 
   return { business, admin, client, worker, service, shifts, businessB, userB, workerB };
 }
@@ -149,12 +149,10 @@ export async function seedTestData() {
  * Includes safety guards to prevent accidental execution against non-test databases.
  */
 export async function cleanTestData() {
-  // Guard: solo ejecutar en entorno de test
   if (process.env.NODE_ENV !== 'test') {
     throw new Error(`cleanTestData() rechazada: NODE_ENV es "${process.env.NODE_ENV}", se requiere "test"`);
   }
 
-  // Guard: verificar que la base de datos conectada termine en "_test"
   const dbName = mongoose.connection.db?.databaseName || '';
   if (!dbName.endsWith('_test')) {
     throw new Error(`cleanTestData() rechazada: la base de datos "${dbName}" no termina en "_test"`);
@@ -166,9 +164,6 @@ export async function cleanTestData() {
   }
 }
 
-/**
- * Disconnects from the test database and cleans up.
- */
 export async function teardown(server, sessionStore) {
   if (server) server.close();
   if (sessionStore && typeof sessionStore.close === 'function') {
