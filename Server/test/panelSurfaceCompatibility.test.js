@@ -94,8 +94,13 @@ test("6.2.6-A panel surface compatibility y guest operational projection", async
     const workersData = await workersResponse.json();
     assert.ok(workersData.payload.some((worker) => worker._id === seed.worker._id.toString()));
     const worker = workersData.payload.find((entry) => entry._id === seed.worker._id.toString());
-    assert.ok(worker.email);
-    assert.equal(worker.role, "worker");
+    assert.equal(worker.firstName, seed.worker.firstName);
+    assert.equal(worker.lastName, seed.worker.lastName);
+    assert.equal("email" in worker, false);
+    assert.equal("phone" in worker, false);
+    assert.equal("password" in worker, false);
+    assert.equal("role" in worker, false);
+    assert.equal("business" in worker, false);
 
     const servicesResponse = await fetch(`${baseUrl}/internal/services`, { headers });
     assert.equal(servicesResponse.status, 200);

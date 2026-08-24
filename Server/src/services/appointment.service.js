@@ -3,10 +3,7 @@ import * as serviceRepository from "../repositories/service.repository.js";
 import * as availabilityService from "./availability.service.js";
 import * as auditLogRepository from "../repositories/auditLog.repository.js";
 import * as businessConfigRepository from "../repositories/businessConfig.repository.js";
-import {
-  assertProfessionalEligibleForService,
-  serviceIncludesProfessional,
-} from "./professionalEligibility.service.js";
+import { assertServiceBookingEligibility } from "./professionalEligibility.service.js";
 import { findTenantAuthority } from "./tenantAuthority.service.js";
 import { ConflictError, ForbiddenError, NotFoundError, ValidationError } from "../utils/appError.js";
 import { emitAvailabilityChange } from "../config/socket.js";
@@ -56,7 +53,6 @@ const assertAppointmentTenantCoherence = (appointment, businessId) => {
   ) {
     throw new NotFoundError("La cita especificada no existe");
   }
-
   return appointment;
 };
 
@@ -70,7 +66,7 @@ export const validateBookingTenantScope = async ({ worker, service, businessId }
   );
   if (!serviceDetail) throw new NotFoundError("El servicio solicitado no está disponible");
 
-  const { user: workerDetail } = await assertProfessionalEligibleForService({
+  const { user: workerDetail } = await assertServiceBookingEligibility({
     userId: worker,
     businessId,
     service: serviceDetail,
@@ -103,7 +99,7 @@ export const bookAppointment = async (appointmentData) => {
     metadata: { worker, service, date, startTime, isSuggestion },
   });
 
-  const { serviceDetail } = tenantScope || await validateBookingTenantScope({ worker, service, businessId });
+  const initialScope = tenantScope || await validateBookingTenantScope({ worker, service, businessId });
   const targetDate = new Date(date);
   const dateStr = targetDate.toISOString().split("T")[0];
 
@@ -124,27 +120,30 @@ export const bookAppointment = async (appointmentData) => {
     throw new ConflictError("El horario seleccionado ya no se encuentra disponible");
   }
 
-  await logEvent({
-    userId: client,
-    event: "APPOINTMENT_VALIDATION_SUCCESS",
-    level: "INFO",
-    message: "Validación de reserva exitosa: horario y servicio disponibles.",
-    metadata: { worker, dateStr, startTime },
-  });
-
-  const endTime = addMinutesToTime(startTime, serviceDetail.duration);
-  let initialStatus = "pending";
   let autoConfirm = false;
   if (businessId) {
     const config = await businessConfigRepository.getConfig(businessId);
     if (config?.appointmentSettings?.autoConfirmLocalBookings) autoConfirm = true;
   }
 
-  const isLocalBooking = serviceDetail.depositAmount === 0 || paymentOption === "local";
-  if (autoConfirm && isLocalBooking && !isSuggestion) initialStatus = "confirmed";
-
   let finalNotes = notes;
   if (isSuggestion) finalNotes = `[⚠️ SUGERENCIA DE CLIENTE: Horario propuesto no disponible en turnos estándar]\n${notes || ""}`;
+
+  // El slot y cualquier tenantScope observado previamente no son grants durables.
+  // Esta lectura sucede inmediatamente antes de materializar la Appointment.
+  const commitScope = await validateBookingTenantScope({ worker, service, businessId });
+  const serviceDetail = commitScope.serviceDetail;
+  const endTime = addMinutesToTime(startTime, serviceDetail.duration);
+  const isLocalBooking = serviceDetail.depositAmount === 0 || paymentOption === "local";
+  const initialStatus = autoConfirm && isLocalBooking && !isSuggestion ? "confirmed" : "pending";
+
+  await logEvent({
+    userId: client,
+    event: "APPOINTMENT_VALIDATION_SUCCESS",
+    level: "INFO",
+    message: "Validación de reserva exitosa: horario, servicio y bookability vigentes.",
+    metadata: { worker, dateStr, startTime },
+  });
 
   const newAppointment = await appointmentRepository.create({
     client,
@@ -180,20 +179,19 @@ const findTenantAppointment = async (appointmentId, businessId) => {
   return assertAppointmentTenantCoherence(appointment, businessId);
 };
 
-const resolveActorTenantAuthority = async (userId, businessId, preloadedAuthority = null) => {
-  if (
-    preloadedAuthority
-    && typeof preloadedAuthority === "object"
-    && sameId(preloadedAuthority.userId, userId)
-    && sameId(preloadedAuthority.businessId, businessId)
-  ) {
-    return preloadedAuthority;
-  }
+// El authority preloaded puede haber quedado obsoleto entre middleware y acción;
+// las operaciones sobre historial revalidan autoridad tenant actual.
+const resolveActorTenantAuthority = async (userId, businessId, _preloadedAuthority = null) =>
+  findTenantAuthority(userId, businessId);
 
-  return await findTenantAuthority(userId, businessId);
-};
-
-const resolveAppointmentCapabilities = async ({
+/**
+ * Appointment.client equality is deliberately NOT a grant.
+ * Capacidad sobre una Appointment YA EXISTENTE. Deliberadamente no depende de
+ * Membership.isBookable ni de la presencia actual en Service.workers. La
+ * autoridad tenant vigente continúa siendo requisito y por eso una Membership,
+ * User o Business inactivos revocan esta capacidad.
+ */
+export const resolveExistingAppointmentActorCapabilities = async ({
   appointment,
   userId,
   businessId,
@@ -201,19 +199,7 @@ const resolveAppointmentCapabilities = async ({
 }) => {
   const authority = await resolveActorTenantAuthority(userId, businessId, tenantAuthority);
   const isAdmin = Boolean(authority && authority.role === "admin");
-
-  let isProfessional = false;
-  if (authority && sameId(appointment.worker, userId)) {
-    const serviceId = appointment.service?._id ?? appointment.service;
-    const service = serviceId
-      ? await serviceRepository.findByIdAndBusiness(serviceId, businessId)
-      : null;
-
-    isProfessional = Boolean(
-      service
-      && serviceIncludesProfessional(service, userId),
-    );
-  }
+  const isProfessional = Boolean(authority && sameId(appointment.worker, userId));
 
   return {
     authority,
@@ -229,7 +215,7 @@ const authorizeProtectedAppointment = async ({
   businessId,
   tenantAuthority,
 }) => {
-  const capabilities = await resolveAppointmentCapabilities({
+  const capabilities = await resolveExistingAppointmentActorCapabilities({
     appointment,
     userId,
     businessId,
@@ -237,18 +223,12 @@ const authorizeProtectedAppointment = async ({
   });
 
   if (!capabilities.isAdmin && !capabilities.isProfessional) {
-    // APT-CLIENT-01: Appointment.client equality is deliberately NOT a grant.
     throw new NotFoundError("La cita especificada no existe");
   }
-
   return capabilities;
 };
 
-const transitionAppointmentStatus = async ({
-  appointment,
-  businessId,
-  transition,
-}) => {
+const transitionAppointmentStatus = async ({ appointment, businessId, transition }) => {
   if (!transition.from.includes(appointment.status)) {
     throw new ConflictError("La cita ya no se encuentra en un estado compatible con esta operación");
   }
@@ -259,30 +239,19 @@ const transitionAppointmentStatus = async ({
     transition.from,
     transition.to,
   );
-
   if (!updated) {
     throw new ConflictError("La cita cambió de estado antes de completar la operación");
   }
-
   return updated;
 };
 
 export const confirmAppointment = async (appointmentId, userId, tenantAuthority, businessId) => {
   const appointment = await findTenantAppointment(appointmentId, businessId);
-  const { actorCapability } = await authorizeProtectedAppointment({
-    appointment,
-    userId,
-    businessId,
-    tenantAuthority,
-  });
+  const { actorCapability } = await authorizeProtectedAppointment({ appointment, userId, businessId, tenantAuthority });
 
   let updatedAppointment;
   try {
-    updatedAppointment = await transitionAppointmentStatus({
-      appointment,
-      businessId,
-      transition: STATUS_TRANSITIONS.confirm,
-    });
+    updatedAppointment = await transitionAppointmentStatus({ appointment, businessId, transition: STATUS_TRANSITIONS.confirm });
     await logEvent({
       appointmentId,
       userId,
@@ -311,20 +280,11 @@ export const confirmAppointment = async (appointmentId, userId, tenantAuthority,
 
 export const completeAppointment = async (appointmentId, userId, tenantAuthority, businessId) => {
   const appointment = await findTenantAppointment(appointmentId, businessId);
-  const { actorCapability } = await authorizeProtectedAppointment({
-    appointment,
-    userId,
-    businessId,
-    tenantAuthority,
-  });
+  const { actorCapability } = await authorizeProtectedAppointment({ appointment, userId, businessId, tenantAuthority });
 
   let updatedAppointment;
   try {
-    updatedAppointment = await transitionAppointmentStatus({
-      appointment,
-      businessId,
-      transition: STATUS_TRANSITIONS.complete,
-    });
+    updatedAppointment = await transitionAppointmentStatus({ appointment, businessId, transition: STATUS_TRANSITIONS.complete });
     await logEvent({
       appointmentId,
       userId,
@@ -351,19 +311,9 @@ export const completeAppointment = async (appointmentId, userId, tenantAuthority
 
 export const cancelAppointment = async (appointmentId, userId, tenantAuthority, businessId) => {
   const appointment = await findTenantAppointment(appointmentId, businessId);
-  const { actorCapability } = await authorizeProtectedAppointment({
-    appointment,
-    userId,
-    businessId,
-    tenantAuthority,
-  });
+  const { actorCapability } = await authorizeProtectedAppointment({ appointment, userId, businessId, tenantAuthority });
 
-  const updatedAppointment = await transitionAppointmentStatus({
-    appointment,
-    businessId,
-    transition: STATUS_TRANSITIONS.cancel,
-  });
-
+  const updatedAppointment = await transitionAppointmentStatus({ appointment, businessId, transition: STATUS_TRANSITIONS.cancel });
   await logEvent({
     appointmentId,
     userId,
@@ -381,14 +331,7 @@ export const cancelAppointment = async (appointmentId, userId, tenantAuthority, 
 
 export const getAppointmentDetails = async (appointmentId, userId, tenantAuthority, businessId) => {
   const appointment = await findTenantAppointment(appointmentId, businessId);
-
-  await authorizeProtectedAppointment({
-    appointment,
-    userId,
-    businessId,
-    tenantAuthority,
-  });
-
+  await authorizeProtectedAppointment({ appointment, userId, businessId, tenantAuthority });
   return appointment;
 };
 
@@ -401,19 +344,7 @@ export const getMyAppointments = async (userId, tenantAuthority, businessId) => 
   if (authority.role === "admin") {
     return await appointmentRepository.findCoherentAllByBusiness(businessId);
   }
-
-  const eligibleServices = await serviceRepository.findAll({
-    business: businessId,
-    workers: userId,
-  });
-  const eligibleServiceIds = eligibleServices.map((service) => service._id);
-
-  if (eligibleServiceIds.length === 0) return [];
-
-  return await appointmentRepository.findCoherentAllByBusiness(businessId, {
-    worker: userId,
-    service: { $in: eligibleServiceIds },
-  });
+  return await appointmentRepository.findCoherentAllByBusiness(businessId, { worker: userId });
 };
 
 export const getAppointmentTimeline = async (appointmentId, userId, tenantAuthority, businessId) => {

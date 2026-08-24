@@ -5,8 +5,8 @@ import * as serviceRepository from "../repositories/service.repository.js";
 import * as businessConfigRepository from "../repositories/businessConfig.repository.js";
 import * as holidayRepository from "../repositories/holiday.repository.js";
 import {
-  assertProfessionalEligibleForService,
-  resolveActiveTenantParticipant,
+  assertServiceBookingEligibility,
+  resolveBookableTenantParticipant,
 } from "./professionalEligibility.service.js";
 import { NotFoundError, ValidationError } from "../utils/appError.js";
 import { parseStrictISODate } from "../utils/date.js";
@@ -14,7 +14,7 @@ import { timeToMinutes, minutesToTime, checkOverlap } from "../utils/time.js";
 import { DEFAULT_SLOT_DURATION_MINUTES } from "../config/businessConfig.defaults.js";
 
 export const resolveActiveWorkerInTenant = async (workerId, businessId) =>
-  resolveActiveTenantParticipant(workerId, businessId);
+  resolveBookableTenantParticipant(workerId, businessId);
 
 export const getAvailableSlots = async (workerId, dateStr, serviceId, businessId, excludeAppointmentId = null) => {
   if (!businessId) throw new ValidationError("El contexto de negocio es obligatorio para consultar disponibilidad");
@@ -31,7 +31,7 @@ export const getAvailableSlots = async (workerId, dateStr, serviceId, businessId
   );
   if (!service) throw new NotFoundError("El servicio especificado no está disponible");
 
-  await assertProfessionalEligibleForService({
+  await assertServiceBookingEligibility({
     userId: workerId,
     businessId,
     service,
@@ -40,8 +40,6 @@ export const getAvailableSlots = async (workerId, dateStr, serviceId, businessId
 
   const [shift, holiday, appointments, blocks, businessConfig] = await Promise.all([
     shiftRepository.findByBusinessWorkerAndDay(businessId, workerId, dayOfWeek),
-    // Holiday es deliberadamente un calendario global compartido. No concede
-    // authority tenant y se aplica por igual a todos los Businesses.
     holidayRepository.findByDate(targetDate),
     appointmentRepository.findByBusinessWorkerAndDate(businessId, workerId, targetDate),
     blockRepository.findByBusinessWorkerAndDateRange(businessId, workerId, targetDate, targetDate),

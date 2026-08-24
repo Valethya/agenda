@@ -9,6 +9,7 @@ import { connectDB } from "./db/db.js";
 import { assertAvailabilityRuntimeStorageReady } from "./db/availability-cutover-gate.js";
 import { assertGuestAppointmentCapabilityRuntimeStorageReady } from "./db/guest-appointment-capability-cutover-gate.js";
 import { assertPublicWebRuntimeStorageReady } from "./db/public-web-cutover-gate.js";
+import { assertMembershipBookabilityRuntimeStorageReady } from "./db/membership-bookability-cutover-gate.js";
 import logger from "./config/logger.js";
 import { initSocket } from "./config/socket.js";
 import { startGuestAppointmentVerificationWorker } from "./services/guestAppointmentVerification.worker.js";
@@ -21,6 +22,7 @@ export const startServer = (overrides = {}) => startServerLifecycle({
   availabilityGate: assertAvailabilityRuntimeStorageReady,
   guestCapabilityGate: assertGuestAppointmentCapabilityRuntimeStorageReady,
   publicWebGate: assertPublicWebRuntimeStorageReady,
+  membershipBookabilityGate: assertMembershipBookabilityRuntimeStorageReady,
   database: getConnectedDatabase,
   appInstance: app,
   listenPort: port,

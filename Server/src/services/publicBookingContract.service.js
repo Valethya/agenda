@@ -1,6 +1,6 @@
 import mongoose from "mongoose";
 import * as serviceRepository from "../repositories/service.repository.js";
-import { resolveActiveTenantParticipant } from "./professionalEligibility.service.js";
+import { resolveBookableTenantParticipant } from "./professionalEligibility.service.js";
 import { NotFoundError, ValidationError } from "../utils/appError.js";
 
 const PUBLIC_RESOURCE_NOT_AVAILABLE = "El recurso solicitado no está disponible";
@@ -70,13 +70,10 @@ export const getPublicProfessionalsForService = async ({ businessId, serviceId }
   const workerIds = Array.isArray(service.workers) ? service.workers : [];
   const participants = await Promise.all(workerIds.map(async (workerId) => {
     try {
-      return await resolveActiveTenantParticipant(workerId, businessId, {
+      return await resolveBookableTenantParticipant(workerId, businessId, {
         notFoundMessage: PUBLIC_RESOURCE_NOT_AVAILABLE,
       });
     } catch (error) {
-      // Un profesional revocado/inactivo deja de ser elegible y se omite. Los
-      // errores de infraestructura o programación deben propagarse; nunca se
-      // degradan silenciosamente a un array parcial con 200.
       if (error instanceof NotFoundError) return null;
       throw error;
     }

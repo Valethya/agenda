@@ -23,6 +23,11 @@ const membershipSchema = new mongoose.Schema(
       type: Boolean,
       default: true,
     },
+    isBookable: {
+      type: Boolean,
+      default: false,
+      required: [true, "El estado de agendabilidad es obligatorio"],
+    },
   },
   {
     timestamps: true,
@@ -30,7 +35,7 @@ const membershipSchema = new mongoose.Schema(
   }
 );
 
-// Un usuario solo puede tener una membresía por negocio
+// Un usuario solo puede tener una membresía por negocio.
 membershipSchema.index({ user: 1, business: 1 }, { unique: true });
 
 const MembershipModel = mongoose.model("Membership", membershipSchema);

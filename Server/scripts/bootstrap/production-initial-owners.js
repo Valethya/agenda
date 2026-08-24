@@ -349,6 +349,7 @@ export const verifyProductionOwnerReadyState = async (
       matches.length !== 1
       || matches[0].role !== "admin"
       || matches[0].isActive !== true
+      || matches[0].isBookable !== false
     ) {
       findings.push(`membershipMismatch:${expected.key}`);
     }
@@ -475,6 +476,7 @@ export const createProductionOwnerDocuments = async (
     business: businessIds.get(membership.businessKey),
     role: "admin",
     isActive: true,
+    isBookable: false,
     createdAt: now,
     updatedAt: now,
   }));

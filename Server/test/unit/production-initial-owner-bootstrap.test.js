@@ -72,6 +72,7 @@ const readySource = (manifest) => {
     business: businessIds.get(membership.businessKey),
     role: "admin",
     isActive: true,
+    isBookable: false,
   }));
   return {
     observedCollections: ["auditlogs", "businesses", "memberships", "users"],
@@ -236,7 +237,7 @@ describe("production owner manifest and plan", () => {
 });
 
 describe("production owner ready-state verification", () => {
-  it("acepta sólo la topología exacta y no exige User.business legacy", async () => {
+  it("acepta sólo la topología exacta, owner non-bookable y no exige User.business legacy", async () => {
     const manifest = buildProductionOwnerManifest(ownerEnvironment());
     const source = readySource(manifest);
     const result = await verifyProductionOwnerReadyState(
@@ -247,6 +248,7 @@ describe("production owner ready-state verification", () => {
     assert.deepEqual(result.findings, []);
     assert.equal(result.ready, true);
     assert.equal(source.users.every((user) => user.business === undefined), true);
+    assert.equal(source.memberships.every((membership) => membership.isBookable === false), true);
   });
 
   it("rechaza índices ausentes, User.business legacy, password mismatch, owner mismatch y datos extra", async () => {
@@ -271,7 +273,16 @@ describe("production owner ready-state verification", () => {
     assert.ok(result.findings.some((finding) => finding.startsWith("ownerMismatch:")));
   });
 
-  it("document writer crea owner links y Memberships sin poblar User.business", async () => {
+  it("rechaza owner Membership bookable", async () => {
+    const manifest = buildProductionOwnerManifest(ownerEnvironment());
+    const source = readySource(manifest);
+    source.memberships[0].isBookable = true;
+    const result = await verifyProductionOwnerReadyState(source, manifest, fakePasswordVerifier);
+    assert.equal(result.ready, false);
+    assert.ok(result.findings.some((finding) => finding.startsWith("membershipMismatch:")));
+  });
+
+  it("document writer crea owner links y Memberships non-bookable sin poblar User.business", async () => {
     const manifest = buildProductionOwnerManifest(ownerEnvironment());
     const writes = new Map();
     const db = {
@@ -300,6 +311,7 @@ describe("production owner ready-state verification", () => {
     for (const membership of writes.get("memberships")) {
       assert.equal(membership.role, "admin");
       assert.equal(membership.isActive, true);
+      assert.equal(membership.isBookable, false);
     }
   });
 });

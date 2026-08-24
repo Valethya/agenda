@@ -53,15 +53,18 @@ test("6.2.4-B Service update no acepta passthrough abierto ni business mutable",
   assert.match(validation, /updateServiceSchema[\s\S]*\.strict\(\)/u);
 });
 
-test("6.2.4-B desacopla role=worker de elegibilidad profesional", async () => {
+test("A+A2 desacopla role=worker de elegibilidad profesional", async () => {
   const appointment = await readSource("services/appointment.service.js");
   const availability = await readSource("services/availability.service.js");
   const eligibility = await readSource("services/professionalEligibility.service.js");
 
   assert.doesNotMatch(appointment, /tenantRole\s*===\s*["']worker["']/u);
   assert.doesNotMatch(availability, /membership\.role\s*!==\s*["']worker["']/u);
+  assert.doesNotMatch(eligibility, /membership\.role\s*===\s*["']worker["']/u);
+  assert.doesNotMatch(eligibility, /membership\.isBookable\s*\?\?/u);
   assert.match(eligibility, /serviceIncludesProfessional/u);
-  assert.match(eligibility, /TENANT_PARTICIPANT_ROLES/u);
+  assert.match(eligibility, /membership\.isBookable\s*!==\s*true/u);
+  assert.match(eligibility, /resolveBookableTenantParticipant/u);
   assert.match(eligibility, /new mongoose\.Types\.ObjectId\(value\)\.toHexString\(\)/u);
 });
 

@@ -73,6 +73,7 @@ await Membership.create({
   business: seed.business._id,
   role: "worker",
   isActive: true,
+  isBookable: true,
 });
 await Shift.create({
   business: seed.business._id,
