@@ -4,6 +4,9 @@ import assert from 'node:assert';
 import app, { sessionStore } from '../src/app.js';
 import { connectDB } from '../src/db/db.js';
 import { seedTestData, cleanTestData, teardown } from './fixtures.js';
+import User from '../src/db/models/user.model.js';
+import Membership from '../src/db/models/membership.model.js';
+import Shift from '../src/db/models/shift.model.js';
 
 await connectDB();
 
@@ -26,7 +29,6 @@ test('Flujo de Integración Completo de la API', async (t) => {
 
   let adminCookie = '';
   let testServiceId = '';
-  let testWorkerId = '';
   let testAppointmentId = '';
 
   // 1. REGISTRO Y CONTRATO ACTUAL DE CUENTA SIN MEMBRESÍA
@@ -62,8 +64,8 @@ test('Flujo de Integración Completo de la API', async (t) => {
     assert.match(logData.message, /ningún negocio asociado/i);
   });
 
-  // 2. OPERACIONES DE ADMINISTRADOR
-  await t.test('Operaciones de Administrador (Crear Servicio y Trabajador)', async () => {
+  // 2. OPERACIONES DE ADMINISTRADOR Y CIERRE LEGACY DE PROFESIONALES
+  await t.test('Admin crea Servicio y la administración legacy de profesionales permanece cerrada', async () => {
     // Login de Admin (pre-seeded with Membership)
     const logRes = await fetch(`${baseUrl}/login`, {
       method: 'POST',
@@ -96,7 +98,13 @@ test('Flujo de Integración Completo de la API', async (t) => {
     testServiceId = serviceData.payload._id;
     assert.ok(testServiceId);
 
-    // B. Crear un Trabajador (Solo Admin)
+    // B. A+A2 retira esta ruta como lifecycle administrativo. Debe fallar
+    // cerrado y no crear identidad global, Membership ni Shift implícito.
+    const before = {
+      users: await User.countDocuments({}),
+      memberships: await Membership.countDocuments({}),
+      shifts: await Shift.countDocuments({}),
+    };
     const workerRes = await fetch(`${baseUrl}/users/workers`, {
       method: 'POST',
       headers: {
@@ -111,10 +119,17 @@ test('Flujo de Integración Completo de la API', async (t) => {
         phone: '+56977778888',
       }),
     });
-    assert.strictEqual(workerRes.status, 201);
+    assert.strictEqual(workerRes.status, 409);
     const workerData = await workerRes.json();
-    testWorkerId = workerData.payload.id;
-    assert.ok(testWorkerId);
+    assert.strictEqual(workerData.code, 'CONFLICT_ERROR');
+    assert.strictEqual(
+      workerData.message,
+      'La administración legacy de profesionales no está disponible',
+    );
+    assert.strictEqual(await User.countDocuments({}), before.users);
+    assert.strictEqual(await Membership.countDocuments({}), before.memberships);
+    assert.strictEqual(await Shift.countDocuments({}), before.shifts);
+    assert.strictEqual(await User.findOne({ email: 'test-new-worker@example.com' }), null);
   });
 
   // 3. CONSULTA DE DISPONIBILIDAD Y AGENDAMIENTO DE CITAS
