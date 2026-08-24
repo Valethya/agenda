@@ -1974,3 +1974,275 @@ reserva
 Ninguno de esos conceptos debe volver a colapsarse bajo la palabra `worker`, bajo una coincidencia de email, bajo una proof de contacto aislada ni bajo una ruta legacy alternativa.
 
 La secuencia funcional propuesta es deliberada: storage/bookability y separación de predicados; cierre coordinado de superficies worker legacy incompatibles; endpoints Team admin para Memberships ya existentes; onboarding seguro dividido en grant tenant-scoped, account binding y consume atómico; recién entonces alta de nuevas personas en UI Equipo; después Servicios, Horarios/Disponibilidad y la primera reserva productiva end-to-end. No puede existir una ventana productiva donde la política nueva diga una cosa y una ruta legacy accesible permita otra.
+
+## 26. Addendum normativo — onboarding no es reactivación
+
+Esta sección cierra de forma normativa el lifecycle pendiente entre onboarding, Membership preexistente y `User.isActive`. **Prevalece sobre cualquier formulación anterior menos precisa de las secciones 12.11–12.13 y C3**, en particular sobre la expresión `target todavía no posee Membership contradictoria`.
+
+Regla general congelada:
+
+```text
+Team onboarding
+= incorporación de una participación tenant NUEVA
+
+Team onboarding
+!= reactivación de Membership
+!= global account recovery
+!= global account reactivation
+```
+
+### 26.1 Cualquier Membership preexistente excluye onboarding
+
+Al materializar un onboarding, la precondición no es ausencia de una Membership “contradictoria”. Debe demostrarse:
+
+```text
+NO existe ninguna Membership(User, Business)
+```
+
+Esto aplica sin importar:
+
+```text
+Membership.isActive === true
+Membership.isActive === false
+role actual
+isBookable actual
+```
+
+Si existe cualquier Membership para el mismo `User + Business`, onboarding **no puede crear, reemplazar, reactivar ni mutar** esa relación.
+
+La existencia se revalida dentro de la transición atómica C3 inmediatamente antes de materializar Membership; comprobarla sólo al issue no es suficiente.
+
+### 26.2 Caso A — Membership activa ya existente
+
+Si al consume ya existe:
+
+```text
+Membership(User, Business) {
+  isActive: true
+}
+```
+
+la persona ya participa en ese Business. El onboarding:
+
+- no crea otra Membership;
+- no cambia `role`;
+- no cambia `isBookable`;
+- no modifica acceso;
+- no actualiza ningún atributo de la Membership existente.
+
+El pending grant deja de ser aplicable y debe terminar de forma **segura, terminal, auditable y no reusable**. No se congela todavía el nombre físico del estado; puede modelarse en el futuro como `superseded`, `revoked`, `terminal-conflict` o equivalente siempre que no permita replay ni efectos posteriores.
+
+### 26.3 Caso B — Membership inactiva ya existente
+
+Si al consume existe:
+
+```text
+Membership(User, Business) {
+  isActive: false
+}
+```
+
+la situación pertenece al lifecycle futuro de **reactivación**, no a onboarding.
+
+Onboarding falla cerrado respecto de Membership y no puede:
+
+- poner `isActive=true`;
+- cambiar `role`;
+- cambiar `isBookable`;
+- recrear Membership;
+- borrar la Membership existente;
+- crear una segunda Membership;
+- restaurar `Service.workers`;
+- restaurar `Shift`;
+- restaurar `Block`;
+- inferir bookability desde configuración o historia preservada.
+
+Se mantiene íntegramente la regla previa:
+
+```text
+reactivar Membership
+!=
+reactivar isBookable automáticamente
+```
+
+La política futura de reactivación decidirá separadamente qué ocurre con `Service.workers`, Shifts y Blocks conservados. **Onboarding no resuelve ni anticipa esa política.**
+
+El grant que detecta esta Membership inactiva también debe terminar de forma segura, terminal, auditable y no reusable, sin revelar a superficies no autorizadas el estado interno de esa Membership.
+
+### 26.4 Concurrencia: Membership aparece entre issue y consume
+
+Caso obligatorio:
+
+```text
+issue onboarding
+-> otro flujo autorizado crea Membership(User, Business)
+-> consume intenta continuar
+```
+
+C3 debe volver a comprobar la inexistencia de Membership **dentro de la misma transición atómica** que consumiría el grant y crearía la Membership.
+
+Si aparece cualquier Membership antes del commit:
+
+- onboarding no la modifica;
+- no crea duplicado;
+- no cambia `role` ni `isBookable`;
+- no reactiva nada;
+- el grant termina de forma segura/no reusable cuando corresponda.
+
+El índice físico `{ user: 1, business: 1 } unique: true` sigue siendo la última barrera de integridad, pero `DuplicateKey` **no es** la lógica principal de lifecycle ni el único control de concurrencia.
+
+### 26.5 User global inactivo
+
+Si el User candidato exacto resuelto server-side posee:
+
+```text
+User.isActive === false
+```
+
+Team onboarding falla cerrado y no puede:
+
+- crear Membership;
+- cambiar `User.isActive` a `true`;
+- modificar password o credenciales;
+- ejecutar reset implícito;
+- transferir account ownership;
+- cambiar `User.role`;
+- cambiar `User.business`;
+- crear una identidad paralela para esquivar el conflicto.
+
+Regla congelada:
+
+```text
+Team onboarding
+!= global account recovery
+!= global account reactivation
+```
+
+La identidad global sólo podrá volver a ser candidata después de un flujo explícito y seguro de recovery/reactivation separado de Team.
+
+Después de una reactivación global válida, un onboarding **no hereda autorización stale**: sólo puede volver a evaluarse si su grant continúa pending, no expirado, no revocado y no terminal, y debe revalidar nuevamente todas las precondiciones de C1+C2+C3, incluida autoridad vigente del issuer y ausencia total de Membership `User + Business`.
+
+No se exige que un grant sobreviva a ese proceso; expiración y revocación permanecen plenamente vigentes.
+
+Para un User nuevo creado dentro del futuro onboarding, la identidad sólo puede crearse activa después de que la propia persona haya establecido de forma segura su autenticación conforme a C2.
+
+### 26.6 Account binding debe identificar exactamente al User resuelto server-side
+
+Cuando existe un User activo candidato, la cuenta que el claimant demuestra controlar debe ser exactamente la identidad que el servidor resolvió de forma segura para el destino normalizado del onboarding.
+
+Conceptualmente:
+
+```text
+normalized onboarding destination
+-> resolución server-side
+-> User candidato exacto
++
+account control de ese User exacto
+```
+
+Queda prohibido:
+
+```text
+claimant body userId=X
+-> Membership(X, Business)
+```
+
+El claimant no selecciona `userId`, no sustituye el target del grant y no puede redirigir el onboarding hacia una identidad global arbitraria.
+
+Esta resolución permanece interna y no debe convertirse en endpoint/oracle de enumeración global.
+
+### 26.7 Terminación segura del grant ante conflicto de lifecycle
+
+Cuando el consume detecta:
+
+```text
+A. Membership activa preexistente
+B. Membership inactiva preexistente
+```
+
+el resultado respecto de Membership es siempre:
+
+```text
+NO Membership nueva
+NO reactivación
+NO cambio de role
+NO cambio de isBookable
+```
+
+El grant debe pasar conceptualmente a un estado **terminal y no reusable**. El nombre físico no se congela, pero debe cumplir:
+
+- no replay efectivo;
+- no efectos posteriores si cambia luego el estado de Membership;
+- estado auditable;
+- ausencia de secretos raw en auditoría;
+- respuestas estables que no filtren Memberships, Businesses ni identidad global ajena a callers no autorizados.
+
+El conflicto no puede dejar un bearer pending reutilizable esperando que una mutación futura de estado vuelva accidentalmente válida una autorización histórica.
+
+### 26.8 Enmienda obligatoria de C3
+
+La futura fase C3 `Atomic consume -> Membership` debe incluir explícitamente, dentro de la transición consistente:
+
+```text
+revalidar issuer y Business
++ validar grant pending/no expirado/no revocado/no terminal
++ resolver target User exacto server-side
++ exigir target User activo
++ validar claimant/account binding de ese User exacto
++ demostrar ausencia de CUALQUIER Membership(User, Business)
++ rechazar reactivación implícita
++ consumir grant
++ crear Membership worker + active + non-bookable
+```
+
+Si existe una Membership activa o inactiva, C3 no crea ni muta Membership. Si el User global está inactivo, C3 no lo reactiva ni crea Membership.
+
+La reactivación de Membership y la reactivación/recovery de User global permanecen lifecycles separados fuera de C3.
+
+### 26.9 Regresiones obligatorias adicionales
+
+La implementación funcional no será aceptable sin demostrar además:
+
+1. Membership activa aparece entre issue y consume: no se crea ni modifica Membership y el grant no queda reusable.
+2. Membership inactiva existente: onboarding no la reactiva.
+3. Membership inactiva conserva `role` e `isBookable` sin cambios.
+4. Membership inactiva + `Service.workers` histórico: onboarding no restaura booking eligibility.
+5. Membership inactiva + Shift/Block históricos: onboarding no publica disponibilidad.
+6. Onboarding no crea segunda Membership aunque la primera esté inactiva.
+7. `DuplicateKey` no es el único control del caso concurrente.
+8. User global inactivo: onboarding no crea Membership.
+9. User global inactivo: onboarding no cambia `User.isActive`.
+10. User global inactivo: onboarding no resetea password ni credenciales.
+11. Recovery/reactivation global permanece una operación separada de Team onboarding.
+12. Después de recovery explícito se reevalúan todas las precondiciones; no se reutiliza autorización stale.
+13. Claimant no puede seleccionar un `userId` arbitrario.
+14. Account binding corresponde al User exacto resuelto server-side.
+15. Ningún conflicto de Membership/User revela Businesses, Memberships o identidad global ajena a una superficie no autorizada.
+
+### 26.10 Consecuencia para el orden funcional
+
+Se mantiene el orden:
+
+```text
+A  storage + migración + bookability/Appointment predicates
+A2 hardening legacy
+B  Team para Memberships existentes
+C1 onboarding grant
+C2 account binding
+C3 consume atómico -> Membership
+D  UI Team
+E  Servicios
+F  Horarios
+G  reserva productiva
+```
+
+C3 queda ahora condicionado explícitamente por:
+
+```text
+target User activo
+AND cero Membership(User, Business), activa o inactiva
+AND no reactivación implícita
+AND grant vigente/no terminal
+```
+
+La futura reactivación de Membership continúa siendo una operación/lifecycle separado y no forma parte de onboarding.
