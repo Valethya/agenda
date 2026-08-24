@@ -61,6 +61,7 @@ const membershipB = await Membership.create({
   business: seed.businessB._id,
   role: "worker",
   isActive: true,
+  isBookable: true,
 });
 
 const serviceB = await Service.create({
