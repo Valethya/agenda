@@ -53,7 +53,11 @@ test("6.2.4-B Appointment ownership enforcement", async (t) => {
     await Service.findByIdAndUpdate(seed.service._id, { workers: [seed.worker._id], isActive: true });
     await Membership.updateOne(
       { user: seed.worker._id, business: seed.business._id },
-      { $set: { isActive: true, role: "worker" } },
+      { $set: { isActive: true, role: "worker", isBookable: true } },
+    );
+    await Membership.updateOne(
+      { user: seed.admin._id, business: seed.business._id },
+      { $set: { isActive: true, role: "admin", isBookable: false } },
     );
   });
 
@@ -77,20 +81,29 @@ test("6.2.4-B Appointment ownership enforcement", async (t) => {
     assert.equal((await Appointment.findById(appointment._id)).status, "pending");
   });
 
-  await t.test("profesional requiere Membership activa + allowlist + assignment; revocación no reescribe", async () => {
+  await t.test("profesional de Appointment existente requiere Membership activa + assignment, no allowlist/bookability actuales", async () => {
     const appointment = await makeAppointment();
     assert.equal((await request(`/appointments/${appointment._id}`, { cookie: workerCookie })).status, 200);
 
     await Service.findByIdAndUpdate(seed.service._id, { workers: [] });
-    assert.equal((await request(`/appointments/${appointment._id}`, { cookie: workerCookie })).status, 404);
-    await Service.findByIdAndUpdate(seed.service._id, { workers: [seed.worker._id] });
+    await Membership.updateOne(
+      { user: seed.worker._id, business: seed.business._id },
+      { $set: { isBookable: false } },
+    );
+    assert.equal((await request(`/appointments/${appointment._id}`, { cookie: workerCookie })).status, 200);
 
     const other = await User.create({
       firstName: "Other", lastName: "Professional", email: ["other-prof@example.com"],
       phone: ["+56981110002"], password: await createHash("otherProfessional"), role: "worker", isActive: true,
     });
-    await Membership.create({ user: other._id, business: seed.business._id, role: "worker", isActive: true });
-    await Service.findByIdAndUpdate(seed.service._id, { workers: [seed.worker._id, other._id] });
+    await Membership.create({
+      user: other._id,
+      business: seed.business._id,
+      role: "worker",
+      isActive: true,
+      isBookable: true,
+    });
+    await Service.findByIdAndUpdate(seed.service._id, { workers: [other._id] });
     const otherCookie = await login("other-prof@example.com", "otherProfessional");
     assert.equal((await request(`/appointments/${appointment._id}`, { cookie: otherCookie })).status, 404);
 
@@ -103,7 +116,11 @@ test("6.2.4-B Appointment ownership enforcement", async (t) => {
     assert.equal(persisted.status, "pending");
   });
 
-  await t.test("admin puede ser profesional por Service.workers sin segunda Membership", async () => {
+  await t.test("admin puede ser profesional con su única Membership cuando isBookable=true", async () => {
+    await Membership.updateOne(
+      { user: seed.admin._id, business: seed.business._id },
+      { $set: { isBookable: true } },
+    );
     const day = new Date("2099-09-01T00:00:00.000Z").getUTCDay();
     await Shift.findOneAndUpdate(
       { business: seed.business._id, worker: seed.admin._id, dayOfWeek: day },
@@ -117,7 +134,9 @@ test("6.2.4-B Appointment ownership enforcement", async (t) => {
     assert.equal(created.status, 201);
     const service = (await created.json()).payload;
     assert.equal(await Membership.countDocuments({ user: seed.admin._id, business: seed.business._id }), 1);
-    assert.equal((await Membership.findOne({ user: seed.admin._id, business: seed.business._id })).role, "admin");
+    const adminMembership = await Membership.findOne({ user: seed.admin._id, business: seed.business._id });
+    assert.equal(adminMembership.role, "admin");
+    assert.equal(adminMembership.isBookable, true);
 
     const slots = await request(`/availability/slots?workerId=${seed.admin._id}&serviceId=${service._id}&date=2099-09-01&slug=${seed.business.slug}`);
     assert.equal(slots.status, 200);
@@ -132,7 +151,7 @@ test("6.2.4-B Appointment ownership enforcement", async (t) => {
     assert.equal(booking.status, 201);
   });
 
-  await t.test("Service.workers valida tenant participants, duplicados, [] e inactive Service", async () => {
+  await t.test("Service.workers valida bookable tenant participants, duplicados, [] e inactive Service", async () => {
     const invalidReference = await request("/services", {
       method: "POST", cookie: adminCookie,
       body: { name: "Invalid Worker Id 624B", duration: 30, price: 1, workers: ["not-an-object-id"] },
@@ -159,7 +178,13 @@ test("6.2.4-B Appointment ownership enforcement", async (t) => {
       firstName: "Inactive", lastName: "Professional", email: ["inactive-624b@example.com"],
       phone: ["+56981110005"], password: await createHash("inactive624b"), role: "worker", isActive: false,
     });
-    await Membership.create({ user: inactive._id, business: seed.business._id, role: "worker", isActive: true });
+    await Membership.create({
+      user: inactive._id,
+      business: seed.business._id,
+      role: "worker",
+      isActive: true,
+      isBookable: true,
+    });
     assert.equal((await request("/services", {
       method: "POST", cookie: adminCookie,
       body: { name: "Inactive Worker 624B", duration: 30, price: 1, workers: [inactive._id.toString()] },
@@ -180,6 +205,10 @@ test("6.2.4-B Appointment ownership enforcement", async (t) => {
       body: { name: "Editable Workers 624B", duration: 30, price: 1, workers: [seed.worker._id.toString()] },
     });
     const editableService = (await editable.json()).payload;
+    await Membership.updateOne(
+      { user: seed.admin._id, business: seed.business._id },
+      { $set: { isBookable: true } },
+    );
     assert.equal((await request(`/services/${editableService._id}`, {
       method: "PUT", cookie: adminCookie, body: { workers: [seed.admin._id.toString()] },
     })).status, 200);
