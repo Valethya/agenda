@@ -8,6 +8,13 @@ const currentDir = path.dirname(fileURLToPath(import.meta.url));
 const srcRoot = path.resolve(currentDir, "../../src");
 const readSource = async (relativePath) => fs.readFile(path.join(srcRoot, relativePath), "utf8");
 
+const exportedFunctionBody = (source, exportName) => {
+  const start = source.indexOf(`export const ${exportName}`);
+  const end = source.indexOf("};", start);
+  assert.ok(start >= 0 && end > start, `No se encontró ${exportName}`);
+  return source.slice(start, end + 2);
+};
+
 test("Membership.isBookable es canónico, boolean y default false", async () => {
   const model = await readSource("db/models/membership.model.js");
   assert.match(model, /isBookable:\s*\{[\s\S]*type:\s*Boolean[\s\S]*default:\s*false[\s\S]*required:/u);
@@ -36,8 +43,8 @@ test("existing Appointment actor capability no usa bookability ni Service.worker
 test("POST/DELETE workers legacy son no-mutating y sin email/password/Shift", async () => {
   const userService = await readSource("services/user.service.js");
   const routes = await readSource("routes/user.routes.js");
-  const createSection = userService.slice(userService.indexOf("export const createWorker"), userService.indexOf("export const deleteWorker"));
-  const deleteSection = userService.slice(userService.indexOf("export const deleteWorker"), userService.indexOf("export const getWorkersList"));
+  const createSection = exportedFunctionBody(userService, "createWorker");
+  const deleteSection = exportedFunctionBody(userService, "deleteWorker");
 
   assert.match(createSection, /throw new ConflictError/u);
   assert.doesNotMatch(createSection, /findByEmail|Membership|Shift|password|email/u);
