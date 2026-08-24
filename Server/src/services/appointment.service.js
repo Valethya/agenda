@@ -53,7 +53,6 @@ const assertAppointmentTenantCoherence = (appointment, businessId) => {
   ) {
     throw new NotFoundError("La cita especificada no existe");
   }
-
   return appointment;
 };
 
@@ -101,7 +100,6 @@ export const bookAppointment = async (appointmentData) => {
   });
 
   const initialScope = tenantScope || await validateBookingTenantScope({ worker, service, businessId });
-  let serviceDetail = initialScope.serviceDetail;
   const targetDate = new Date(date);
   const dateStr = targetDate.toISOString().split("T")[0];
 
@@ -122,10 +120,22 @@ export const bookAppointment = async (appointmentData) => {
     throw new ConflictError("El horario seleccionado ya no se encuentra disponible");
   }
 
-  // El slot/tenantScope observado previamente no es un grant durable. Se vuelve
-  // a leer Service + User + Membership inmediatamente antes de materializar la
-  // Appointment, también para sugerencias que no consultan slots estándar.
-  ({ serviceDetail } = await validateBookingTenantScope({ worker, service, businessId }));
+  let autoConfirm = false;
+  if (businessId) {
+    const config = await businessConfigRepository.getConfig(businessId);
+    if (config?.appointmentSettings?.autoConfirmLocalBookings) autoConfirm = true;
+  }
+
+  let finalNotes = notes;
+  if (isSuggestion) finalNotes = `[⚠️ SUGERENCIA DE CLIENTE: Horario propuesto no disponible en turnos estándar]\n${notes || ""}`;
+
+  // El slot y cualquier tenantScope observado previamente no son grants durables.
+  // Esta lectura sucede inmediatamente antes de materializar la Appointment.
+  const commitScope = await validateBookingTenantScope({ worker, service, businessId });
+  const serviceDetail = commitScope.serviceDetail;
+  const endTime = addMinutesToTime(startTime, serviceDetail.duration);
+  const isLocalBooking = serviceDetail.depositAmount === 0 || paymentOption === "local";
+  const initialStatus = autoConfirm && isLocalBooking && !isSuggestion ? "confirmed" : "pending";
 
   await logEvent({
     userId: client,
@@ -134,20 +144,6 @@ export const bookAppointment = async (appointmentData) => {
     message: "Validación de reserva exitosa: horario, servicio y bookability vigentes.",
     metadata: { worker, dateStr, startTime },
   });
-
-  const endTime = addMinutesToTime(startTime, serviceDetail.duration);
-  let initialStatus = "pending";
-  let autoConfirm = false;
-  if (businessId) {
-    const config = await businessConfigRepository.getConfig(businessId);
-    if (config?.appointmentSettings?.autoConfirmLocalBookings) autoConfirm = true;
-  }
-
-  const isLocalBooking = serviceDetail.depositAmount === 0 || paymentOption === "local";
-  if (autoConfirm && isLocalBooking && !isSuggestion) initialStatus = "confirmed";
-
-  let finalNotes = notes;
-  if (isSuggestion) finalNotes = `[⚠️ SUGERENCIA DE CLIENTE: Horario propuesto no disponible en turnos estándar]\n${notes || ""}`;
 
   const newAppointment = await appointmentRepository.create({
     client,
@@ -183,20 +179,13 @@ const findTenantAppointment = async (appointmentId, businessId) => {
   return assertAppointmentTenantCoherence(appointment, businessId);
 };
 
-const resolveActorTenantAuthority = async (userId, businessId, preloadedAuthority = null) => {
-  if (
-    preloadedAuthority
-    && typeof preloadedAuthority === "object"
-    && sameId(preloadedAuthority.userId, userId)
-    && sameId(preloadedAuthority.businessId, businessId)
-  ) {
-    return preloadedAuthority;
-  }
-
-  return await findTenantAuthority(userId, businessId);
-};
+// El authority preloaded puede haber quedado obsoleto entre middleware y acción;
+// las operaciones sobre historial revalidan autoridad tenant actual.
+const resolveActorTenantAuthority = async (userId, businessId, _preloadedAuthority = null) =>
+  findTenantAuthority(userId, businessId);
 
 /**
+ * Appointment.client equality is deliberately NOT a grant.
  * Capacidad sobre una Appointment YA EXISTENTE. Deliberadamente no depende de
  * Membership.isBookable ni de la presencia actual en Service.workers. La
  * autoridad tenant vigente continúa siendo requisito y por eso una Membership,
@@ -236,15 +225,10 @@ const authorizeProtectedAppointment = async ({
   if (!capabilities.isAdmin && !capabilities.isProfessional) {
     throw new NotFoundError("La cita especificada no existe");
   }
-
   return capabilities;
 };
 
-const transitionAppointmentStatus = async ({
-  appointment,
-  businessId,
-  transition,
-}) => {
+const transitionAppointmentStatus = async ({ appointment, businessId, transition }) => {
   if (!transition.from.includes(appointment.status)) {
     throw new ConflictError("La cita ya no se encuentra en un estado compatible con esta operación");
   }
@@ -255,11 +239,9 @@ const transitionAppointmentStatus = async ({
     transition.from,
     transition.to,
   );
-
   if (!updated) {
     throw new ConflictError("La cita cambió de estado antes de completar la operación");
   }
-
   return updated;
 };
 
@@ -332,7 +314,6 @@ export const cancelAppointment = async (appointmentId, userId, tenantAuthority, 
   const { actorCapability } = await authorizeProtectedAppointment({ appointment, userId, businessId, tenantAuthority });
 
   const updatedAppointment = await transitionAppointmentStatus({ appointment, businessId, transition: STATUS_TRANSITIONS.cancel });
-
   await logEvent({
     appointmentId,
     userId,
@@ -363,7 +344,6 @@ export const getMyAppointments = async (userId, tenantAuthority, businessId) => 
   if (authority.role === "admin") {
     return await appointmentRepository.findCoherentAllByBusiness(businessId);
   }
-
   return await appointmentRepository.findCoherentAllByBusiness(businessId, { worker: userId });
 };
 
