@@ -56,7 +56,9 @@ Además, el alta de una nueva participación tenant debe mantener separadas:
 ```text
 email declarado por un admin
 !=
-identidad global demostrada por la persona
+control actual del canal
+!=
+control de una cuenta User global existente
 !=
 Membership autorizada en un Business
 ```
@@ -248,6 +250,16 @@ Estos recursos pueden seguir referenciando la identidad global `User` siempre qu
 28. Retirar un User de `Service.workers` no revoca por sí solo existing Appointment actor capability ni modifica `Appointment.worker`.
 29. Ninguna ruta legacy puede permanecer como vía alternativa para saltarse onboarding, lifecycle Team o las proyecciones mínimas definidas aquí.
 30. El cutover funcional debe cerrar o endurecer superficies legacy incompatibles antes o en el mismo despliegue que vuelve vigente la política nueva; no se permite una ventana productiva con reglas contradictorias.
+31. Control actual válido de un canal **no equivale** a control de una cuenta `User` global existente que contenga ese contacto.
+32. Cuando el destino corresponda a un `User` global existente, crear Membership requiere tanto la aceptación/proof válida del onboarding como control/autenticación válida de **ese User concreto**, o un futuro proceso explícito y seguro de account recovery/claim; ante conflicto, se falla cerrado.
+33. `findByEmail()` nunca constituye account binding y un challenge de email por sí solo nunca selecciona ni transfiere una cuenta User existente.
+34. Los purposes de Verification orientados a contacto/Appointment no conceden Membership ni autoridad Team; onboarding tenant requiere purpose/contrato separado aunque reutilice primitivas criptográficas o delivery.
+35. Toda autorización de onboarding debe quedar fijada server-side en un grant pending ligado a Business, destino/canal, purpose, issuer, role, estado inicial de `isBookable`, expiración y lifecycle single-use/revocable.
+36. El claimant no puede elegir ni ampliar `Business`, `role`, `isBookable`, issuer o purpose al aceptar el onboarding.
+37. La primera política de onboarding profesional adopta least privilege: `Membership.role="worker"`, `isActive=true`, `isBookable=false`; onboarding de nuevos admins queda fuera de la primera versión.
+38. Al consumir onboarding se revalida la autoridad vigente del issuer; una copia histórica de su rol no mantiene autoridad durable.
+39. Validar grant + validar claimant/account binding + comprobar unicidad + consumir grant + crear Membership debe ser atómico o fail-closed con resultado equivalente; no se permiten estados parciales ni replay.
+40. El índice único `User + Business` sigue siendo barrera final de integridad, pero `DuplicateKey` no puede ser el único control de seguridad ni concurrencia del onboarding.
 
 ## 4. Vocabulario canónico
 
@@ -330,11 +342,39 @@ La relación histórica relevante para esa Appointment es su `Appointment.worker
 
 **Owner** sigue siendo `Business.owner`. Es metadata de propiedad y puede mostrarse en la superficie Team admin-only, pero no autoriza mutaciones ni vuelve agendable al User.
 
-### 4.8 Onboarding
+### 4.8 Onboarding tenant
 
-**Onboarding tenant** es el proceso futuro mediante el cual una persona que aún no posee Membership en un Business demuestra/acepta de forma suficiente la incorporación y sólo entonces obtiene exactamente una Membership.
+**Onboarding tenant** es el proceso futuro mediante el cual una persona que aún no posee Membership en un Business acepta/demuestra lo requerido para incorporarse y sólo entonces obtiene exactamente una Membership.
 
-No se infiere por coincidencia de email y no se congela aquí su mecanismo físico.
+No se infiere por coincidencia de email. Debe distinguir al menos:
+
+```text
+control/aceptación del canal de onboarding
+!=
+control de una cuenta User global existente
+```
+
+Cuando ya existe un User candidato, el onboarding no puede bindarlo por email match ni por channel proof aislada. Cuando no existe User, la persona —no el admin— debe llegar a controlar su propia autenticación antes de materializar Membership. La forma física exacta de esa autenticación, recovery o claim se define en la futura fase C.
+
+### 4.9 Pending onboarding grant
+
+**Pending onboarding grant** es la autorización administrativa futura, server-side, que expresa exactamente qué incorporación puede materializarse si el destinatario completa los proofs requeridos.
+
+Como mínimo liga:
+
+```text
+Business exacto
++ destino/canal exacto
++ purpose exacto de onboarding tenant
++ issuer autorizado
++ role autorizado
++ estado inicial de isBookable
++ expiración
++ pending/consumed/revoked
++ material single-use no raw cuando corresponda
+```
+
+El claimant consume ese grant; no redefine su intención.
 
 ## 5. Separación autoridad / agendabilidad
 
@@ -360,6 +400,7 @@ Service.workers  != Membership
 Shift exists     != isBookable
 Appointment.worker == User != future booking eligibility
 Service.workers current membership != historical Appointment assignment
+channel control != existing User account control
 ```
 
 ## 6. Representación elegida
@@ -784,14 +825,15 @@ Este documento no define esa superficie excepcional. Hasta entonces, el lifecycl
 
 Una persona que todavía no posee Membership en el Business **no puede recibirla únicamente porque un admin introdujo un email**, aunque ese email coincida con un `User` global existente.
 
-Regla congelada:
+Reglas congeladas:
 
 ```text
 User.email match != trusted identity binding
 User existente != autorización para conceder Membership
+current channel control != control of existing User account
 ```
 
-Esto se justifica además por el runtime histórico: el registro global no demuestra necesariamente control previo del email y existen contactos legacy con provenance guest no verificada. Por tanto, ni la mera existencia de User ni la coincidencia de email constituyen evidence suficiente para materializar autoridad tenant.
+Esto se justifica además por el runtime histórico: el registro global no demuestra necesariamente control previo del email y existen contactos legacy con provenance guest no verificada. ADR-001 ya congela que una proof de contacto demuestra control actual del canal, no continuidad histórica del sujeto. En Team, esa separación implica adicionalmente que el control actual del canal tampoco basta para bindar una cuenta User global preexistente.
 
 ### 12.2 Primera superficie antes de onboarding
 
@@ -806,51 +848,292 @@ si User no existe -> onboarding
 
 Ambos casos permanecen detrás del mismo límite de onboarding.
 
-### 12.3 Semántica futura uniforme
+### 12.3 Semántica futura uniforme sin oracle global
 
 El futuro onboarding debe presentar al admin una semántica uniforme independientemente de si el email ya pertenece a una cuenta global:
 
 ```text
 admin inicia onboarding para email E
+-> servidor crea pending onboarding grant tenant-scoped
 -> respuesta estable no revela si E corresponde a User global
--> destinatario demuestra control / acepta onboarding según contrato futuro
--> servidor resuelve de forma segura identidad existente o crea identidad nueva
--> sólo entonces crea exactamente una Membership(User, Business)
+-> destinatario demuestra control/aceptación del canal según contrato futuro
+-> servidor resuelve internamente si existe conflicto/cuenta candidata
+-> sólo materializa Membership cuando también se satisface account binding seguro
 ```
 
-No se congela en este PR el mecanismo físico de invitación, token, challenge, autenticación o delivery.
+La respuesta inicial al admin no distingue User existente/no existente. Sin embargo, **la resolución interna tampoco puede convertir `findByEmail(E)` en selección automática de identidad**.
 
-### 12.4 Prohibiciones
+No se congela en este PR el mecanismo físico de invitación, token, challenge, autenticación, recovery, claim o delivery.
+
+### 12.4 Channel control no selecciona un User existente
+
+Caso adversarial que la implementación futura debe tratar explícitamente:
+
+```text
+1. atacante pre-registra User U con victim@example.com
+2. atacante controla la contraseña/credencial de U
+3. admin inicia onboarding para victim@example.com
+4. víctima legítima controla ese buzón
+5. víctima completa correctamente el challenge de email
+6. findByEmail(victim@example.com) devolvería U
+```
+
+Resultado **prohibido**:
+
+```text
+challenge email válido
+-> bindar U por email match
+-> crear Membership(U, Business)
+-> atacante usa su credencial de U para obtener autoridad tenant
+```
+
+Por tanto, cuando el destino corresponde a un User global existente, materializar Membership requiere dos demostraciones distintas:
+
+```text
+A. control/aceptación válida del onboarding destinado al canal
+AND
+B. control/autenticación válida de ESE User global concreto
+```
+
+Si B no puede demostrarse, sólo un futuro proceso explícito y seguro de account recovery/claim puede resolver el conflicto. Hasta entonces:
+
+```text
+conflicto de account ownership
+=> fail closed
+=> cero Membership nueva
+```
+
+No asumir que la sesión tenant normal actual resuelve este caso: ADR-001 documenta que un User no-superadmin sin Membership no completa necesariamente la sesión normal. La futura fase C deberá proporcionar una frontera segura de autenticación/aceptación para account binding sin conceder primero la Membership que precisamente se intenta autorizar.
+
+### 12.5 Identidad nueva sin User global
+
+Cuando no exista un User global válido para la persona, el onboarding futuro podrá crear una identidad nueva **sólo después** del proof/aceptación correspondiente y permitiendo que la propia persona —no el admin— establezca o controle su autenticación.
+
+La secuencia conceptual es:
+
+```text
+proof/aceptación válida
++ establecimiento seguro de autenticación por la persona
+-> User nuevo controlado por esa persona
+-> materialización atómica de Membership autorizada
+```
+
+No se crea una segunda identidad con el mismo contacto para esquivar un conflicto con un User existente. Un conflicto de account ownership debe resolverse explícitamente o fallar cerrado.
+
+### 12.6 Prohibiciones de account binding
 
 No se permite:
 
 - `email match -> Membership inmediata`;
 - `User preexistente -> Membership inmediata`;
+- `email challenge -> User existente` sin control adicional de esa cuenta;
+- `findByEmail` como proof de account ownership;
 - endpoint previo de enumeración global por email;
 - respuesta que permita distinguir innecesariamente cuenta existente/no existente;
 - admin conoce o elige la contraseña de la persona;
 - contraseña temporal compartida o predecible;
+- sobrescribir password/credenciales de un User existente para completar onboarding;
+- reset implícito de una cuenta existente;
+- transferencia implícita de account ownership;
+- mutar credenciales para hacer caber el onboarding;
+- crear otra identidad con el mismo contacto como workaround de ownership conflict;
+- añadir Membership mientras no se haya resuelto de forma segura el account binding;
 - convertir contacto legacy guest no verificado en autoridad tenant;
 - usar `User.role`, `User.business` o `Business.owner` como atajo de onboarding.
 
-### 12.5 Estado onboarding-required
+### 12.7 Separation of Verification purposes
+
+El runtime existente `ClientContactVerification` y sus primitivas actuales pertenecen a contratos de control de contacto y gestión guest de Appointment. Esos grants/purposes **no son authority grants de Team**.
+
+No puede autorizar Membership ni onboarding tenant un Verification creado para, entre otros:
+
+```text
+contact-control
+appointment-read-bootstrap
+appointment-cancel-bootstrap
+appointment-reschedule-bootstrap
+```
+
+Si la futura fase C reutiliza primitivas criptográficas, almacenamiento de digest, challenge consumption o trusted delivery existentes, deberá existir un **purpose y contrato separado de onboarding tenant** con sus propias precondiciones y efectos. Reutilizar implementación no reutiliza autoridad semántica.
+
+En particular:
+
+```text
+contact-control proof
+!= Team onboarding grant
+
+Appointment capability/proof
+!= Membership authority
+```
+
+### 12.8 Estado onboarding-required
 
 Si una implementación futura conserva `TEAM_ONBOARDING_REQUIRED` o nombre equivalente, su semántica es tenant-local:
 
 > la incorporación de esta persona a este Business todavía no ha completado el onboarding requerido.
 
-No es un oracle de existencia global de `User`.
+No es un oracle de existencia global de `User`, ni declara si existe o no account conflict.
 
-### 12.6 Materialización de Membership
+### 12.9 Pending onboarding grant ligado a intención exacta
 
-La Membership sólo se crea después de la aceptación/proof definida por el futuro contrato de onboarding y debe seguir respetando:
+El onboarding termina creando autoridad tenant. Por tanto, la intención administrativa debe quedar definida server-side al **emitir** el grant, no en el body elegido por el claimant al aceptar.
+
+Como mínimo, el pending onboarding grant debe quedar ligado a:
+
+```text
+Business exacto
++ destino/canal exacto
++ purpose exacto de onboarding tenant
++ actor/issuer autorizado
++ role tenant autorizado
++ estado inicial de isBookable
++ expiración
++ estado pending/consumed/revoked
++ material single-use no raw cuando corresponda
+```
+
+La aceptación consume exactamente ese grant. El claimant **no puede** escoger, sustituir ni ampliar:
+
+```text
+Business
+role
+isBookable
+issuer
+purpose
+```
+
+Ejemplos prohibidos:
+
+```text
+grant worker
+-> accept body role=admin
+-> Membership admin
+```
+
+```text
+grant isBookable=false
+-> accept body isBookable=true
+-> profesional publicado
+```
+
+```text
+grant Business A
+-> consume en Business B
+```
+
+Los datos presentados por el claimant sólo pueden aportar los proofs/credenciales estrictamente requeridos para aceptar el grant ya definido; nunca redefinir su privilegio.
+
+### 12.10 Política de least privilege para la primera versión
+
+La primera versión de onboarding de Equipo se restringe a incorporación profesional no-admin:
+
+```text
+Membership.role = "worker"
+Membership.isActive = true
+Membership.isBookable = false
+```
+
+Después, un admin Team ya autorizado puede ejecutar una mutación separada y explícita para:
+
+```text
+isBookable: false -> true
+```
+
+cuando corresponda.
+
+**Onboarding de nuevos admins queda fuera del alcance de la primera versión.** Conceder `role="admin"` mediante invitación requerirá un contrato futuro adicional que reabra explícitamente esa necesidad y sus guardas; no se obtiene cambiando parámetros de un grant worker.
+
+### 12.11 Autoridad del issuer entre issue y consume
+
+La autoridad para iniciar onboarding no se vuelve durable sólo porque el grant fue emitido.
+
+En la primera versión, al materializar Membership el servidor debe revalidar desde persistencia que:
+
+```text
+Business sigue activo
+AND issuer User sigue activo
+AND issuer conserva Membership activa en ese Business
+AND issuer Membership.role === "admin"
+AND grant sigue pending
+AND grant no expiró
+AND grant no fue revocado
+AND destino/purpose/Business/privilegios del grant siguen coherentes
+AND target todavía no posee Membership contradictoria
+```
+
+Si no puede demostrarse cualquiera de estas condiciones:
+
+```text
+NO crear Membership
+```
+
+Un rol admin copiado históricamente dentro del grant, sesión o evento de auditoría no sustituye la autoridad vigente del issuer.
+
+Caso mínimo fail-closed:
+
+```text
+admin A emite onboarding
+-> A pierde Membership admin / se desactiva / Business se desactiva
+-> claimant intenta aceptar
+=> consume falla sin Membership
+```
+
+Si una futura versión desea que una invitación sobreviva a la salida o revocación del issuer, deberá definir una autoridad durable distinta y explícita; no se asume aquí.
+
+### 12.12 Materialización y atomicidad consume -> Membership
+
+Completar onboarding y materializar Membership debe constituir una única transición consistente.
+
+Conceptualmente:
+
+```text
+validar grant
++ revalidar issuer/Business
++ validar claimant y account binding
++ verificar unicidad User + Business
++ consumir grant
++ crear Membership con role/isActive/isBookable fijados
+```
+
+Debe ejecutarse atómicamente o con una estrategia fail-closed que garantice resultado observable equivalente.
+
+Estados prohibidos:
+
+```text
+grant = consumed
+AND Membership no creada
+```
+
+```text
+Membership creada
+AND grant todavía pending/reusable
+```
+
+Dos consumes concurrentes del mismo grant deben producir como máximo:
+
+```text
+1 consume efectivo
++ 1 Membership
+```
+
+Nunca pueden resolver privilegios por last-write-wins, crear dos grants efectivos, cambiar `role`/`isBookable` por parámetros rivales ni dejar estados parciales.
+
+El índice físico único `{ user: 1, business: 1 } unique: true` se preserva como última barrera de integridad, pero el sistema no puede depender de capturar `DuplicateKey` como único mecanismo de autorización, replay protection o serialización.
+
+Si falla la creación de Membership, la estrategia debe impedir que el grant quede consumido de manera inconsistente. Si el consume tiene éxito, el grant deja de ser reutilizable.
+
+### 12.13 Materialización final de Membership
+
+La Membership sólo se crea después de completar todas las precondiciones de onboarding y account binding aplicables y debe seguir respetando:
 
 - exactamente una Membership por `User + Business`;
-- rol tenant explícito;
-- estado activo explícito;
-- `isBookable` explícito/fail-closed;
-- no overwrite silencioso de password/nombre global;
-- no exposición de otras Memberships o Businesses.
+- `role="worker"` en la primera versión de onboarding profesional;
+- `isActive=true`;
+- `isBookable=false` inicialmente;
+- no overwrite silencioso de password/nombre/credenciales globales;
+- no exposición de otras Memberships o Businesses;
+- issuer y Business revalidados al consume;
+- consume single-use/atómico conforme a 12.12.
 
 ## 13. Booking eligibility y discovery público
 
@@ -1097,7 +1380,10 @@ Dos Businesses no deben poder usar esa superficie para correlacionar si el mismo
 - roles en otros Businesses;
 - ownership en otros Businesses;
 - `User.business` legacy;
-- otras Memberships.
+- otras Memberships;
+- si existe un conflicto interno de account ownership.
+
+El grant puede quedar tenant-scoped internamente, pero su superficie no debe proporcionar una señal que permita correlacionar globalmente la identidad entre Businesses.
 
 ### 18.3 Autoridad del caller
 
@@ -1122,6 +1408,12 @@ La primera superficie de Equipo adopta una política fail-closed explícita mien
 9. No se implementa transferencia de propiedad en esta fase.
 
 Estas restricciones sólo protegen la desactivación de acceso. La bookability del owner puede cambiar independientemente sin modificar `Business.owner`, `Membership.role` ni `Membership.isActive`.
+
+### 18.6 Autoridad del issuer de onboarding
+
+Emitir un grant de onboarding no congela para siempre la autoridad del issuer. La primera versión revalida al consume la Membership admin vigente del issuer en el mismo Business conforme a 12.11.
+
+La revocación/cambio de autoridad del issuer entre issue y consume invalida la materialización. Esto evita que un grant histórico se convierta en una delegación durable no contratada.
 
 ## 19. Compatibilidad y migración futura
 
@@ -1336,6 +1628,28 @@ La implementación funcional no será aceptable sin regresiones que cubran, como
 63. Appointment de otro Business sigue inaccesible aunque el actor esté asignado en otro contexto.
 64. Appointment cuyo `worker` es otra persona sigue inaccesible.
 65. `Service.workers` nunca se convierte en autoridad tenant ni en grant/revocación histórica implícita.
+66. Un email challenge válido por sí solo no basta para bindar un User existente.
+67. User pre-registrado por atacante + challenge válido controlado por la víctima **no** entrega Membership al User controlado por el atacante.
+68. Un User existente requiere control/autenticación válida de esa cuenta global además del onboarding correspondiente, salvo futuro recovery/claim explícito y seguro.
+69. Un conflicto de account ownership falla cerrado sin modificar password, credenciales, Membership ni identidad.
+70. Verification `contact-control` no concede Membership ni completa Team onboarding.
+71. Verification/capability de Appointment no concede Membership ni completa Team onboarding.
+72. Un onboarding purpose/grant de Business A no puede consumirse en Business B.
+73. Un grant worker no puede consumirse como admin.
+74. El claimant no puede elegir ni elevar `role`.
+75. El claimant no puede elegir ni elevar `isBookable`.
+76. El claimant no puede cambiar el Business del grant.
+77. Onboarding expirado no crea Membership.
+78. Onboarding revocado no crea Membership.
+79. Onboarding ya consumido no puede replay.
+80. Si el issuer pierde autoridad admin antes del consume, la primera implementación falla cerrado sin Membership.
+81. Business inactivo al consume falla cerrado sin Membership.
+82. Consumes concurrentes producen como máximo una Membership y un consume efectivo.
+83. Un fallo al crear Membership no deja el grant consumido de forma inconsistente.
+84. Un consume exitoso deja el grant no reutilizable.
+85. Nunca se sobrescribe password/credenciales de un User existente para completar onboarding.
+86. El onboarding profesional inicial produce exactamente `role="worker"`, `isActive=true`, `isBookable=false`.
+87. Pasar posteriormente `isBookable=false -> true` requiere una mutación Team admin explícita independiente del onboarding.
 
 ## 21. Relación con ADR-001 y contratos anteriores
 
@@ -1355,6 +1669,20 @@ Ambos viven en la misma relación `User + Business`, pero son conceptos ortogona
 
 La incorporación de una nueva participación tenant constituye una frontera adicional. `User.email` match, existencia global de User, `User.role`, `User.business` o `Business.owner` no autorizan materializar Membership.
 
+ADR-001 ya congela:
+
+```text
+current channel control != historical subject continuity
+```
+
+Este contrato especializa la consecuencia para Team:
+
+```text
+current channel control != control of existing User account
+```
+
+Por tanto, una proof de contacto válida no bindará automáticamente un User global preexistente. Además, los purposes de `ClientContactVerification`/Appointment mantienen su semántica propia y no se promueven implícitamente a grants de autoridad Team.
+
 6.2.6-A permanece como contrato headless mínimo para Services, profesionales, slots y booking guest.
 
 6.2.6-B permanece como contrato de public origin verificado. La trust pública no concede session/admin authority ni cambia estas reglas.
@@ -1370,9 +1698,13 @@ Este PR no implementa:
 - componentes React;
 - vista Equipo funcional;
 - onboarding de nueva participación;
+- almacenamiento físico del pending onboarding grant;
 - invitaciones por email;
+- delivery de onboarding;
+- account recovery/claim físico;
+- autenticación nueva para User sin Membership;
+- onboarding/invitación de nuevos admins;
 - reset de contraseña;
-- email delivery de onboarding;
 - transferencia de ownership;
 - Servicios UI;
 - Horarios UI;
@@ -1383,7 +1715,6 @@ Este PR no implementa:
 - reglas de negocio;
 - pagos;
 - nuevas reservas públicas;
-- autenticación nueva;
 - roles nuevos;
 - permisos granulares;
 - soporte mutable;
@@ -1428,16 +1759,38 @@ A y A2 deben desplegarse sin ventana productiva contradictoria.
 
 ### C. Onboarding seguro para incorporar nueva participación tenant
 
-Antes de permitir cualquier alta nueva en Team:
+C se descompone obligatoriamente en tres contratos coordinados.
 
-- definir proof/aceptación suficiente del destinatario;
-- garantizar semántica uniforme para User existente/no existente;
-- impedir enumeración y correlación global;
-- resolver de forma segura identidad existente o crear identidad nueva sólo después del onboarding;
-- crear exactamente una Membership recién después de completar ese contrato;
-- definir expiración/single-use/revocación/replay/concurrencia si el mecanismo físico utiliza material temporal.
+#### C1. Grant de onboarding tenant
 
-Este PR no congela el mecanismo físico.
+- definir pending onboarding grant tenant-scoped;
+- fijar server-side Business, destino/canal, purpose, issuer, `role`, `isBookable`, expiración y lifecycle pending/consumed/revoked;
+- mantener secreto/material single-use no raw cuando corresponda;
+- impedir que el claimant elija o eleve Business/role/isBookable/issuer/purpose;
+- adoptar para la primera versión profesional `role="worker"`, `isActive=true`, `isBookable=false`;
+- mantener onboarding admin fuera de alcance.
+
+#### C2. Account binding seguro
+
+- demostrar/aceptar control del canal según el purpose propio de onboarding;
+- no reutilizar contact-control ni Appointment Verification como authority grant;
+- si existe User, demostrar además control/autenticación válida de ese User concreto;
+- si existe conflicto, fallar cerrado o entrar en futuro recovery/claim explícito;
+- si no existe User, permitir que la persona establezca/controla su autenticación antes de crear identidad y Membership;
+- no sobrescribir passwords ni transferir cuentas implícitamente;
+- no asumir que la sesión tenant normal actual resuelve User sin Membership.
+
+#### C3. Atomic consume -> Membership
+
+- revalidar issuer y Business al consume;
+- validar grant pending/no expirado/no revocado;
+- validar claimant/account binding;
+- verificar unicidad `User + Business`;
+- consumir grant y crear Membership de forma atómica o fail-closed equivalente;
+- soportar concurrencia/single-use sin last-write-wins;
+- preservar índice único como barrera final, no como único control de seguridad.
+
+No se implementa C1/C2/C3 en este PR.
 
 ### D. UI Equipo
 
@@ -1450,7 +1803,7 @@ La UI funcional se construye sobre B. Antes de C sólo administra Memberships ex
 - desactivar acceso con guardas;
 - sin hard delete ordinario.
 
-La acción de incorporar una persona nueva sólo se habilita cuando C exista y haya sido revisado.
+La acción de incorporar una persona nueva sólo se habilita cuando C1+C2+C3 existan y hayan sido revisados.
 
 ### E. Servicios
 
@@ -1515,7 +1868,43 @@ No. Mientras esa persona no posea Membership en el Business, la incorporación p
 
 ### ¿Qué significa `TEAM_ONBOARDING_REQUIRED` si se conserva?
 
-Que el onboarding de esa persona para ese Business no está completado. No revela si existe una cuenta global para el email.
+Que el onboarding de esa persona para ese Business no está completado. No revela si existe una cuenta global para el email ni si existe un conflicto interno de account ownership.
+
+### ¿Controlar el email basta para usar un User existente?
+
+No. Control actual del canal no equivale a control de la cuenta global. Para un User existente se requiere además autenticación/control válido de ese User concreto o un futuro recovery/claim explícito; el conflicto falla cerrado.
+
+### ¿Puede `findByEmail` seleccionar el User que recibirá Membership?
+
+No. Puede ser una observación interna que detecte un candidato/conflicto, pero no prueba account ownership ni autoriza binding.
+
+### ¿Puede un Verification de contacto o Appointment completar Team onboarding?
+
+No. `contact-control` y los purposes/capabilities de Appointment no conceden Membership. Team onboarding necesita purpose/contrato propio.
+
+### ¿Puede el claimant elegir Business, role o isBookable al aceptar?
+
+No. Esos valores quedan fijados server-side en el pending onboarding grant. El claimant sólo satisface las condiciones de aceptación del grant exacto.
+
+### ¿Cuál es la política de privilegio del primer onboarding profesional?
+
+Exactamente:
+
+```text
+role="worker"
+isActive=true
+isBookable=false
+```
+
+Habilitar bookability es una mutación Team admin separada. Invitar nuevos admins queda fuera de la primera versión.
+
+### ¿Qué ocurre si el issuer pierde autoridad antes de la aceptación?
+
+La primera versión falla cerrado. Al consume se revalidan Business, User y Membership admin actuales del issuer; una copia histórica de su rol no basta.
+
+### ¿Puede consume dejar grant consumed sin Membership, o Membership con grant reusable?
+
+No. Consume y materialización deben ser atómicos o tener semántica fail-closed equivalente. Como máximo hay un consume efectivo y una Membership.
 
 ### ¿Qué vuelve públicamente seleccionable a una persona?
 
@@ -1567,6 +1956,9 @@ Esta definición queda lista para revisión adversarial cuando el lector puede d
 
 ```text
 identidad global
+control actual del canal
+control/account binding de User existente
+pending onboarding grant e intención administrativa exacta
 onboarding de nueva participación tenant
 participación tenant
 rol/autoridad tenant
@@ -1575,9 +1967,10 @@ asignación actual a Service para nuevas reservas
 horario/disponibilidad
 Appointment.worker persistido
 existing Appointment actor capability
+consume atómico -> Membership
 reserva
 ```
 
-Ninguno de esos conceptos debe volver a colapsarse bajo la palabra `worker`, bajo una coincidencia de email ni bajo una ruta legacy alternativa.
+Ninguno de esos conceptos debe volver a colapsarse bajo la palabra `worker`, bajo una coincidencia de email, bajo una proof de contacto aislada ni bajo una ruta legacy alternativa.
 
-La secuencia funcional propuesta es deliberada: storage/bookability y separación de predicados; cierre coordinado de superficies worker legacy incompatibles; endpoints Team admin para Memberships ya existentes; onboarding seguro; recién entonces alta de nuevas personas en UI Equipo; después Servicios, Horarios/Disponibilidad y la primera reserva productiva end-to-end. No puede existir una ventana productiva donde la política nueva diga una cosa y una ruta legacy accesible permita otra.
+La secuencia funcional propuesta es deliberada: storage/bookability y separación de predicados; cierre coordinado de superficies worker legacy incompatibles; endpoints Team admin para Memberships ya existentes; onboarding seguro dividido en grant tenant-scoped, account binding y consume atómico; recién entonces alta de nuevas personas en UI Equipo; después Servicios, Horarios/Disponibilidad y la primera reserva productiva end-to-end. No puede existir una ventana productiva donde la política nueva diga una cosa y una ruta legacy accesible permita otra.
