@@ -237,7 +237,12 @@ test("6.2.6-A internal surface server boundary y live Membership authority", asy
     assert.equal(shifts.status, 200);
 
     const workersData = await workers.json();
-    assert.ok(workersData.payload.some((worker) => worker.email));
+    assert.ok(workersData.payload.some((worker) => worker._id === seed.worker._id.toString()));
+    for (const worker of workersData.payload) {
+      for (const forbidden of ["email", "phone", "password", "role", "business"]) {
+        assert.equal(forbidden in worker, false);
+      }
+    }
     const servicesData = await services.json();
     assert.ok(servicesData.payload.some((service) => Array.isArray(service.workers)));
   });
