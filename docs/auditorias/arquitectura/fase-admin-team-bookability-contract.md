@@ -601,7 +601,7 @@ Mostrar rol y estado de agendabilidad como atributos separados.
 
 Puede conservarse en la proyección administrativa admin-only para contexto/historial operacional. No posee acceso tenant efectivo ni puede aparecer públicamente como profesional.
 
-La primera UI no necesita implementar reactivación si esa operación todavía no está contratada.
+La UI D1 no necesita implementar reactivación si esa operación todavía no está contratada.
 
 ### 8.6 Profesional agendable
 
@@ -627,9 +627,17 @@ Debe fallar cerrado desde backend. La UI recibe una respuesta estable sin inform
 
 Si una operación actúa sobre una persona que ya posee Membership en el Business, nunca se crea otra Membership. La UI debe operar sobre la Membership existente.
 
-### 8.12 Onboarding requerido
+### 8.12 Onboarding requerido / separación D1-D2
 
-La primera UI funcional no incorpora una nueva participación tenant. Si se ofrece una acción futura de `Añadir persona`, ésta permanece bloqueada hasta existir onboarding seguro.
+La UI **D1** administra exclusivamente Memberships ya existentes y puede existir antes de implementar onboarding. D1 no incorpora una nueva participación tenant.
+
+La acción `Añadir persona` pertenece exclusivamente a la extensión **D2** y permanece bloqueada hasta que existan y hayan sido revisados:
+
+```text
+C1 pending onboarding grant
++ C2 account binding seguro
++ C3 atomic consume -> Membership
+```
 
 Si se conserva el nombre conceptual `TEAM_ONBOARDING_REQUIRED`, debe significar únicamente:
 
@@ -641,9 +649,15 @@ No puede significar ni permitir inferir:
 
 La misma respuesta/semántica de inicio debe aplicarse aunque el email ya corresponda o no a una cuenta global.
 
-## 9. Acciones mínimas de la primera UI funcional
+## 9. Acciones mínimas de D1 — UI Team para Memberships existentes
 
-Antes de implementar onboarding seguro, la primera superficie funcional de Equipo debe limitarse a Memberships **ya existentes** en el Business:
+D1 depende de:
+
+```text
+A + A2 + B
+```
+
+**D1 no depende de onboarding C1+C2+C3.** Su alcance se limita a Memberships **ya existentes** en el Business:
 
 1. listar Team para un caller admin;
 2. habilitar como profesional a un admin/owner ya miembro (`También presto servicios`);
@@ -651,7 +665,7 @@ Antes de implementar onboarding seguro, la primera superficie funcional de Equip
 4. deshabilitar recepción de nuevas reservas;
 5. desactivar acceso tenant cuando corresponda y sólo si las guardas de continuidad administrativa lo permiten.
 
-Queda fuera de esta primera superficie:
+Queda fuera de D1:
 
 ```text
 admin escribe email
@@ -661,7 +675,9 @@ admin escribe email
 
 independientemente de que el `User` global exista o no exista.
 
-No debe incluir hard delete ni edición completa de identidad, permisos granulares, invitaciones, fotografías, biografías, comisiones, sucursales, especialidades avanzadas, payroll, RRHH ni métricas de equipo.
+D1 no debe incluir hard delete ni edición completa de identidad, permisos granulares, invitaciones, fotografías, biografías, comisiones, sucursales, especialidades avanzadas, payroll, RRHH ni métricas de equipo.
+
+La incorporación de una persona que todavía no posee Membership pertenece únicamente a D2 después de C1+C2+C3.
 
 ## 10. Contrato owner/admin que también presta servicios
 
@@ -727,14 +743,14 @@ Los ejes deben evolucionar de forma separada.
 
 ### 11.1 Participación ya existente
 
-La primera superficie de Team parte de:
+La superficie D1 parte de:
 
 ```text
 User global
 + Membership(User, Business) ya materializada por un flujo autorizado
 ```
 
-y administra `isBookable`/acceso sobre esa relación. No crea Membership a partir de email match.
+y administra `isBookable`/acceso sobre esa relación. No crea Membership a partir de email match ni depende de que C1+C2+C3 estén implementados.
 
 ### 11.2 Habilitar agendabilidad
 
@@ -789,11 +805,11 @@ La desactivación:
 - impide discovery y availability efectiva;
 - requiere una acción futura explícita para volver a habilitar agendabilidad.
 
-No puede ejecutarse desde la primera superficie ordinaria contra la Membership del `Business.owner` ni contra el último admin activo.
+No puede ejecutarse desde D1 contra la Membership del `Business.owner` ni contra el último admin activo.
 
 ### 11.5 Reactivación futura — decisión pendiente explícita
 
-No forma parte de las acciones mínimas de esta primera UI.
+No forma parte de las acciones de D1.
 
 Queda pendiente definir qué ocurre, al reactivar una Membership, con configuraciones preservadas como:
 
@@ -837,7 +853,7 @@ Esto se justifica además por el runtime histórico: el registro global no demue
 
 ### 12.2 Primera superficie antes de onboarding
 
-Mientras onboarding seguro no exista, Team no crea Memberships para personas nuevas en el Business.
+Mientras onboarding seguro no exista, Team no crea Memberships para personas nuevas en el Business. Esto no impide desplegar D1 para administrar Memberships ya existentes.
 
 No hay bifurcación:
 
@@ -846,7 +862,7 @@ si User existe -> Membership inmediata
 si User no existe -> onboarding
 ```
 
-Ambos casos permanecen detrás del mismo límite de onboarding.
+Ambos casos permanecen detrás del mismo límite de onboarding y, por tanto, fuera de D1.
 
 ### 12.3 Semántica futura uniforme sin oracle global
 
@@ -1395,7 +1411,7 @@ El backend debe revalidar `Membership.role` del caller en cada operación Team. 
 
 ### 18.5 Owner actual / último admin / desactivación
 
-La primera superficie de Equipo adopta una política fail-closed explícita mientras no exista transferencia de propiedad:
+La superficie D1 adopta una política fail-closed explícita mientras no exista transferencia de propiedad:
 
 1. La Membership correspondiente al `Business.owner` **no puede desactivarse** desde Equipo.
 2. El último `Membership.role="admin"` activo del Business **no puede desactivarse**, aunque no coincida con `Business.owner`.
@@ -1499,7 +1515,8 @@ Después de verificar storage:
 - discovery público debe exigir `isBookable === true`;
 - Availability/nuevas reservas deben usar booking eligibility;
 - Service allowlists para nuevas reservas deben validarlo;
-- la superficie Team debe operar sólo sobre Memberships existentes hasta cerrar onboarding;
+- D1 puede operar sobre Memberships existentes sin esperar onboarding;
+- D2 `Añadir persona` permanece deshabilitada hasta cerrar C1+C2+C3;
 - el flujo legacy de auto-horarios debe quedar retirado;
 - el listado Team debe dejar de filtrar exclusivamente `role="worker"`;
 - el fallback por role debe eliminarse en el mismo ciclo de cutover;
@@ -1650,6 +1667,11 @@ La implementación funcional no será aceptable sin regresiones que cubran, como
 85. Nunca se sobrescribe password/credenciales de un User existente para completar onboarding.
 86. El onboarding profesional inicial produce exactamente `role="worker"`, `isActive=true`, `isBookable=false`.
 87. Pasar posteriormente `isBookable=false -> true` requiere una mutación Team admin explícita independiente del onboarding.
+88. D1 opera correctamente sobre una Membership existente sin requerir onboarding.
+89. D1 no puede crear una Membership nueva ni incorporar una persona nueva.
+90. D2 `Añadir persona` no está disponible antes de C1+C2+C3.
+91. Un owner/admin con Membership existente puede habilitar su bookability mediante D1 sin crear otra identidad ni Membership.
+92. La UI Team no necesita esperar onboarding para administrar una Membership ya existente.
 
 ## 21. Relación con ADR-001 y contratos anteriores
 
@@ -1726,7 +1748,23 @@ Este PR no implementa:
 - cambios en MongoDB productivo;
 - seeds o migraciones productivas.
 
-## 23. Orden propuesto de implementación funcional
+## 23. Orden canónico de implementación funcional
+
+El orden funcional distingue explícitamente la UI de administración de Memberships existentes de la UI que incorpora personas nuevas:
+
+```text
+A
+-> A2
+-> B
+-> D1
+-> C1
+-> C2
+-> C3
+-> D2
+-> E
+-> F
+-> G
+```
 
 ### A. Storage y contrato de bookability/Appointment
 
@@ -1747,7 +1785,7 @@ Antes o dentro del mismo cutover que A:
 
 A y A2 deben desplegarse sin ventana productiva contradictoria.
 
-### B. Endpoints administrativos para Memberships ya existentes
+### B. Endpoints administrativos Team para Memberships ya existentes
 
 - lectura Team admin-only separada de público y de proyección operacional;
 - habilitar/deshabilitar bookability sobre Membership existente;
@@ -1757,11 +1795,29 @@ A y A2 deben desplegarse sin ventana productiva contradictoria.
 
 **B no crea Memberships nuevas por email ni reutiliza User global por email match.**
 
-### C. Onboarding seguro para incorporar nueva participación tenant
+### D1. UI Team — Memberships existentes
 
-C se descompone obligatoriamente en tres contratos coordinados.
+D1 depende exclusivamente de:
 
-#### C1. Grant de onboarding tenant
+```text
+A + A2 + B
+```
+
+D1 **no depende de onboarding C** y sólo administra Memberships ya materializadas:
+
+- loading/error/empty;
+- listado admin-only;
+- mostrar `role` e `isBookable` por separado;
+- `También presto servicios`;
+- habilitar `isBookable`;
+- deshabilitar `isBookable`;
+- desactivar acceso con guardas owner/último-admin;
+- sin hard delete;
+- sin alta de personas nuevas.
+
+Esto permite entregar valor sobre participación tenant legítima ya existente —incluido configurar al owner/admin como profesional mediante su misma Membership— sin introducir prematuramente el onboarding de terceros. Mantiene least privilege, conserva onboarding como frontera exclusiva para crear nueva participación y permite evolución incremental sin sobreingeniería.
+
+### C1. Pending onboarding grant tenant-scoped
 
 - definir pending onboarding grant tenant-scoped;
 - fijar server-side Business, destino/canal, purpose, issuer, `role`, `isBookable`, expiración y lifecycle pending/consumed/revoked;
@@ -1770,7 +1826,7 @@ C se descompone obligatoriamente en tres contratos coordinados.
 - adoptar para la primera versión profesional `role="worker"`, `isActive=true`, `isBookable=false`;
 - mantener onboarding admin fuera de alcance.
 
-#### C2. Account binding seguro
+### C2. Account binding seguro
 
 - demostrar/aceptar control del canal según el purpose propio de onboarding;
 - no reutilizar contact-control ni Appointment Verification como authority grant;
@@ -1780,30 +1836,36 @@ C se descompone obligatoriamente en tres contratos coordinados.
 - no sobrescribir passwords ni transferir cuentas implícitamente;
 - no asumir que la sesión tenant normal actual resuelve User sin Membership.
 
-#### C3. Atomic consume -> Membership
+### C3. Atomic consume -> Membership
 
 - revalidar issuer y Business al consume;
-- validar grant pending/no expirado/no revocado;
-- validar claimant/account binding;
-- verificar unicidad `User + Business`;
+- validar grant pending/no expirado/no revocado/no terminal;
+- resolver target User exacto server-side;
+- exigir target User activo;
+- validar claimant/account binding de ese User exacto;
+- demostrar ausencia de cualquier Membership `User + Business`;
+- rechazar reactivación implícita;
 - consumir grant y crear Membership de forma atómica o fail-closed equivalente;
 - soportar concurrencia/single-use sin last-write-wins;
 - preservar índice único como barrera final, no como único control de seguridad.
 
 No se implementa C1/C2/C3 en este PR.
 
-### D. UI Equipo
+### D2. Extensión de UI Team — `Añadir persona`
 
-La UI funcional se construye sobre B. Antes de C sólo administra Memberships existentes:
+D2 depende obligatoriamente de:
 
-- loading/error/empty;
-- listado admin-only;
-- `También presto servicios`;
-- habilitar/deshabilitar nuevas reservas;
-- desactivar acceso con guardas;
-- sin hard delete ordinario.
+```text
+C1 + C2 + C3
+```
 
-La acción de incorporar una persona nueva sólo se habilita cuando C1+C2+C3 existan y hayan sido revisados.
+Sólo después de cerrar y revisar esos tres contratos puede D2:
+
+- habilitar la incorporación de una persona que todavía no posee Membership;
+- iniciar/consumir exclusivamente el onboarding tenant seguro definido por C1+C2+C3;
+- materializar nueva participación únicamente a través de ese contrato.
+
+D2 no puede introducir `email match -> Membership`, reutilizar rutas legacy ni crear un path alternativo de alta.
 
 ### E. Servicios
 
@@ -1820,7 +1882,7 @@ La acción de incorporar una persona nueva sólo se habilita cuando C1+C2+C3 exi
 
 ### G. Primera reserva productiva end-to-end
 
-Sólo después de cerrar Equipo, onboarding necesario, Servicios y Horarios debe verificarse el primer flujo productivo real completo:
+Sólo después de cerrar las capacidades necesarias de Equipo, onboarding para nuevas incorporaciones cuando corresponda, Servicios y Horarios debe verificarse el primer flujo productivo real completo:
 
 ```text
 Membership válida
@@ -1850,6 +1912,14 @@ No. Puede ser `isBookable=true` o `false`.
 
 Sí. Conserva una única Membership con `role="admin"` y `isBookable=true`.
 
+### ¿Puede existir UI Team antes de implementar onboarding?
+
+Sí. D1 depende de A+A2+B y administra exclusivamente Memberships ya existentes. Puede listar Team, mostrar `role`/`isBookable`, ejecutar `También presto servicios`, cambiar bookability y desactivar acceso permitido sin crear una nueva Membership.
+
+### ¿Cuándo puede existir `Añadir persona`?
+
+Sólo en D2, después de C1+C2+C3. D2 es la extensión que incorpora una persona que todavía no posee Membership y debe consumir exclusivamente el onboarding seguro.
+
 ### ¿Qué ocurre al dejar de recibir reservas?
 
 Se deshabilita `isBookable`. La Membership permanece activa, el rol no cambia, la identidad y el historial se conservan. Las nuevas reservas se bloquean, pero no se revoca por ese solo hecho la operación permitida sobre Appointments ya asignadas.
@@ -1858,13 +1928,13 @@ Se deshabilita `isBookable`. La Membership permanece activa, el rol no cambia, l
 
 Cuando la operación está permitida, la Membership queda inactiva y `isBookable=false`. Se revoca participación y autoridad operacional tenant, incluidas capacidades sobre Appointments existentes basadas en esa Membership, preservando historial.
 
-### ¿Puede desactivarse al Business.owner o al último admin desde la primera Team?
+### ¿Puede desactivarse al Business.owner o al último admin desde D1?
 
 No. Permanecen protegidos por las guardas de continuidad definidas en 18.5.
 
 ### ¿Puede un admin añadir directamente a una persona escribiendo su email?
 
-No. Mientras esa persona no posea Membership en el Business, la incorporación pertenece al onboarding futuro. La coincidencia con un User global existente no cambia esta regla.
+No. Mientras esa persona no posea Membership en el Business, la incorporación pertenece al onboarding futuro y a D2. La coincidencia con un User global existente no cambia esta regla.
 
 ### ¿Qué significa `TEAM_ONBOARDING_REQUIRED` si se conserva?
 
@@ -1963,6 +2033,8 @@ onboarding de nueva participación tenant
 participación tenant
 rol/autoridad tenant
 bookability para nuevas reservas
+UI D1 sobre Memberships existentes
+UI D2 para incorporación de persona nueva
 asignación actual a Service para nuevas reservas
 horario/disponibilidad
 Appointment.worker persistido
@@ -1973,7 +2045,7 @@ reserva
 
 Ninguno de esos conceptos debe volver a colapsarse bajo la palabra `worker`, bajo una coincidencia de email, bajo una proof de contacto aislada ni bajo una ruta legacy alternativa.
 
-La secuencia funcional propuesta es deliberada: storage/bookability y separación de predicados; cierre coordinado de superficies worker legacy incompatibles; endpoints Team admin para Memberships ya existentes; onboarding seguro dividido en grant tenant-scoped, account binding y consume atómico; recién entonces alta de nuevas personas en UI Equipo; después Servicios, Horarios/Disponibilidad y la primera reserva productiva end-to-end. No puede existir una ventana productiva donde la política nueva diga una cosa y una ruta legacy accesible permita otra.
+La secuencia funcional propuesta es deliberada: storage/bookability y separación de predicados; cierre coordinado de superficies worker legacy incompatibles; endpoints Team admin para Memberships ya existentes; **D1 sobre esas Memberships sin depender de onboarding**; luego C1 grant tenant-scoped, C2 account binding y C3 consume atómico; **D2 `Añadir persona` sólo después de C1+C2+C3**; después Servicios, Horarios/Disponibilidad y la primera reserva productiva end-to-end. No puede existir una ventana productiva donde la política nueva diga una cosa y una ruta legacy accesible permita otra.
 
 ## 26. Addendum normativo — onboarding no es reactivación
 
@@ -2221,19 +2293,28 @@ La implementación funcional no será aceptable sin demostrar además:
 
 ### 26.10 Consecuencia para el orden funcional
 
-Se mantiene el orden:
+El orden canónico es:
 
 ```text
 A  storage + migración + bookability/Appointment predicates
 A2 hardening legacy
-B  Team para Memberships existentes
+B  endpoints Team para Memberships existentes
+D1 UI Team — Memberships existentes
 C1 onboarding grant
 C2 account binding
 C3 consume atómico -> Membership
-D  UI Team
+D2 UI Team — Añadir persona
 E  Servicios
 F  Horarios
 G  reserva productiva
+```
+
+Dependencias obligatorias:
+
+```text
+D1 depende de A + A2 + B
+D1 NO depende de C
+D2 depende de C1 + C2 + C3
 ```
 
 C3 queda ahora condicionado explícitamente por:
