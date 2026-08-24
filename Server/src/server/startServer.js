@@ -23,6 +23,7 @@ export const startServerLifecycle = async ({
   availabilityGate,
   guestCapabilityGate,
   publicWebGate,
+  membershipBookabilityGate,
   database = getConnectedDatabase,
   appInstance,
   listenPort,
@@ -36,6 +37,7 @@ export const startServerLifecycle = async ({
   await availabilityGate(db, processEnvironment);
   await guestCapabilityGate(db, processEnvironment);
   await publicWebGate(db, processEnvironment);
+  await membershipBookabilityGate(db, processEnvironment);
 
   const httpServer = appInstance.listen(listenPort);
   await waitUntilListening(httpServer);
