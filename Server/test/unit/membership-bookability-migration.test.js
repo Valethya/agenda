@@ -10,7 +10,14 @@ import {
   validateMembershipBookabilityOptions,
 } from "../../scripts/migrations/membership-bookability.js";
 
-const clone = (value) => structuredClone(value);
+const clone = (value) => {
+  if (value instanceof mongo.ObjectId) return new mongo.ObjectId(value.toHexString());
+  if (Array.isArray(value)) return value.map(clone);
+  if (value && typeof value === "object") {
+    return Object.fromEntries(Object.entries(value).map(([key, entry]) => [key, clone(entry)]));
+  }
+  return value;
+};
 
 const makeDb = ({ memberships, users, businesses, services = [], indexes } = {}) => {
   const state = {
