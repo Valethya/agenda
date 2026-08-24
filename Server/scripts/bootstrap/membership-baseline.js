@@ -27,26 +27,14 @@ const canonicalBookabilityFinding = (source) =>
     ? BOOKABILITY_FINDING
     : null;
 
-const appendBookabilityFinding = (plan, source) => {
-  const finding = canonicalBookabilityFinding(source);
-  if (!finding) return plan;
-  return {
-    ...plan,
-    state: "partial",
-    canApply: false,
-    idempotentNoop: false,
-    findings: [...new Set([...(plan.findings ?? []), finding])].sort(),
-  };
-};
-
+// Se conserva la API pura del planner para no romper consumidores internos que
+// construyen snapshots sintéticos. El ejecutor plan/apply de abajo aplica la
+// validación física adicional antes de poder declarar ready o mutar storage.
 export const buildMembershipBaselinePlan = (source, manifest, options = {}) =>
-  appendBookabilityFinding(
-    core.buildMembershipBaselinePlan(
-      source,
-      withCanonicalMembershipManifest(manifest),
-      options,
-    ),
+  core.buildMembershipBaselinePlan(
     source,
+    withCanonicalMembershipManifest(manifest),
+    options,
   );
 
 export const buildVerifiedMembershipBaselinePlan = async (
