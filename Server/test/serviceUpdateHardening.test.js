@@ -51,6 +51,7 @@ await Membership.create({
   business: seed.business._id,
   role: "worker",
   isActive: true,
+  isBookable: true,
 });
 
 const noMembershipUser = await User.create({
@@ -73,6 +74,10 @@ test("6.2.4-B Service update hardening", async (t) => {
         isActive: true,
       },
     });
+    await Membership.updateOne(
+      { user: seed.admin._id, business: seed.business._id },
+      { $set: { isActive: true, role: "admin", isBookable: false } },
+    );
   });
 
   await t.test("business no puede mover un Service entre tenants", async () => {
@@ -140,7 +145,11 @@ test("6.2.4-B Service update hardening", async (t) => {
     assert.equal(persisted.business.toString(), seed.business._id.toString());
   });
 
-  await t.test("update válido de workers sigue funcionando", async () => {
+  await t.test("update válido de workers exige bookability explícita y sigue funcionando", async () => {
+    await Membership.updateOne(
+      { user: seed.admin._id, business: seed.business._id },
+      { $set: { isBookable: true } },
+    );
     const response = await request(`/services/${seed.service._id}`, {
       method: "PUT",
       cookie: adminCookie,
