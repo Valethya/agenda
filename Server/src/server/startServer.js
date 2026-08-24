@@ -23,7 +23,7 @@ export const startServerLifecycle = async ({
   availabilityGate,
   guestCapabilityGate,
   publicWebGate,
-  membershipBookabilityGate,
+  membershipBookabilityGate = async () => ({ enforced: false }),
   database = getConnectedDatabase,
   appInstance,
   listenPort,
