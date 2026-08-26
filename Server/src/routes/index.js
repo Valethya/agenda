@@ -10,6 +10,7 @@ import userRoutes from "./user.routes.js";
 import businessConfigRoutes from "./businessConfig.routes.js";
 import superadminRoutes from "./superadmin.routes.js";
 import internalBookingRoutes from "./internalBooking.routes.js";
+import adminTeamRoutes from "./adminTeam.routes.js";
 import { paymentRoutesEnabled } from "../config/env.js";
 
 const router = Router();
@@ -19,6 +20,7 @@ router.use("/", authRoutes);
 // Surface administrativa fijada por routing del servidor. El caller no puede
 // obtenerla declarando un header en una ruta pública.
 router.use("/internal", internalBookingRoutes);
+router.use("/team", adminTeamRoutes);
 
 // Contrato headless público. Cookies incidentales no cambian estas políticas.
 router.use("/services", serviceRoutes);

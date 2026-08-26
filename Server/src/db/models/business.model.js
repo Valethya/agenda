@@ -28,6 +28,14 @@ const businessSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
     },
+    // Contador interno usado exclusivamente como fencing transaccional para
+    // serializar mutaciones administrativas de Team dentro de un Business.
+    // No forma parte de BusinessSettings ni de ninguna response pública.
+    teamAdminRevision: {
+      type: Number,
+      default: 0,
+      select: false,
+    },
   },
   {
     timestamps: true,
