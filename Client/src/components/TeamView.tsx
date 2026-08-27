@@ -45,7 +45,9 @@ export const TeamView: React.FC = () => {
       setLoadState('loaded');
       return true;
     } catch {
-      if (!preserveCurrentState) {
+      if (preserveCurrentState) {
+        setLoadError(REFRESH_ERROR_MESSAGE);
+      } else {
         setLoadState('error');
         setLoadError(LOAD_ERROR_MESSAGE);
       }
@@ -101,8 +103,7 @@ export const TeamView: React.FC = () => {
       });
 
       if (shouldRefetchTeamAfterMutationError(normalizedError)) {
-        const refreshed = await loadCanonicalTeam(true);
-        if (!refreshed) setLoadError(REFRESH_ERROR_MESSAGE);
+        await loadCanonicalTeam(true);
       }
     } finally {
       setMembershipPending(membershipId, false);
