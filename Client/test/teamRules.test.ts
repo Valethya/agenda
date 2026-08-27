@@ -73,11 +73,15 @@ test('canonical PATCH response replaces the row without implicit local coupling'
   assert.equal(result[0].isBookable, true);
 });
 
-test('409 is surfaced and requests a canonical refetch', () => {
+test('409 is surfaced and requests a canonical refetch without claiming it already completed', () => {
   const error = { status: 409, message: 'El negocio debe conservar al menos una Membership admin activa' };
+  const message = getTeamMutationErrorMessage(error);
+
   assert.equal(shouldRefetchTeamAfterMutationError(error), true);
-  assert.match(getTeamMutationErrorMessage(error), /estado más reciente/i);
-  assert.match(getTeamMutationErrorMessage(error), /al menos una Membership admin activa/i);
+  assert.match(message, /conflicto con el estado actual/i);
+  assert.match(message, /volverá a consultar/i);
+  assert.match(message, /al menos una Membership admin activa/i);
+  assert.doesNotMatch(message, /se actualizó con el estado más reciente/i);
 });
 
 test('non-conflict mutation errors do not claim success or force conflict refetch', () => {
@@ -90,6 +94,7 @@ test('Team UI consumes canonical Team endpoints and does not reconstruct from wo
   const teamViewSource = readFileSync(new URL('../src/components/TeamView.tsx', import.meta.url), 'utf8');
   const sidebarSource = readFileSync(new URL('../src/components/Sidebar.tsx', import.meta.url), 'utf8');
   const dashboardSource = readFileSync(new URL('../src/components/AdminDashboard.tsx', import.meta.url), 'utf8');
+  const teamStylesSource = readFileSync(new URL('../src/components/TeamView.module.scss', import.meta.url), 'utf8');
 
   const getTeamSection = apiSource.slice(
     apiSource.indexOf('export async function getTeam'),
@@ -104,7 +109,11 @@ test('Team UI consumes canonical Team endpoints and does not reconstruct from wo
   assert.match(teamViewSource, /Presta servicios/);
   assert.match(teamViewSource, /Acceso desactivado/);
   assert.match(teamViewSource, /Desactivar acceso/);
+  assert.match(teamViewSource, /pendingRef\.current\.has\(membershipId\)/);
+  assert.match(teamViewSource, /loadCanonicalTeam\(true\)/);
   assert.doesNotMatch(teamViewSource, /Añadir persona|Eliminar persona|Reactivar/);
   assert.match(sidebarSource, /id: 'equipo', label: 'Equipo'/);
   assert.match(dashboardSource, /viewType === 'equipo' && <TeamView \/>/);
+  assert.match(teamStylesSource, /@media \(max-width: 760px\)/);
+  assert.match(teamStylesSource, /@media \(max-width: 420px\)/);
 });
