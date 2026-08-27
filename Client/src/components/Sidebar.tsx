@@ -160,7 +160,7 @@ export const Sidebar: React.FC = () => {
                     >
                       <span className={styles.workspaceName}>{m.businessName}</span>
                       <small className={styles.workspaceRole}>
-                        {m.role === 'admin' ? 'Admin' : 'Especialista'}
+                        {m.role === 'admin' ? 'Admin' : 'Miembro'}
                       </small>
                     </div>
                   );
@@ -212,7 +212,7 @@ export const Sidebar: React.FC = () => {
         <div className={styles.userInfo}>
           <div className={styles.userName}>{fn} {ln}</div>
           <div className={styles.userRole}>
-            {currentUser?.role === 'admin' ? 'Administrador' : (currentUser?.role === 'superadmin' ? 'Superadmin' : 'Especialista')}
+            {currentUser?.role === 'admin' ? 'Administrador' : (currentUser?.role === 'superadmin' ? 'Superadmin' : 'Miembro')}
           </div>
         </div>
       </div>
