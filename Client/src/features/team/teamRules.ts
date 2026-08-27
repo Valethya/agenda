@@ -15,6 +15,8 @@ export interface TeamReadTicket {
   canonicalGeneration: number;
 }
 
+export type TeamAccessFailure = 'authentication' | 'authorization';
+
 export const TEAM_ROLE_LABELS: Record<TeamMembershipRole, string> = {
   admin: 'Administrador',
   worker: 'Miembro'
@@ -88,6 +90,12 @@ export function isTeamAuthenticationError(error: TeamMutationErrorLike): boolean
 
 export function isTeamAuthorityError(error: TeamMutationErrorLike): boolean {
   return error.status === 403;
+}
+
+export function getTeamAccessFailure(error: TeamMutationErrorLike): TeamAccessFailure | null {
+  if (isTeamAuthenticationError(error)) return 'authentication';
+  if (isTeamAuthorityError(error)) return 'authorization';
+  return null;
 }
 
 export function shouldRefetchTeamAfterMutationError(error: TeamMutationErrorLike): boolean {
