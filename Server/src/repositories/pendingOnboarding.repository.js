@@ -53,16 +53,22 @@ export const createPendingForBusiness = async (
   const scopedIssuerUserId = requireStrictObjectId(issuerUserId, "issuerUserId");
   const expiresAt = requireFutureDate(data.expiresAt);
 
-  const [businessExists, issuerExists, issuerAdminMembership] = await Promise.all([
-    queryWithSession(Business.exists({ _id: scopedBusinessId, isActive: true }), session),
-    queryWithSession(User.exists({ _id: scopedIssuerUserId, isActive: true }), session),
-    queryWithSession(Membership.exists({
-      user: scopedIssuerUserId,
-      business: scopedBusinessId,
-      role: "admin",
-      isActive: true,
-    }), session),
-  ]);
+  // MongoDB transactions do not support parallel operations on one session.
+  // Keep these authority reads deliberately sequential when C2 emits atomically.
+  const businessExists = await queryWithSession(
+    Business.exists({ _id: scopedBusinessId, isActive: true }),
+    session,
+  );
+  const issuerExists = await queryWithSession(
+    User.exists({ _id: scopedIssuerUserId, isActive: true }),
+    session,
+  );
+  const issuerAdminMembership = await queryWithSession(Membership.exists({
+    user: scopedIssuerUserId,
+    business: scopedBusinessId,
+    role: "admin",
+    isActive: true,
+  }), session);
 
   if (!businessExists) {
     throw new ReferenceError("businessId no corresponde a un Business activo existente");
