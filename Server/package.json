@@ -25,7 +25,7 @@
     "test:tenant-resource-isolation": "node --test test/tenantResourceIsolation.test.js",
     "test:admin-team-bookability": "node --test test/adminTeamBookability.test.js",
     "test:admin-team-existing-memberships": "node --test test/adminTeamExistingMembershipEndpoints.test.js",
-    "test:pending-onboarding-storage": "node --test test/pendingOnboardingStorage.test.js",
+    "test:pending-onboarding-storage": "node --test test/pendingOnboardingStorage.test.js && node --test test/pendingOnboardingStorageMigration.test.js",
     "test:customer-profile-persistence": "node --test test/customerProfilePersistence.test.js",
     "test:client-contact-verification": "node --test test/clientContactVerification.test.js",
     "test:public-web-trust": "node --test test/publicWebStorage.test.js && node --test test/publicWebDnsExpiryRace.test.js && node --test test/publicWebTrust.test.js && node --test test/publicWebSuperadminAuthority.test.js && node --test test/publicWebCorsAdmission.test.js && node --test test/publicWebCapabilityHttp.test.js && node --test test/publicWebC2Revocation.test.js",
@@ -53,7 +53,7 @@
   "dependencies": {
     "bcryptjs": "^3.0.3",
     "connect-mongo": "^6.0.0",
-    "cors": "^2.8.5",
+    "cors": "^5.0.0",
     "dotenv": "^17.0.0",
     "express": "^5.0.0",
     "express-rate-limit": "^8.5.2",
