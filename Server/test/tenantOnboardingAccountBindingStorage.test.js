@@ -14,7 +14,14 @@ import {
   assertTenantOnboardingAccountBindingIndexesReady,
 } from "../scripts/migrations/tenant-onboarding-account-binding-storage.js";
 
-const connection = await mongoose.createConnection(TEST_DB_URI, { autoIndex: false }).asPromise();
+// This suite intentionally owns a separate database because it must drop and
+// recreate the physical `users` collection/index. It must never perturb the
+// shared integration database used by the suites that run before/after it.
+const STORAGE_TEST_DB = "agenda_c2_account_binding_storage_test";
+const connection = await mongoose.createConnection(TEST_DB_URI, {
+  autoIndex: false,
+  dbName: STORAGE_TEST_DB,
+}).asPromise();
 const db = connection.db;
 const managedCollections = [
   PENDING_ONBOARDING_INDEX_SPEC.collection,
@@ -247,6 +254,6 @@ test("C2 account binding storage is physical, idempotent and fail-closed with au
 });
 
 test.after(async () => {
-  await reset();
+  await db.dropDatabase();
   await connection.close();
 });
