@@ -510,6 +510,15 @@
     flex-direction: column;
   }
 
+  .bookabilitySetting {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .switchControl {
+    align-self: flex-start;
+  }
+
   .confirmActions {
     align-items: stretch;
     flex-direction: column-reverse;
