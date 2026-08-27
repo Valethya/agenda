@@ -49,7 +49,7 @@ test('role and bookability remain independent across all canonical combinations'
 
 test('legacy worker role is presented as non-admin membership, never as professional bookability', () => {
   assert.equal(TEAM_ROLE_LABELS.worker, 'Miembro');
-  assert.doesNotMatch(TEAM_ROLE_LABELS.worker, /Profesional/i);
+  assert.doesNotMatch(TEAM_ROLE_LABELS.worker, /Profesional|Especialista/i);
   assert.equal(membership({ role: 'worker', isBookable: false }).isBookable, false);
   assert.equal(membership({ role: 'worker', isBookable: true }).isBookable, true);
 });
@@ -191,6 +191,8 @@ test('Team UI consumes canonical endpoints and preserves the corrected D1 surfac
 
   assert.match(sessionSource, /refreshSession: \(\) => Promise<SessionUser \| null>/);
   assert.match(sidebarSource, /id: 'equipo', label: 'Equipo'/);
+  assert.match(sidebarSource, /m\.role === 'admin' \? 'Admin' : 'Miembro'/);
+  assert.doesNotMatch(sidebarSource, /m\.role === 'admin' \? 'Admin' : '(?:Profesional|Especialista)'/);
   assert.match(dashboardSource, /viewType === 'equipo' && <TeamView \/>/);
   assert.match(teamStylesSource, /@media \(max-width: 760px\)/);
   assert.match(teamStylesSource, /@media \(max-width: 420px\)/);
