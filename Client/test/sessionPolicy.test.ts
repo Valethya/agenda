@@ -66,6 +66,16 @@ test('worker defaults to week view and its own professional filter', () => {
   });
 });
 
+test('worker keeps its own professional filter on explicit routed calendar views', () => {
+  const worker = user({ role: 'worker', id: 'worker-1' });
+  for (const view of ['semana', 'dia', 'mes'] as const) {
+    assert.deepEqual(resolveCalendarSelection(worker, 'tenant', view), {
+      viewType: view,
+      selectedProfessionalId: 'worker-1'
+    });
+  }
+});
+
 test('Team view is routable in tenant scope without using User.role as Team authority', () => {
   assert.deepEqual(resolveCalendarSelection(user({ role: 'admin' }), 'tenant', 'equipo'), {
     viewType: 'equipo',
