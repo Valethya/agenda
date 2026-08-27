@@ -17,6 +17,26 @@ export const normalizePendingOnboardingEmail = (value) => {
   return value.trim().toLowerCase();
 };
 
+const accountBindingSchema = new mongoose.Schema(
+  {
+    user: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      required: true,
+    },
+    challenge: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "TenantOnboardingChallenge",
+      required: true,
+    },
+    boundAt: {
+      type: Date,
+      required: true,
+    },
+  },
+  { _id: false, versionKey: false },
+);
+
 const pendingOnboardingSchema = new mongoose.Schema(
   {
     business: {
@@ -72,6 +92,13 @@ const pendingOnboardingSchema = new mongoose.Schema(
       enum: PENDING_ONBOARDING_STATUSES,
       default: "pending",
       required: true,
+    },
+    // C2 fija el User exacto controlado por el claimant. Este subdocumento no es
+    // Membership ni autoridad tenant y C3 deberá consumirlo sin volver a inferir
+    // identidad por email.
+    accountBinding: {
+      type: accountBindingSchema,
+      default: null,
     },
   },
   {
