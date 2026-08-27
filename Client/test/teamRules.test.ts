@@ -89,7 +89,7 @@ test('non-conflict mutation errors do not claim success or force conflict refetc
   assert.match(getTeamMutationErrorMessage({ status: 500 }), /estado anterior se mantiene/i);
 });
 
-test('Team UI consumes canonical Team endpoints and does not reconstruct from workers', () => {
+test('Team UI consumes canonical Team endpoints and preserves the D1 surface boundary', () => {
   const apiSource = readFileSync(new URL('../src/services/api.ts', import.meta.url), 'utf8');
   const teamViewSource = readFileSync(new URL('../src/components/TeamView.tsx', import.meta.url), 'utf8');
   const sidebarSource = readFileSync(new URL('../src/components/Sidebar.tsx', import.meta.url), 'utf8');
@@ -103,15 +103,22 @@ test('Team UI consumes canonical Team endpoints and does not reconstruct from wo
 
   assert.match(getTeamSection, /apiFetch<[^\n]+>\("\/team"\)/);
   assert.match(getTeamSection, /\/team\/memberships\/\$\{encodeURIComponent\(membershipId\)\}/);
-  assert.doesNotMatch(getTeamSection, /users\/workers/);
+  assert.match(getTeamSection, /method: 'PATCH'/);
+  assert.doesNotMatch(getTeamSection, /method: 'POST'|users\/workers/);
+
   assert.doesNotMatch(teamViewSource, /getWorkers|users\/workers|\.email\b|currentUser\?\.role|currentUser\.role/);
   assert.match(teamViewSource, /Propietario/);
   assert.match(teamViewSource, /Presta servicios/);
   assert.match(teamViewSource, /Acceso desactivado/);
   assert.match(teamViewSource, /Desactivar acceso/);
+  assert.match(teamViewSource, /Confirmar desactivación/);
+  assert.match(teamViewSource, /Su historial no se elimina/);
+  assert.match(teamViewSource, /No pudimos cargar Equipo/);
+  assert.match(teamViewSource, /Reintentar/);
   assert.match(teamViewSource, /pendingRef\.current\.has\(membershipId\)/);
   assert.match(teamViewSource, /loadCanonicalTeam\(true\)/);
-  assert.doesNotMatch(teamViewSource, /Añadir persona|Eliminar persona|Reactivar/);
+  assert.doesNotMatch(teamViewSource, /Añadir persona|Crear persona|Eliminar persona|Reactivar/);
+
   assert.match(sidebarSource, /id: 'equipo', label: 'Equipo'/);
   assert.match(dashboardSource, /viewType === 'equipo' && <TeamView \/>/);
   assert.match(teamStylesSource, /@media \(max-width: 760px\)/);
