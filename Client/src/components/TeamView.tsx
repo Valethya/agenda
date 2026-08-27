@@ -1,16 +1,22 @@
 import React from 'react';
 import styles from './TeamView.module.scss';
+import { useCalendarNavigation } from '../context/CalendarNavigationContext';
+import { useSession } from '../context/SessionContext';
+import { buildAdminViewUrl } from '../context/sessionPolicy';
 import { getTeam, isApiError, updateTeamMembership } from '../services/api';
 import type { TeamMembership, TeamMembershipPatch, TeamMembershipRole } from '../types';
 import {
   TEAM_ROLE_LABELS,
+  TeamSyncCoordinator,
   bookabilityPatch,
   canChangeBookability,
   canChangeTeamRole,
   canDeactivateMembership,
   deactivatePatch,
+  didCallerLoseTeamAdminAuthority,
   getTeamMemberName,
   getTeamMutationErrorMessage,
+  isTeamAuthorityError,
   replaceCanonicalMembership,
   rolePatch,
   shouldRefetchTeamAfterMutationError
@@ -21,17 +27,56 @@ type Feedback = {
   message: string;
 };
 
+type NormalizedTeamError = {
+  status?: number;
+  message?: string;
+};
+
 const LOAD_ERROR_MESSAGE = 'No pudimos cargar el equipo. Revisa tu conexión o acceso e intenta nuevamente.';
-const REFRESH_ERROR_MESSAGE = 'El cambio entró en conflicto y no pudimos actualizar la lista. Recarga Equipo antes de intentar otra modificación.';
+const REFRESH_ERROR_MESSAGE = 'No pudimos reconciliar Equipo con el servidor. Actualiza la lista antes de intentar otra modificación.';
+const AUTHORITY_LOST_MESSAGE = 'Tu acceso administrativo a Equipo ya no está vigente. La sesión se volverá a validar.';
+
+function normalizeTeamError(error: unknown): NormalizedTeamError {
+  return isApiError(error)
+    ? { status: error.status, message: error.message }
+    : { message: error instanceof Error ? error.message : undefined };
+}
 
 export const TeamView: React.FC = () => {
+  const { setViewType } = useCalendarNavigation();
+  const { currentUser, refreshSession } = useSession();
   const [team, setTeam] = React.useState<TeamMembership[]>([]);
   const [loadState, setLoadState] = React.useState<'loading' | 'loaded' | 'error'>('loading');
   const [loadError, setLoadError] = React.useState<string | null>(null);
   const [feedbackByMembership, setFeedbackByMembership] = React.useState<Record<string, Feedback>>({});
   const [confirmingMembershipId, setConfirmingMembershipId] = React.useState<string | null>(null);
   const [pendingMembershipIds, setPendingMembershipIds] = React.useState<Set<string>>(new Set());
+  const [isReconciling, setIsReconciling] = React.useState(false);
+  const [authorityLost, setAuthorityLost] = React.useState(false);
   const pendingRef = React.useRef<Set<string>>(new Set());
+  const authorityLostRef = React.useRef(false);
+  const syncRef = React.useRef(new TeamSyncCoordinator());
+  const reconciliationPromiseRef = React.useRef<Promise<boolean> | null>(null);
+
+  const abandonTeamSurface = React.useCallback((message = AUTHORITY_LOST_MESSAGE) => {
+    if (authorityLostRef.current) return;
+
+    authorityLostRef.current = true;
+    syncRef.current.invalidateReads();
+    setAuthorityLost(true);
+    setTeam([]);
+    setConfirmingMembershipId(null);
+    setLoadError(message);
+    setFeedbackByMembership({});
+
+    setViewType('semana');
+    window.history.replaceState(
+      null,
+      '',
+      buildAdminViewUrl(window.location.search, 'semana')
+    );
+    void refreshSession();
+  }, [refreshSession, setViewType]);
 
   const loadCanonicalTeam = React.useCallback(async (preserveCurrentState = false) => {
     if (!preserveCurrentState) {
@@ -39,12 +84,24 @@ export const TeamView: React.FC = () => {
     }
     setLoadError(null);
 
+    const readTicket = syncRef.current.beginRead();
+
     try {
       const canonicalTeam = await getTeam();
+      if (!syncRef.current.canApplyRead(readTicket) || authorityLostRef.current) {
+        return true;
+      }
+
       setTeam(canonicalTeam);
       setLoadState('loaded');
       return true;
-    } catch {
+    } catch (error) {
+      const normalizedError = normalizeTeamError(error);
+      if (isTeamAuthorityError(normalizedError)) {
+        abandonTeamSurface();
+        return false;
+      }
+
       if (preserveCurrentState) {
         setLoadError(REFRESH_ERROR_MESSAGE);
       } else {
@@ -53,7 +110,58 @@ export const TeamView: React.FC = () => {
       }
       return false;
     }
-  }, []);
+  }, [abandonTeamSurface]);
+
+  const reconcileCanonicalTeam = React.useCallback((): Promise<boolean> => {
+    if (reconciliationPromiseRef.current) {
+      return reconciliationPromiseRef.current;
+    }
+
+    syncRef.current.beginReconciliation();
+    setIsReconciling(true);
+
+    const run = async (): Promise<boolean> => {
+      try {
+        await syncRef.current.waitForMutationsToDrain();
+        if (authorityLostRef.current) return false;
+
+        const readTicket = syncRef.current.beginRead();
+        const canonicalTeam = await getTeam();
+        if (!syncRef.current.canApplyRead(readTicket) || authorityLostRef.current) {
+          return true;
+        }
+
+        setTeam(canonicalTeam);
+        setLoadState('loaded');
+        setLoadError(null);
+        return true;
+      } catch (error) {
+        const normalizedError = normalizeTeamError(error);
+        if (isTeamAuthorityError(normalizedError)) {
+          abandonTeamSurface();
+          return false;
+        }
+
+        setLoadError(REFRESH_ERROR_MESSAGE);
+        return false;
+      } finally {
+        syncRef.current.endReconciliation();
+        setIsReconciling(false);
+      }
+    };
+
+    const task = run();
+    reconciliationPromiseRef.current = task;
+    void task.then(
+      () => {
+        if (reconciliationPromiseRef.current === task) reconciliationPromiseRef.current = null;
+      },
+      () => {
+        if (reconciliationPromiseRef.current === task) reconciliationPromiseRef.current = null;
+      }
+    );
+    return task;
+  }, [abandonTeamSurface]);
 
   React.useEffect(() => {
     void loadCanonicalTeam();
@@ -82,31 +190,48 @@ export const TeamView: React.FC = () => {
     patch: TeamMembershipPatch
   ) => {
     const { membershipId } = membership;
-    if (pendingRef.current.has(membershipId)) return;
+    if (
+      authorityLostRef.current
+      || pendingRef.current.has(membershipId)
+      || !syncRef.current.beginMutation()
+    ) return;
 
     setMembershipPending(membershipId, true);
     setFeedback(membershipId);
 
+    let canonicalAccepted = false;
+    let needsReconciliation = false;
+
     try {
       const canonicalMembership = await updateTeamMembership(membershipId, patch);
+      canonicalAccepted = true;
       setTeam((current) => replaceCanonicalMembership(current, canonicalMembership));
       setConfirmingMembershipId((current) => current === membershipId ? null : current);
-      setFeedback(membershipId, { tone: 'success', message: 'Cambios guardados.' });
+
+      if (didCallerLoseTeamAdminAuthority(canonicalMembership, currentUser)) {
+        abandonTeamSurface();
+      } else {
+        setFeedback(membershipId, { tone: 'success', message: 'Cambios guardados.' });
+      }
     } catch (error) {
-      const normalizedError = isApiError(error)
-        ? { status: error.status, message: error.message }
-        : { message: error instanceof Error ? error.message : undefined };
+      const normalizedError = normalizeTeamError(error);
 
-      setFeedback(membershipId, {
-        tone: 'error',
-        message: getTeamMutationErrorMessage(normalizedError)
-      });
-
-      if (shouldRefetchTeamAfterMutationError(normalizedError)) {
-        await loadCanonicalTeam(true);
+      if (isTeamAuthorityError(normalizedError)) {
+        abandonTeamSurface();
+      } else {
+        setFeedback(membershipId, {
+          tone: 'error',
+          message: getTeamMutationErrorMessage(normalizedError)
+        });
+        needsReconciliation = shouldRefetchTeamAfterMutationError(normalizedError);
       }
     } finally {
+      syncRef.current.finishMutation(canonicalAccepted);
       setMembershipPending(membershipId, false);
+    }
+
+    if (needsReconciliation && !authorityLostRef.current) {
+      await reconcileCanonicalTeam();
     }
   };
 
@@ -119,6 +244,15 @@ export const TeamView: React.FC = () => {
     if (isBookable === membership.isBookable) return;
     void mutateMembership(membership, bookabilityPatch(isBookable));
   };
+
+  if (authorityLost) {
+    return (
+      <section className={styles.statePanel} role="alert">
+        <h2>Acceso administrativo actualizado</h2>
+        <p>{loadError || AUTHORITY_LOST_MESSAGE}</p>
+      </section>
+    );
+  }
 
   if (loadState === 'loading') {
     return (
@@ -148,7 +282,7 @@ export const TeamView: React.FC = () => {
           <p className={styles.eyebrow}>Administración</p>
           <h1 id="team-title">Equipo</h1>
           <p className={styles.description}>
-            El rol define el nivel de acceso. “Presta servicios” define, por separado, si la persona puede recibir nuevas reservas.
+            El rol define permisos administrativos. “Miembro” significa acceso no administrativo; “Presta servicios” define, por separado, si la persona puede recibir nuevas reservas.
           </p>
         </div>
         <div className={styles.summary} aria-label={`${team.length} integrantes en el equipo`}>
@@ -157,10 +291,16 @@ export const TeamView: React.FC = () => {
         </div>
       </header>
 
-      {loadError && (
+      {isReconciling && (
+        <div className={styles.refreshWarning} role="status" aria-live="polite">
+          <span>Actualizando Equipo con el estado canónico del servidor antes de permitir nuevos cambios.</span>
+        </div>
+      )}
+
+      {loadError && !isReconciling && (
         <div className={styles.refreshWarning} role="alert">
           <span>{loadError}</span>
-          <button type="button" onClick={() => void loadCanonicalTeam(true)}>Actualizar lista</button>
+          <button type="button" onClick={() => void reconcileCanonicalTeam()}>Actualizar lista</button>
         </div>
       )}
 
@@ -175,9 +315,10 @@ export const TeamView: React.FC = () => {
             const name = getTeamMemberName(membership);
             const isPending = pendingMembershipIds.has(membership.membershipId);
             const feedback = feedbackByMembership[membership.membershipId];
-            const canChangeRole = canChangeTeamRole(membership) && !isPending;
-            const canChangeServices = canChangeBookability(membership) && !isPending;
-            const canDeactivate = canDeactivateMembership(membership) && !isPending;
+            const controlsLocked = isPending || isReconciling;
+            const canChangeRole = canChangeTeamRole(membership) && !controlsLocked;
+            const canChangeServices = canChangeBookability(membership) && !controlsLocked;
+            const canDeactivate = canDeactivateMembership(membership) && !controlsLocked;
             const isConfirming = confirmingMembershipId === membership.membershipId;
 
             return (
@@ -201,7 +342,7 @@ export const TeamView: React.FC = () => {
                 <div className={styles.settingGroup}>
                   <div className={styles.settingCopy}>
                     <span className={styles.settingLabel}>Rol</span>
-                    <small>Define qué puede administrar dentro del negocio.</small>
+                    <small>Administrador puede administrar Equipo; Miembro tiene acceso no administrativo.</small>
                   </div>
 
                   {membership.isOwner ? (
@@ -215,7 +356,7 @@ export const TeamView: React.FC = () => {
                       onChange={(event) => handleRoleChange(membership, event.target.value as TeamMembershipRole)}
                     >
                       <option value="admin">Administrador</option>
-                      <option value="worker">Profesional</option>
+                      <option value="worker">Miembro</option>
                     </select>
                   )}
                 </div>
@@ -278,7 +419,7 @@ export const TeamView: React.FC = () => {
                       <button
                         type="button"
                         className={styles.secondaryButton}
-                        disabled={isPending}
+                        disabled={controlsLocked}
                         onClick={() => setConfirmingMembershipId(null)}
                       >
                         Cancelar
@@ -286,7 +427,7 @@ export const TeamView: React.FC = () => {
                       <button
                         type="button"
                         className={styles.confirmDangerButton}
-                        disabled={isPending}
+                        disabled={controlsLocked}
                         onClick={() => void mutateMembership(membership, deactivatePatch())}
                       >
                         Confirmar desactivación
