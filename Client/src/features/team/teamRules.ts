@@ -62,7 +62,7 @@ export function getTeamMutationErrorMessage(error: TeamMutationErrorLike): strin
     const reason = error.message && !error.message.startsWith('API error:')
       ? `${error.message} `
       : '';
-    return `${reason}El equipo se actualizó con el estado más reciente. Revisa el cambio e intenta nuevamente.`;
+    return `${reason}Hay un conflicto con el estado actual del equipo. La lista se volverá a consultar antes de otro intento.`;
   }
 
   if (error.status === 403) {
