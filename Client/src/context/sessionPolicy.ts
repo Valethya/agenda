@@ -25,6 +25,13 @@ export function shouldShowWorkspaceSwitcher(user: SessionUser | null): boolean {
   );
 }
 
+export function buildAdminViewUrl(currentSearch: string, view: ViewType): string {
+  const params = new URLSearchParams(currentSearch);
+  params.set('view', view);
+  const query = params.toString();
+  return query ? `/admin?${query}` : '/admin';
+}
+
 export function resolveCalendarSelection(
   user: SessionUser,
   scope: SessionScope,
