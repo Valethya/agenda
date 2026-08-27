@@ -2,6 +2,10 @@ import mongoose from "mongoose";
 import { isDeepStrictEqual } from "node:util";
 import { fileURLToPath } from "node:url";
 import { urlMongo } from "../../src/config/env.js";
+import {
+  PENDING_ONBOARDING_CHANNEL,
+  PENDING_ONBOARDING_PURPOSE,
+} from "../../src/db/models/pendingOnboarding.model.js";
 
 export const PENDING_ONBOARDING_INDEX_SPEC = Object.freeze({
   collection: "pendingonboardings",
@@ -85,12 +89,16 @@ const assertPendingDataCompatible = async (db) => {
     status: "pending",
     $or: [
       { business: { $exists: false } },
+      { issuer: { $exists: false } },
       { email: { $exists: false } },
+      { expiresAt: { $exists: false } },
       { email: { $not: { $type: "string" } } },
     ],
   });
   if (malformed) {
-    throw new Error("Storage C1 bloqueado: existe onboarding pending sin Business/email canónico");
+    throw new Error(
+      "Storage C1 bloqueado: existe onboarding pending sin envelope canónico requerido",
+    );
   }
 
   const nonCanonical = await collection.findOne({
@@ -104,6 +112,21 @@ const assertPendingDataCompatible = async (db) => {
   });
   if (nonCanonical) {
     throw new Error("Storage C1 bloqueado: existe email pending sin normalización canónica");
+  }
+
+  const policyMismatch = await collection.findOne({
+    status: "pending",
+    $or: [
+      { channel: { $ne: PENDING_ONBOARDING_CHANNEL } },
+      { purpose: { $ne: PENDING_ONBOARDING_PURPOSE } },
+      { role: { $ne: "worker" } },
+      { isBookable: { $ne: false } },
+    ],
+  });
+  if (policyMismatch) {
+    throw new Error(
+      "Storage C1 bloqueado: existe onboarding pending fuera de la política canónica worker/non-bookable",
+    );
   }
 
   const duplicate = await collection.aggregate([
