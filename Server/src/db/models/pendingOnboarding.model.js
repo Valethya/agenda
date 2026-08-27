@@ -6,6 +6,8 @@ export const PENDING_ONBOARDING_STATUSES = Object.freeze([
   "consumed",
   "revoked",
 ]);
+export const PENDING_ONBOARDING_CHANNEL = "email";
+export const PENDING_ONBOARDING_PURPOSE = "tenant-onboarding";
 
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/u;
 const MAX_EMAIL_LENGTH = 320;
@@ -22,6 +24,16 @@ const pendingOnboardingSchema = new mongoose.Schema(
       ref: "Business",
       required: [true, "El negocio del onboarding pendiente es obligatorio"],
     },
+    issuer: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      required: [true, "El issuer del onboarding pendiente es obligatorio"],
+    },
+    channel: {
+      type: String,
+      enum: [PENDING_ONBOARDING_CHANNEL],
+      required: [true, "El canal del onboarding pendiente es obligatorio"],
+    },
     email: {
       type: String,
       required: [true, "El email objetivo del onboarding pendiente es obligatorio"],
@@ -37,6 +49,11 @@ const pendingOnboardingSchema = new mongoose.Schema(
         },
       ],
     },
+    purpose: {
+      type: String,
+      enum: [PENDING_ONBOARDING_PURPOSE],
+      required: [true, "El purpose del onboarding pendiente es obligatorio"],
+    },
     role: {
       type: String,
       enum: PENDING_ONBOARDING_ROLES,
@@ -45,6 +62,10 @@ const pendingOnboardingSchema = new mongoose.Schema(
     isBookable: {
       type: Boolean,
       required: [true, "El estado inicial de agendabilidad es obligatorio"],
+    },
+    expiresAt: {
+      type: Date,
+      required: [true, "La expiración del onboarding pendiente es obligatoria"],
     },
     status: {
       type: String,
