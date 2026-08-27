@@ -9,6 +9,9 @@ export const issueOnboarding = async (req, res, next) => {
       businessId: req.businessId,
       issuerUserId: req.tenantAuthority.userId,
       email: req.tenantOnboardingIssue.email,
+      // Tests inject a trusted in-memory delivery through app.locals. HTTP input
+      // cannot set this value; production falls back to the sensitive mailer.
+      deliver: req.app.locals.tenantOnboardingDeliver,
     });
 
     res.status(202).json({
