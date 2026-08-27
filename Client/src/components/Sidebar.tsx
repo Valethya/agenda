@@ -3,7 +3,7 @@ import styles from './Sidebar.module.scss';
 import { useCalendarData } from '../context/CalendarDataContext';
 import { useCalendarNavigation } from '../context/CalendarNavigationContext';
 import { useSession } from '../context/SessionContext';
-import { shouldShowWorkspaceSwitcher } from '../context/sessionPolicy';
+import { buildAdminViewUrl, shouldShowWorkspaceSwitcher } from '../context/sessionPolicy';
 import {
   ActivityIcon,
   BarChartIcon,
@@ -56,16 +56,22 @@ export const Sidebar: React.FC = () => {
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
+  const selectTenantView = (nextView: 'semana' | 'horarios' | 'equipo') => {
+    setViewType(nextView);
+    window.history.replaceState(
+      null,
+      '',
+      buildAdminViewUrl(window.location.search, nextView)
+    );
+  };
+
   const handleNavClick = (id: string) => {
     if (id === 'calendario') {
-      setViewType('semana'); // Default to week view when clicking calendar
+      selectTenantView('semana');
     } else if (id === 'horarios') {
-      setViewType('horarios');
+      selectTenantView('horarios');
     } else if (id === 'equipo') {
-      setViewType('equipo');
-      const params = new URLSearchParams(window.location.search);
-      params.set('view', 'equipo');
-      window.history.replaceState(null, '', `/admin?${params.toString()}`);
+      selectTenantView('equipo');
     } else if (id === 'saas-negocios' || id === 'saas-metricas') {
       const params = new URLSearchParams(window.location.search);
       params.delete('slug');
@@ -78,7 +84,6 @@ export const Sidebar: React.FC = () => {
   const ln = currentUser?.lastName || "";
   const initials = `${fn[0] || ""}${ln[0] || ""}`.toUpperCase() || "US";
 
-  // Determine active item id
   const activeItemId = viewType === 'horarios'
     ? 'horarios'
     : viewType === 'equipo'
