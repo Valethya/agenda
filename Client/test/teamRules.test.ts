@@ -11,8 +11,10 @@ import {
   canDeactivateMembership,
   deactivatePatch,
   didCallerLoseTeamAdminAuthority,
+  getTeamAccessFailure,
   getTeamMutationErrorMessage,
   hasActiveTeamAdminAuthority,
+  isTeamAuthenticationError,
   isTeamAuthorityError,
   replaceCanonicalMembership,
   rolePatch,
@@ -125,8 +127,35 @@ test('409 reconciliation waits for concurrent PATCHes and rejects an older GET s
   const safeRead = sync.beginRead();
   assert.equal(sync.canApplyRead(safeRead), true, 'a read begun after all PATCHes drain can apply');
 
-  sync.endReconciliation();
-  assert.equal(sync.beginMutation(), true, 'independent PATCHes resume after reconciliation');
+  sync.finishReconciliation(true);
+  assert.equal(sync.beginMutation(), true, 'independent PATCHes resume after successful reconciliation');
+  sync.finishMutation(false);
+});
+
+test('failed canonical recovery after 409 stays locked until a successful retry applies', async () => {
+  const sync = new TeamSyncCoordinator();
+
+  assert.equal(sync.beginMutation(), true); // PATCH A starts
+  sync.finishMutation(false); // PATCH A -> 409
+  sync.beginReconciliation();
+  await sync.waitForMutationsToDrain();
+
+  // GET /api/team fails: the active attempt ends, but canonical recovery is still required.
+  sync.finishReconciliation(false);
+  assert.equal(sync.isReconciliationActive(), false);
+  assert.equal(sync.isReconciliationRequired(), true);
+  assert.equal(sync.areMutationsBlocked(), true);
+  assert.equal(sync.beginMutation(), false, 'a failed reconciliation must not reopen PATCH controls');
+
+  // User presses "Actualizar lista": fresh GET succeeds and its snapshot is valid to apply.
+  sync.beginReconciliation();
+  const retryRead = sync.beginRead();
+  assert.equal(sync.canApplyRead(retryRead), true);
+  sync.finishReconciliation(true);
+
+  assert.equal(sync.isReconciliationRequired(), false);
+  assert.equal(sync.areMutationsBlocked(), false);
+  assert.equal(sync.beginMutation(), true, 'only successful canonical recovery unlocks new PATCHes');
   sync.finishMutation(false);
 });
 
@@ -141,10 +170,16 @@ test('self-demotion and self-deactivation revoke Team authority, while bookabili
   ), false);
 });
 
-test('403 is treated as loss of Team authority and fails closed', () => {
+test('401 and 403 are distinct Team access failures and both fail closed', () => {
+  assert.equal(isTeamAuthenticationError({ status: 401 }), true);
+  assert.equal(isTeamAuthenticationError({ status: 403 }), false);
   assert.equal(isTeamAuthorityError({ status: 403 }), true);
-  assert.equal(isTeamAuthorityError({ status: 409 }), false);
-  assert.match(getTeamMutationErrorMessage({ status: 403 }), /ya no está vigente/i);
+  assert.equal(isTeamAuthorityError({ status: 401 }), false);
+  assert.equal(getTeamAccessFailure({ status: 401 }), 'authentication');
+  assert.equal(getTeamAccessFailure({ status: 403 }), 'authorization');
+  assert.equal(getTeamAccessFailure({ status: 409 }), null);
+  assert.match(getTeamMutationErrorMessage({ status: 401 }), /sesión ya no está vigente/i);
+  assert.match(getTeamMutationErrorMessage({ status: 403 }), /acceso administrativo.*ya no está vigente/i);
 });
 
 test('non-conflict mutation errors do not claim success or force conflict reconciliation', () => {
@@ -164,6 +199,18 @@ test('Team UI consumes canonical endpoints and preserves the corrected D1 surfac
     apiSource.indexOf('export async function getTeam'),
     apiSource.indexOf('export async function getMyAppointments')
   );
+  const loadTeamSection = teamViewSource.slice(
+    teamViewSource.indexOf('const loadCanonicalTeam'),
+    teamViewSource.indexOf('const reconcileCanonicalTeam')
+  );
+  const reconcileTeamSection = teamViewSource.slice(
+    teamViewSource.indexOf('const reconcileCanonicalTeam'),
+    teamViewSource.indexOf('React.useEffect')
+  );
+  const mutationSection = teamViewSource.slice(
+    teamViewSource.indexOf('const mutateMembership'),
+    teamViewSource.indexOf('const handleRoleChange')
+  );
 
   assert.match(getTeamSection, /apiFetch<[^\n]+>\("\/team"\)/);
   assert.match(getTeamSection, /\/team\/memberships\/\$\{encodeURIComponent\(membershipId\)\}/);
@@ -173,10 +220,21 @@ test('Team UI consumes canonical endpoints and preserves the corrected D1 surfac
   assert.doesNotMatch(teamViewSource, /getWorkers|users\/workers|\.email\b|currentUser\?\.role|currentUser\.role/);
   assert.match(teamViewSource, /didCallerLoseTeamAdminAuthority\(canonicalMembership, currentUser\)/);
   assert.match(teamViewSource, /refreshSession/);
-  assert.match(teamViewSource, /isTeamAuthorityError/);
+  assert.match(teamViewSource, /getTeamAccessFailure/);
+  assert.match(loadTeamSection, /handleTeamAccessError\(normalizedError\)/, 'GET Team 401/403 must fail closed before generic load retry');
+  assert.match(reconcileTeamSection, /handleTeamAccessError\(normalizedError\)/, 'reconciliation GET 401/403 must fail closed');
+  assert.match(mutationSection, /handleTeamAccessError\(normalizedError\)/, 'PATCH Team 401/403 must fail closed');
+  assert.match(teamViewSource, /accessState !== 'active'/);
+  assert.ok(
+    teamViewSource.indexOf("if (accessState !== 'active')") < teamViewSource.indexOf("if (loadState === 'error')"),
+    '401/403 access loss must render before the generic Team retry state'
+  );
   assert.match(teamViewSource, /waitForMutationsToDrain/);
   assert.match(teamViewSource, /canApplyRead/);
-  assert.match(teamViewSource, /isReconciling/);
+  assert.match(teamViewSource, /reconciliationRequired/);
+  assert.match(teamViewSource, /controlsLocked = isPending \|\| isReconciling \|\| reconciliationRequired/);
+  assert.match(teamViewSource, /finishReconciliation\(canonicalApplied\)/);
+  assert.match(teamViewSource, /Actualizar lista/);
   assert.match(teamViewSource, /<option value="worker">Miembro<\/option>/);
   assert.doesNotMatch(teamViewSource, /<option value="worker">Profesional<\/option>/);
   assert.match(teamViewSource, /Propietario/);
@@ -190,6 +248,8 @@ test('Team UI consumes canonical endpoints and preserves the corrected D1 surfac
   assert.doesNotMatch(teamViewSource, /Añadir persona|Crear persona|Eliminar persona|Reactivar/);
 
   assert.match(sessionSource, /refreshSession: \(\) => Promise<SessionUser \| null>/);
+  assert.match(sessionSource, /err\.status === 401/);
+  assert.match(sessionSource, /window\.location\.href = '\/login'/);
   assert.match(sidebarSource, /id: 'equipo', label: 'Equipo'/);
   assert.match(sidebarSource, /m\.role === 'admin' \? 'Admin' : 'Miembro'/);
   assert.doesNotMatch(sidebarSource, /m\.role === 'admin' \? 'Admin' : '(?:Profesional|Especialista)'/);
