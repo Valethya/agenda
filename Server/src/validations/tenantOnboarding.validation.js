@@ -5,11 +5,12 @@ const secret = z.string().regex(/^[A-Za-z0-9_-]{43}$/u, "Challenge no válido");
 
 export const issueTenantOnboardingSchema = z.object({
   body: z.object({
+    // La semántica canónica trim+lowercase pertenece al servicio/modelo C1. La
+    // validación HTTP sólo comprueba formato después del trim y no rechaza casing.
     email: z
       .string({ required_error: "El correo electrónico es obligatorio" })
-      .email("Debe ingresar un formato de correo válido")
       .trim()
-      .lowercase(),
+      .email("Debe ingresar un formato de correo válido"),
   }).strict(),
 }).passthrough();
 
