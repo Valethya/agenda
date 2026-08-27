@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useEffect, useState } from 'react';
+import React, { createContext, useCallback, useContext, useEffect, useState } from 'react';
 import type { SessionUser } from '../types';
 import * as api from '../services/api';
 import { resolveSessionScope, type SessionScope } from './sessionPolicy';
@@ -8,6 +8,7 @@ interface SessionContextType {
   scope: SessionScope;
   loading: boolean;
   error: string | null;
+  refreshSession: () => Promise<SessionUser | null>;
   logoutUser: () => Promise<void>;
   switchWorkspace: (businessId: string) => Promise<void>;
 }
@@ -20,55 +21,65 @@ export const SessionProvider: React.FC<{ children: React.ReactNode }> = ({ child
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  const refreshSession = useCallback(async (): Promise<SessionUser | null> => {
+    try {
+      setError(null);
+      const response = await api.getCurrentUser();
+      if (!response || response.status !== 'success') {
+        setCurrentUser(null);
+        setScope('redirecting');
+        window.location.href = '/login';
+        return null;
+      }
+
+      const user = response.payload || response.user;
+      if (!user) {
+        setCurrentUser(null);
+        setScope('redirecting');
+        window.location.href = '/login';
+        return null;
+      }
+
+      const params = new URLSearchParams(window.location.search);
+      const urlSlug = params.get('slug')?.trim() || null;
+      const nextScope = resolveSessionScope(user, urlSlug);
+
+      setCurrentUser(user);
+      setScope(nextScope);
+
+      if (nextScope === 'redirecting' && user.businessSlug) {
+        params.set('slug', user.businessSlug);
+        window.location.href = `${window.location.pathname}?${params.toString()}`;
+      }
+
+      return user;
+    } catch (err: unknown) {
+      console.error('Error refreshing session:', err);
+      if (api.isApiError(err) && err.status === 401) {
+        setCurrentUser(null);
+        setScope('redirecting');
+        window.location.href = '/login';
+        return null;
+      }
+      setError('Ocurrió un error al actualizar la sesión del panel.');
+      return null;
+    }
+  }, []);
+
   useEffect(() => {
     let active = true;
 
     const loadSession = async () => {
-      try {
-        setLoading(true);
-        setError(null);
-
-        const response = await api.getCurrentUser();
-        if (!response || response.status !== 'success') {
-          setScope('redirecting');
-          window.location.href = '/login';
-          return;
-        }
-
-        const user = response.payload || response.user;
-        if (!active || !user) return;
-
-        const params = new URLSearchParams(window.location.search);
-        const urlSlug = params.get('slug')?.trim() || null;
-        const nextScope = resolveSessionScope(user, urlSlug);
-
-        setCurrentUser(user);
-        setScope(nextScope);
-
-        if (nextScope === 'redirecting' && user.businessSlug) {
-          params.set('slug', user.businessSlug);
-          window.location.href = `${window.location.pathname}?${params.toString()}`;
-        }
-      } catch (err: unknown) {
-        console.error('Error loading session:', err);
-        if (api.isApiError(err) && err.status === 401) {
-          setScope('redirecting');
-          window.location.href = '/login';
-          return;
-        }
-        if (active) {
-          setError('Ocurrió un error al cargar la sesión del panel.');
-        }
-      } finally {
-        if (active) setLoading(false);
-      }
+      setLoading(true);
+      await refreshSession();
+      if (active) setLoading(false);
     };
 
-    loadSession();
+    void loadSession();
     return () => {
       active = false;
     };
-  }, []);
+  }, [refreshSession]);
 
   const logoutUser = async () => {
     try {
@@ -106,6 +117,7 @@ export const SessionProvider: React.FC<{ children: React.ReactNode }> = ({ child
       scope,
       loading,
       error,
+      refreshSession,
       logoutUser,
       switchWorkspace
     }}>

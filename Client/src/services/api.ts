@@ -9,7 +9,9 @@ import type {
   SaasBusiness,
   SessionApiResponse,
   SessionIdentity,
-  SessionUser
+  SessionUser,
+  TeamMembership,
+  TeamMembershipPatch
 } from '../types';
 
 const configuredApiUrl = import.meta.env.PUBLIC_API_URL;
@@ -142,6 +144,25 @@ export async function logout() {
 export async function getWorkers() {
   const data = await apiFetch<ApiResponse<Professional[]>>("/internal/users/workers");
   return data.payload;
+}
+
+export async function getTeam() {
+  const data = await apiFetch<ApiResponse<{ team: TeamMembership[] }>>("/team");
+  return data.payload.team;
+}
+
+export async function updateTeamMembership(
+  membershipId: string,
+  patch: TeamMembershipPatch
+) {
+  const data = await apiFetch<ApiResponse<{ membership: TeamMembership }>>(
+    `/team/memberships/${encodeURIComponent(membershipId)}`,
+    {
+      method: 'PATCH',
+      body: patch
+    }
+  );
+  return data.payload.membership;
 }
 
 export async function getMyAppointments() {

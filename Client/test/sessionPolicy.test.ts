@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { SessionUser } from '../src/types/index.ts';
 import {
+  buildAdminViewUrl,
   resolveCalendarSelection,
   resolveSessionScope,
   shouldShowWorkspaceSwitcher
@@ -62,6 +63,52 @@ test('worker defaults to week view and its own professional filter', () => {
   assert.deepEqual(resolveCalendarSelection(user({ role: 'worker', id: 'worker-1' }), 'tenant', null), {
     viewType: 'semana',
     selectedProfessionalId: 'worker-1'
+  });
+});
+
+test('worker keeps its own professional filter on explicit routed calendar views', () => {
+  const worker = user({ role: 'worker', id: 'worker-1' });
+  for (const view of ['semana', 'dia', 'mes'] as const) {
+    assert.deepEqual(resolveCalendarSelection(worker, 'tenant', view), {
+      viewType: view,
+      selectedProfessionalId: 'worker-1'
+    });
+  }
+});
+
+test('Team view is routable in tenant scope without using User.role as Team authority', () => {
+  assert.deepEqual(resolveCalendarSelection(user({ role: 'admin' }), 'tenant', 'equipo'), {
+    viewType: 'equipo',
+    selectedProfessionalId: null
+  });
+  assert.deepEqual(resolveCalendarSelection(user({ role: 'worker', id: 'worker-1' }), 'tenant', 'equipo'), {
+    viewType: 'equipo',
+    selectedProfessionalId: null
+  });
+});
+
+test('leaving Team for Calendar synchronizes view while preserving tenant and unrelated query params', () => {
+  const url = buildAdminViewUrl('?slug=atmosfera&view=equipo&foo=bar', 'semana');
+  const params = new URL(url, 'https://agenda.test').searchParams;
+
+  assert.equal(params.get('slug'), 'atmosfera');
+  assert.equal(params.get('foo'), 'bar');
+  assert.equal(params.get('view'), 'semana');
+  assert.deepEqual(resolveCalendarSelection(user(), 'tenant', params.get('view')), {
+    viewType: 'semana',
+    selectedProfessionalId: null
+  });
+});
+
+test('leaving Team for Horarios synchronizes view and refresh keeps Horarios', () => {
+  const url = buildAdminViewUrl('?slug=atmosfera&view=equipo', 'horarios');
+  const params = new URL(url, 'https://agenda.test').searchParams;
+
+  assert.equal(params.get('slug'), 'atmosfera');
+  assert.equal(params.get('view'), 'horarios');
+  assert.deepEqual(resolveCalendarSelection(user(), 'tenant', params.get('view')), {
+    viewType: 'horarios',
+    selectedProfessionalId: null
   });
 });
 

@@ -14,6 +14,7 @@ import AppointmentModal from './AppointmentModal';
 import ImpersonationBanner from './ImpersonationBanner';
 import SaasBusinessesView from './SaasBusinessesView';
 import SaasMetricsView from './SaasMetricsView';
+import TeamView from './TeamView';
 
 const DashboardContent: React.FC = () => {
   const { viewType } = useCalendarNavigation();
@@ -42,22 +43,22 @@ const DashboardContent: React.FC = () => {
     );
   }
 
-  const showLeyenda = viewType !== 'horarios' && viewType !== 'saas-negocios' && viewType !== 'saas-metricas';
+  const showLeyenda = !['horarios', 'equipo', 'saas-negocios', 'saas-metricas'].includes(viewType);
 
   return (
     <div className={styles.appContainer}>
       {currentUser?.isImpersonating && (
         <ImpersonationBanner businessName={businessConfig.businessName} />
       )}
-      
+
       <div className={styles.app}>
         <Sidebar />
-        
+
         <main className={styles.main}>
           <Topbar />
-          
+
           <div className={styles.content}>
-            {/* Leyenda - Oculta en vista de horarios y vistas de administración SaaS */}
+            {/* Leyenda - Oculta en vistas que no representan el calendario */}
             {showLeyenda && (
               <div className={styles.leyenda}>
                 <div className={styles.leyendaItem}>
@@ -88,9 +89,10 @@ const DashboardContent: React.FC = () => {
               {viewType === 'semana' && <CalendarWeekView />}
               {viewType === 'dia' && <CalendarDayView />}
               {viewType === 'mes' && <CalendarMonthView />}
+              {viewType === 'equipo' && <TeamView />}
               {viewType === 'saas-negocios' && <SaasBusinessesView />}
               {viewType === 'saas-metricas' && <SaasMetricsView />}
-              
+
               {viewType === 'horarios' && (
                 <div className={styles.horariosView}>
                   <div className={styles.horariosHeader}>
@@ -101,7 +103,7 @@ const DashboardContent: React.FC = () => {
                   </div>
                   <div className={styles.profCards}>
                     {profs.map((p, idx) => (
-                      <ProfessionalScheduleCard 
+                      <ProfessionalScheduleCard
                         key={p._id}
                         professional={p}
                         idx={idx}

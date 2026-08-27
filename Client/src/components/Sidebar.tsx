@@ -3,7 +3,11 @@ import styles from './Sidebar.module.scss';
 import { useCalendarData } from '../context/CalendarDataContext';
 import { useCalendarNavigation } from '../context/CalendarNavigationContext';
 import { useSession } from '../context/SessionContext';
-import { shouldShowWorkspaceSwitcher } from '../context/sessionPolicy';
+import {
+  buildAdminViewUrl,
+  resolveCalendarSelection,
+  shouldShowWorkspaceSwitcher
+} from '../context/sessionPolicy';
 import {
   ActivityIcon,
   BarChartIcon,
@@ -40,9 +44,13 @@ const ALL_NAV_ITEMS: NavItemDef[] = [
 const SECTIONS: NavSection[] = ['Agenda', 'Clientes', 'Negocio', 'Sistema'];
 
 export const Sidebar: React.FC = () => {
-  const { viewType, setViewType } = useCalendarNavigation();
+  const {
+    viewType,
+    setViewType,
+    setSelectedProfessionalId
+  } = useCalendarNavigation();
   const { businessConfig } = useCalendarData();
-  const { currentUser, logoutUser, switchWorkspace } = useSession();
+  const { currentUser, scope, logoutUser, switchWorkspace } = useSession();
   const [showWorkspaceDropdown, setShowWorkspaceDropdown] = React.useState(false);
   const dropdownRef = React.useRef<HTMLDivElement>(null);
 
@@ -56,11 +64,29 @@ export const Sidebar: React.FC = () => {
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
+  const selectTenantView = (nextView: 'semana' | 'horarios' | 'equipo') => {
+    if (currentUser) {
+      const selection = resolveCalendarSelection(currentUser, scope, nextView);
+      setViewType(selection.viewType);
+      setSelectedProfessionalId(selection.selectedProfessionalId);
+    } else {
+      setViewType(nextView);
+    }
+
+    window.history.replaceState(
+      null,
+      '',
+      buildAdminViewUrl(window.location.search, nextView)
+    );
+  };
+
   const handleNavClick = (id: string) => {
     if (id === 'calendario') {
-      setViewType('semana'); // Default to week view when clicking calendar
+      selectTenantView('semana');
     } else if (id === 'horarios') {
-      setViewType('horarios');
+      selectTenantView('horarios');
+    } else if (id === 'equipo') {
+      selectTenantView('equipo');
     } else if (id === 'saas-negocios' || id === 'saas-metricas') {
       const params = new URLSearchParams(window.location.search);
       params.delete('slug');
@@ -73,31 +99,32 @@ export const Sidebar: React.FC = () => {
   const ln = currentUser?.lastName || "";
   const initials = `${fn[0] || ""}${ln[0] || ""}`.toUpperCase() || "US";
 
-  // Determine active item id
-  const activeItemId = viewType === 'horarios' 
-    ? 'horarios' 
-    : viewType === 'saas-negocios' 
-      ? 'saas-negocios' 
-      : viewType === 'saas-metricas' 
-        ? 'saas-metricas' 
-        : 'calendario';
+  const activeItemId = viewType === 'horarios'
+    ? 'horarios'
+    : viewType === 'equipo'
+      ? 'equipo'
+      : viewType === 'saas-negocios'
+        ? 'saas-negocios'
+        : viewType === 'saas-metricas'
+          ? 'saas-metricas'
+          : 'calendario';
 
   const sections = [...SECTIONS];
   const navItems = [...ALL_NAV_ITEMS];
 
   if (currentUser?.role === 'superadmin') {
     navItems.push(
-      { 
-        id: 'saas-negocios', 
-        label: 'Negocios SaaS', 
+      {
+        id: 'saas-negocios',
+        label: 'Negocios SaaS',
         icon: <BriefcaseIcon />,
-        section: 'SaaS Admin' 
+        section: 'SaaS Admin'
       },
-      { 
-        id: 'saas-metricas', 
-        label: 'Métricas SaaS', 
+      {
+        id: 'saas-metricas',
+        label: 'Métricas SaaS',
         icon: <ActivityIcon />,
-        section: 'SaaS Admin' 
+        section: 'SaaS Admin'
       }
     );
     sections.push('SaaS Admin');
@@ -108,22 +135,22 @@ export const Sidebar: React.FC = () => {
       <div className={styles.logo} ref={dropdownRef}>
         <span className={styles.logoText}>{businessConfig.businessName}</span>
         <small className={styles.logoSub}>Panel de gestión</small>
-        
+
         {shouldShowWorkspaceSwitcher(currentUser) && currentUser && (
           <div className={styles.workspaceSelectorContainer}>
-            <span 
-              className={styles.changeBusinessLink} 
+            <span
+              className={styles.changeBusinessLink}
               onClick={() => setShowWorkspaceDropdown(!showWorkspaceDropdown)}
             >
               Cambiar negocio ▾
             </span>
-            
+
             {showWorkspaceDropdown && (
               <div className={styles.workspaceDropdownMenu}>
                 {currentUser.memberships.map((m) => {
                   const isActive = m.businessId === businessConfig.business?._id;
                   return (
-                    <div 
+                    <div
                       key={m.businessId}
                       className={`${styles.workspaceDropdownItem} ${isActive ? styles.activeItem : ''}`}
                       onClick={() => {
@@ -133,7 +160,7 @@ export const Sidebar: React.FC = () => {
                     >
                       <span className={styles.workspaceName}>{m.businessName}</span>
                       <small className={styles.workspaceRole}>
-                        {m.role === 'admin' ? 'Admin' : 'Especialista'}
+                        {m.role === 'admin' ? 'Admin' : 'Miembro'}
                       </small>
                     </div>
                   );
@@ -147,7 +174,7 @@ export const Sidebar: React.FC = () => {
       <nav className={styles.nav}>
         {sections.map(sectionName => {
           const sectionItems = navItems.filter(
-            item => item.section === sectionName && 
+            item => item.section === sectionName &&
               (item.section === 'SaaS Admin' || businessConfig.enabledNavItems.includes(item.id))
           );
 
@@ -157,7 +184,7 @@ export const Sidebar: React.FC = () => {
             <React.Fragment key={sectionName}>
               <div className={styles.sectionLabel}>{sectionName}</div>
               {sectionItems.map(item => (
-                <div 
+                <div
                   key={item.id}
                   className={`${styles.navItem} ${activeItemId === item.id ? styles.active : ''}`}
                   onClick={() => handleNavClick(item.id)}
@@ -170,8 +197,8 @@ export const Sidebar: React.FC = () => {
           );
         })}
 
-        <div 
-          className={styles.navItem} 
+        <div
+          className={styles.navItem}
           onClick={logoutUser}
           style={{ marginTop: '1.5rem', opacity: 0.85 }}
         >
@@ -185,7 +212,7 @@ export const Sidebar: React.FC = () => {
         <div className={styles.userInfo}>
           <div className={styles.userName}>{fn} {ln}</div>
           <div className={styles.userRole}>
-            {currentUser?.role === 'admin' ? 'Administrador' : (currentUser?.role === 'superadmin' ? 'Superadmin' : 'Especialista')}
+            {currentUser?.role === 'admin' ? 'Administrador' : (currentUser?.role === 'superadmin' ? 'Superadmin' : 'Miembro')}
           </div>
         </div>
       </div>

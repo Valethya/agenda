@@ -1,6 +1,6 @@
 import type { SessionUser } from '../types';
 
-export type ViewType = 'semana' | 'dia' | 'mes' | 'horarios' | 'saas-negocios' | 'saas-metricas';
+export type ViewType = 'semana' | 'dia' | 'mes' | 'horarios' | 'equipo' | 'saas-negocios' | 'saas-metricas';
 export type SessionScope = 'loading' | 'global' | 'tenant' | 'redirecting';
 
 interface CalendarSelection {
@@ -8,8 +8,9 @@ interface CalendarSelection {
   selectedProfessionalId: string | null;
 }
 
-const TENANT_VIEWS: ViewType[] = ['semana', 'dia', 'mes', 'horarios'];
+const TENANT_VIEWS: ViewType[] = ['semana', 'dia', 'mes', 'horarios', 'equipo'];
 const SAAS_VIEWS: ViewType[] = ['saas-negocios', 'saas-metricas'];
+const CALENDAR_VIEWS: ViewType[] = ['semana', 'dia', 'mes'];
 
 export function resolveSessionScope(user: SessionUser, urlSlug: string | null): SessionScope {
   if (user.role === 'superadmin' && !urlSlug) return 'global';
@@ -23,6 +24,13 @@ export function shouldShowWorkspaceSwitcher(user: SessionUser | null): boolean {
     user.role !== 'superadmin' &&
     user.memberships.length > 1
   );
+}
+
+export function buildAdminViewUrl(currentSearch: string, view: ViewType): string {
+  const params = new URLSearchParams(currentSearch);
+  params.set('view', view);
+  const query = params.toString();
+  return query ? `/admin?${query}` : '/admin';
 }
 
 export function resolveCalendarSelection(
@@ -42,7 +50,11 @@ export function resolveCalendarSelection(
     : TENANT_VIEWS;
 
   if (urlView && allowedViews.includes(urlView as ViewType)) {
-    return { viewType: urlView as ViewType, selectedProfessionalId: null };
+    const viewType = urlView as ViewType;
+    const selectedProfessionalId = user.role === 'worker' && CALENDAR_VIEWS.includes(viewType)
+      ? user._id || user.id || null
+      : null;
+    return { viewType, selectedProfessionalId };
   }
 
   if (user.role === 'worker') {
