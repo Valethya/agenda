@@ -10,6 +10,7 @@ interface CalendarSelection {
 
 const TENANT_VIEWS: ViewType[] = ['semana', 'dia', 'mes', 'horarios', 'equipo'];
 const SAAS_VIEWS: ViewType[] = ['saas-negocios', 'saas-metricas'];
+const CALENDAR_VIEWS: ViewType[] = ['semana', 'dia', 'mes'];
 
 export function resolveSessionScope(user: SessionUser, urlSlug: string | null): SessionScope {
   if (user.role === 'superadmin' && !urlSlug) return 'global';
@@ -49,7 +50,11 @@ export function resolveCalendarSelection(
     : TENANT_VIEWS;
 
   if (urlView && allowedViews.includes(urlView as ViewType)) {
-    return { viewType: urlView as ViewType, selectedProfessionalId: null };
+    const viewType = urlView as ViewType;
+    const selectedProfessionalId = user.role === 'worker' && CALENDAR_VIEWS.includes(viewType)
+      ? user._id || user.id || null
+      : null;
+    return { viewType, selectedProfessionalId };
   }
 
   if (user.role === 'worker') {
