@@ -19,14 +19,30 @@ const keyEquals = (actual, expected) => isDeepStrictEqual(
   orderedEntries(expected),
 );
 
+const normalizeCollation = (value) => {
+  if (value === undefined || value === null) return null;
+  if (value.locale === "simple" && Object.keys(value).length === 1) return null;
+  return value;
+};
+
 const normalizedOptions = (index) => ({
   unique: index?.unique === true,
+  sparse: index?.sparse === true,
+  hidden: index?.hidden === true,
+  expireAfterSeconds: Number.isInteger(index?.expireAfterSeconds)
+    ? index.expireAfterSeconds
+    : null,
   partialFilterExpression: index?.partialFilterExpression ?? null,
+  collation: normalizeCollation(index?.collation),
 });
 
 const expectedOptions = () => ({
   unique: true,
+  sparse: false,
+  hidden: false,
+  expireAfterSeconds: null,
   partialFilterExpression: { status: "pending" },
+  collation: null,
 });
 
 const exactIndex = (index) => (
@@ -64,7 +80,33 @@ const assertNoIncompatibleIndex = (indexes) => {
 const assertPendingDataCompatible = async (db) => {
   if (!await collectionExists(db)) return;
 
-  const duplicate = await db.collection(PENDING_ONBOARDING_INDEX_SPEC.collection).aggregate([
+  const collection = db.collection(PENDING_ONBOARDING_INDEX_SPEC.collection);
+  const malformed = await collection.findOne({
+    status: "pending",
+    $or: [
+      { business: { $exists: false } },
+      { email: { $exists: false } },
+      { email: { $not: { $type: "string" } } },
+    ],
+  });
+  if (malformed) {
+    throw new Error("Storage C1 bloqueado: existe onboarding pending sin Business/email canónico");
+  }
+
+  const nonCanonical = await collection.findOne({
+    status: "pending",
+    $expr: {
+      $ne: [
+        "$email",
+        { $toLower: { $trim: { input: "$email" } } },
+      ],
+    },
+  });
+  if (nonCanonical) {
+    throw new Error("Storage C1 bloqueado: existe email pending sin normalización canónica");
+  }
+
+  const duplicate = await collection.aggregate([
     { $match: { status: "pending" } },
     {
       $group: {
