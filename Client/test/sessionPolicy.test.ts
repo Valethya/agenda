@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { SessionUser } from '../src/types/index.ts';
 import {
+  buildAdminViewUrl,
   resolveCalendarSelection,
   resolveSessionScope,
   shouldShowWorkspaceSwitcher
@@ -72,6 +73,31 @@ test('Team view is routable in tenant scope without using User.role as Team auth
   });
   assert.deepEqual(resolveCalendarSelection(user({ role: 'worker', id: 'worker-1' }), 'tenant', 'equipo'), {
     viewType: 'equipo',
+    selectedProfessionalId: null
+  });
+});
+
+test('leaving Team for Calendar synchronizes view while preserving tenant and unrelated query params', () => {
+  const url = buildAdminViewUrl('?slug=atmosfera&view=equipo&foo=bar', 'semana');
+  const params = new URL(url, 'https://agenda.test').searchParams;
+
+  assert.equal(params.get('slug'), 'atmosfera');
+  assert.equal(params.get('foo'), 'bar');
+  assert.equal(params.get('view'), 'semana');
+  assert.deepEqual(resolveCalendarSelection(user(), 'tenant', params.get('view')), {
+    viewType: 'semana',
+    selectedProfessionalId: null
+  });
+});
+
+test('leaving Team for Horarios synchronizes view and refresh keeps Horarios', () => {
+  const url = buildAdminViewUrl('?slug=atmosfera&view=equipo', 'horarios');
+  const params = new URL(url, 'https://agenda.test').searchParams;
+
+  assert.equal(params.get('slug'), 'atmosfera');
+  assert.equal(params.get('view'), 'horarios');
+  assert.deepEqual(resolveCalendarSelection(user(), 'tenant', params.get('view')), {
+    viewType: 'horarios',
     selectedProfessionalId: null
   });
 });
