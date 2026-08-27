@@ -116,6 +116,21 @@ export interface BusinessConfig {
 }
 
 export type UserRole = 'admin' | 'worker' | 'superadmin' | 'user';
+export type TeamMembershipRole = 'admin' | 'worker';
+
+export interface TeamMembership {
+  membershipId: string;
+  userId: string;
+  name: string | null;
+  role: TeamMembershipRole;
+  isBookable: boolean;
+  isActive: boolean;
+  isOwner: boolean;
+}
+
+export type TeamMembershipPatch = Partial<
+  Pick<TeamMembership, 'role' | 'isBookable' | 'isActive'>
+>;
 
 export interface BusinessMembership {
   id: string;

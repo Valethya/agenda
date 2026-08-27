@@ -65,6 +65,17 @@ test('worker defaults to week view and its own professional filter', () => {
   });
 });
 
+test('Team view is routable in tenant scope without using User.role as Team authority', () => {
+  assert.deepEqual(resolveCalendarSelection(user({ role: 'admin' }), 'tenant', 'equipo'), {
+    viewType: 'equipo',
+    selectedProfessionalId: null
+  });
+  assert.deepEqual(resolveCalendarSelection(user({ role: 'worker', id: 'worker-1' }), 'tenant', 'equipo'), {
+    viewType: 'equipo',
+    selectedProfessionalId: null
+  });
+});
+
 test('regular tenant cannot select a SaaS-only view through the URL', () => {
   assert.deepEqual(resolveCalendarSelection(user(), 'tenant', 'saas-negocios'), {
     viewType: 'dia',
