@@ -3,7 +3,11 @@ import styles from './Sidebar.module.scss';
 import { useCalendarData } from '../context/CalendarDataContext';
 import { useCalendarNavigation } from '../context/CalendarNavigationContext';
 import { useSession } from '../context/SessionContext';
-import { buildAdminViewUrl, shouldShowWorkspaceSwitcher } from '../context/sessionPolicy';
+import {
+  buildAdminViewUrl,
+  resolveCalendarSelection,
+  shouldShowWorkspaceSwitcher
+} from '../context/sessionPolicy';
 import {
   ActivityIcon,
   BarChartIcon,
@@ -40,9 +44,13 @@ const ALL_NAV_ITEMS: NavItemDef[] = [
 const SECTIONS: NavSection[] = ['Agenda', 'Clientes', 'Negocio', 'Sistema'];
 
 export const Sidebar: React.FC = () => {
-  const { viewType, setViewType } = useCalendarNavigation();
+  const {
+    viewType,
+    setViewType,
+    setSelectedProfessionalId
+  } = useCalendarNavigation();
   const { businessConfig } = useCalendarData();
-  const { currentUser, logoutUser, switchWorkspace } = useSession();
+  const { currentUser, scope, logoutUser, switchWorkspace } = useSession();
   const [showWorkspaceDropdown, setShowWorkspaceDropdown] = React.useState(false);
   const dropdownRef = React.useRef<HTMLDivElement>(null);
 
@@ -57,7 +65,14 @@ export const Sidebar: React.FC = () => {
   }, []);
 
   const selectTenantView = (nextView: 'semana' | 'horarios' | 'equipo') => {
-    setViewType(nextView);
+    if (currentUser) {
+      const selection = resolveCalendarSelection(currentUser, scope, nextView);
+      setViewType(selection.viewType);
+      setSelectedProfessionalId(selection.selectedProfessionalId);
+    } else {
+      setViewType(nextView);
+    }
+
     window.history.replaceState(
       null,
       '',
