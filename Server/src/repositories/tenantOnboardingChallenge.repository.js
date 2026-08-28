@@ -97,6 +97,26 @@ export const consumeForBinding = async ({
   { new: true, session },
 );
 
+/**
+ * C3 reads only the exact challenge persisted in accountBinding. It must already
+ * be the C2 terminal channel/account proof and is never consumed a second time.
+ */
+export const findConsumedForMembership = async ({
+  challengeId,
+  pendingOnboardingId,
+  businessId,
+  session,
+}) => TenantOnboardingChallenge.findOne({
+  _id: challengeId,
+  pendingOnboarding: pendingOnboardingId,
+  business: businessId,
+  status: "consumed",
+  deliveredAt: { $ne: null },
+  consumedAt: { $ne: null },
+  revokedAt: null,
+  boundUser: { $ne: null },
+}).session(session || null);
+
 export const revokePending = async ({ challengeId, now, session }) => (
   TenantOnboardingChallenge.findOneAndUpdate(
     { _id: challengeId, status: "pending" },

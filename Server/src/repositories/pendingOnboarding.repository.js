@@ -173,3 +173,58 @@ export const revokePendingForDeliveryFailure = async ({
   { $set: { status: "revoked" } },
   { new: true, session },
 );
+
+/**
+ * C3 writes the exact bound grant before any Membership insert. This is a
+ * transaction-local reservation only: no new lifecycle state is committed.
+ * Concurrent consumes must contend on the same PendingOnboarding document.
+ */
+export const reserveBoundForMembershipConsume = async ({
+  onboardingId,
+  now,
+  session,
+}) => PendingOnboarding.findOneAndUpdate(
+  {
+    _id: requireStrictObjectId(onboardingId, "onboardingId"),
+    status: "pending",
+    expiresAt: { $gt: now },
+    channel: PENDING_ONBOARDING_CHANNEL,
+    purpose: PENDING_ONBOARDING_PURPOSE,
+    role: CANONICAL_INITIAL_ROLE,
+    isBookable: CANONICAL_INITIAL_BOOKABILITY,
+    "accountBinding.user": { $type: "objectId" },
+    "accountBinding.challenge": { $type: "objectId" },
+    "accountBinding.boundAt": { $type: "date" },
+  },
+  { $set: { updatedAt: now } },
+  { new: true, session },
+);
+
+/**
+ * Terminal C3 write. Identity and privilege are bound to the persisted grant;
+ * only status changes and accountBinding remains available for audit/history.
+ */
+export const consumeReservedForMembership = async ({
+  onboardingId,
+  businessId,
+  userId,
+  challengeId,
+  now,
+  session,
+}) => PendingOnboarding.findOneAndUpdate(
+  {
+    _id: requireStrictObjectId(onboardingId, "onboardingId"),
+    business: requireStrictObjectId(businessId, "businessId"),
+    status: "pending",
+    expiresAt: { $gt: now },
+    channel: PENDING_ONBOARDING_CHANNEL,
+    purpose: PENDING_ONBOARDING_PURPOSE,
+    role: CANONICAL_INITIAL_ROLE,
+    isBookable: CANONICAL_INITIAL_BOOKABILITY,
+    "accountBinding.user": requireStrictObjectId(userId, "userId"),
+    "accountBinding.challenge": requireStrictObjectId(challengeId, "challengeId"),
+    "accountBinding.boundAt": { $type: "date" },
+  },
+  { $set: { status: "consumed" } },
+  { new: true, session },
+);
