@@ -1,0 +1,315 @@
+.servicesView {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+  width: 100%;
+}
+
+.header,
+.editorHeader,
+.cardHeader,
+.cardActions,
+.formActions,
+.summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.header h1,
+.editor h2,
+.serviceCard h2,
+.emptyState h2,
+.statePanel h2 {
+  margin: 0;
+}
+
+.eyebrow {
+  margin: 0 0 .35rem;
+  color: var(--texto-suave);
+  font-size: .76rem;
+  font-weight: 700;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+
+.description,
+.cardDescription,
+.professionals p,
+.empty,
+.emptyState p,
+.statePanel p {
+  color: var(--texto-suave);
+}
+
+.description {
+  max-width: 48rem;
+  margin: .45rem 0 0;
+}
+
+.primaryButton,
+.secondaryButton,
+.dangerButton {
+  min-height: 2.6rem;
+  border-radius: .75rem;
+  padding: .65rem 1rem;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.primaryButton {
+  border: 0;
+  background: var(--niebla);
+  color: var(--texto);
+}
+
+.secondaryButton {
+  border: 1px solid rgba(127, 127, 127, .28);
+  background: transparent;
+  color: inherit;
+}
+
+.dangerButton {
+  border: 1px solid rgba(180, 58, 58, .35);
+  background: transparent;
+  color: #a63333;
+}
+
+.primaryButton:disabled,
+.secondaryButton:disabled,
+.dangerButton:disabled,
+.field input:disabled,
+.field textarea:disabled {
+  cursor: not-allowed;
+  opacity: .55;
+}
+
+.feedback {
+  min-height: 1.5rem;
+}
+
+.success,
+.error {
+  margin: 0;
+  border-radius: .75rem;
+  padding: .7rem .9rem;
+}
+
+.success {
+  background: rgba(42, 130, 76, .1);
+  color: #267344;
+}
+
+.error {
+  background: rgba(180, 58, 58, .1);
+  color: #a63333;
+}
+
+.editor,
+.serviceCard,
+.statePanel,
+.emptyState {
+  border: 1px solid rgba(127, 127, 127, .2);
+  border-radius: 1rem;
+  background: var(--fondo, #fff);
+}
+
+.editor {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+  padding: 1.25rem;
+}
+
+.formGrid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1rem;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: .45rem;
+  font-weight: 700;
+}
+
+.fieldWide {
+  grid-column: 1 / -1;
+}
+
+.field input,
+.field textarea {
+  width: 100%;
+  box-sizing: border-box;
+  border: 1px solid rgba(127, 127, 127, .3);
+  border-radius: .7rem;
+  background: transparent;
+  color: inherit;
+  padding: .7rem .8rem;
+  font: inherit;
+  font-weight: 400;
+}
+
+.field textarea {
+  resize: vertical;
+}
+
+.professionals {
+  margin: 0;
+  border: 1px solid rgba(127, 127, 127, .2);
+  border-radius: .85rem;
+  padding: 1rem;
+}
+
+.professionals legend {
+  padding: 0 .35rem;
+  font-weight: 800;
+}
+
+.professionals p {
+  margin: .25rem 0 .8rem;
+  font-size: .9rem;
+}
+
+.checkboxGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: .6rem;
+}
+
+.checkOption {
+  display: flex;
+  align-items: center;
+  gap: .6rem;
+  border: 1px solid rgba(127, 127, 127, .18);
+  border-radius: .7rem;
+  padding: .7rem;
+  cursor: pointer;
+}
+
+.summary {
+  justify-content: flex-start;
+  color: var(--texto-suave);
+  font-size: .9rem;
+}
+
+.serviceGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem;
+}
+
+.serviceCard {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  padding: 1.1rem;
+}
+
+.cardHeader {
+  align-items: flex-start;
+}
+
+.cardHeader strong {
+  white-space: nowrap;
+}
+
+.activeBadge,
+.inactiveBadge {
+  display: inline-block;
+  margin-top: .4rem;
+  border-radius: 999px;
+  padding: .18rem .55rem;
+  font-size: .75rem;
+  font-weight: 800;
+}
+
+.activeBadge {
+  background: rgba(42, 130, 76, .12);
+  color: #267344;
+}
+
+.inactiveBadge {
+  background: rgba(127, 127, 127, .14);
+  color: var(--texto-suave);
+}
+
+.cardDescription {
+  margin: 0;
+}
+
+.meta {
+  display: grid;
+  gap: .65rem;
+  margin: 0;
+}
+
+.meta div {
+  display: grid;
+  grid-template-columns: 7rem 1fr;
+  gap: .75rem;
+}
+
+.meta dt {
+  color: var(--texto-suave);
+  font-size: .84rem;
+}
+
+.meta dd {
+  margin: 0;
+}
+
+.cardActions {
+  justify-content: flex-start;
+  margin-top: auto;
+}
+
+.statePanel,
+.emptyState {
+  padding: 2rem;
+  text-align: center;
+}
+
+.emptyState {
+  grid-column: 1 / -1;
+}
+
+.spinner {
+  width: 1.5rem;
+  height: 1.5rem;
+  margin: 0 auto 1rem;
+  border: 2px solid rgba(127, 127, 127, .25);
+  border-top-color: currentColor;
+  border-radius: 50%;
+  animation: spin .8s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+@media (max-width: 820px) {
+  .header,
+  .editorHeader,
+  .cardHeader {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .formGrid,
+  .serviceGrid,
+  .checkboxGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .fieldWide {
+    grid-column: auto;
+  }
+
+  .cardHeader strong {
+    white-space: normal;
+  }
+}
