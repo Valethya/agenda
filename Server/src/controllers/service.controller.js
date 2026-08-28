@@ -25,25 +25,29 @@ export const getService = async (req, res, next) => {
 
 export const createService = async (req, res, next) => {
   try {
-    const newService = await serviceService.createService(req.body, req.businessId);
+    const newService = await serviceService.createService(req.serviceCreateInput, req.businessId);
     res.status(201).json({ status: "success", message: "Servicio creado exitosamente", payload: newService });
   } catch (error) { next(error); }
 };
 
 export const updateService = async (req, res, next) => {
   try {
-    const updatedService = await serviceService.updateService(req.params.id, req.body, req.businessId);
+    const updatedService = await serviceService.updateService(
+      req.params.id,
+      req.serviceUpdateInput,
+      req.businessId,
+    );
     res.status(200).json({ status: "success", message: "Servicio actualizado exitosamente", payload: updatedService });
   } catch (error) { next(error); }
 };
 
 export const deleteService = async (req, res, next) => {
   try {
-    const hardDelete = req.query.hard === "true";
-    await serviceService.deleteService(req.params.id, req.businessId, !hardDelete);
+    const updatedService = await serviceService.deleteService(req.params.id, req.businessId);
     res.status(200).json({
       status: "success",
-      message: hardDelete ? "Servicio eliminado físicamente de la base de datos" : "Servicio desactivado correctamente (Soft Delete)",
+      message: "Servicio desactivado correctamente",
+      payload: updatedService,
     });
   } catch (error) { next(error); }
 };
