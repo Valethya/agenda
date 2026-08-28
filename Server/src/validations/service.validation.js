@@ -1,5 +1,27 @@
 import { z } from "zod";
 
+const workerIdSchema = z.string().regex(/^[0-9a-fA-F]{24}$/, "ID de trabajador inválido");
+const workersSchema = z
+  .array(workerIdSchema)
+  .refine(
+    (workerIds) => new Set(workerIds.map((workerId) => workerId.toLowerCase())).size === workerIds.length,
+    "La lista de profesionales no puede contener duplicados",
+  );
+
+const assertDepositDoesNotExceedPrice = (body, ctx) => {
+  if (
+    body.price !== undefined
+    && body.depositAmount !== undefined
+    && body.depositAmount > body.price
+  ) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["depositAmount"],
+      message: "El monto de abono no puede superar el precio del servicio",
+    });
+  }
+};
+
 export const createServiceSchema = z.object({
   body: z.object({
     name: z
@@ -20,11 +42,9 @@ export const createServiceSchema = z.object({
     depositAmount: z
       .number()
       .min(0, "El monto de abono no puede ser negativo")
-      .optional(),
-    workers: z
-      .array(z.string().regex(/^[0-9a-fA-F]{24}$/, "ID de trabajador inválido"))
-      .optional(),
-  }),
+      .default(0),
+    workers: workersSchema.default([]),
+  }).strict().superRefine(assertDepositDoesNotExceedPrice),
 });
 
 export const updateServiceSchema = z.object({
@@ -51,9 +71,7 @@ export const updateServiceSchema = z.object({
       .number()
       .min(0, "El monto de abono no puede ser negativo")
       .optional(),
-    workers: z
-      .array(z.string().regex(/^[0-9a-fA-F]{24}$/, "ID de trabajador inválido"))
-      .optional(),
+    workers: workersSchema.optional(),
     isActive: z.boolean().optional(),
-  }).strict(),
+  }).strict().superRefine(assertDepositDoesNotExceedPrice),
 });
