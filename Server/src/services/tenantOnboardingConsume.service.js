@@ -67,13 +67,30 @@ const fenceOperationalBusiness = async ({ businessId, session }) => Business.fin
   { new: true, session },
 ).select("_id isActive teamAdminRevision");
 
-const assertCurrentIssuerAuthority = async ({ pending, session }) => {
-  const issuerExists = await User.exists({
-    _id: pending.issuer,
-    isActive: true,
-  }).session(session);
+/**
+ * Serialize C3 against global issuer deactivation on the same physical User
+ * document. `$currentDate` is an unambiguous write; it does not rely on a no-op
+ * `$set: { isActive: true }`. Automatic timestamps are disabled for this update
+ * so the write marker is exactly the explicit existing `updatedAt` field.
+ *
+ * If a concurrent transaction writes `isActive=false`, one side must win the
+ * document write. A transient write conflict is left to `withTransaction()` so
+ * its callback retries and all C3 preconditions are evaluated from persistence
+ * again. No new User lifecycle/revision field is introduced.
+ */
+const fenceActiveIssuerUser = async ({ issuerId, session }) => User.findOneAndUpdate(
+  { _id: issuerId, isActive: true },
+  { $currentDate: { updatedAt: true } },
+  { new: true, session, timestamps: false },
+).select("_id isActive updatedAt");
 
-  if (!issuerExists) throw consumeFailed();
+const assertCurrentIssuerAuthority = async ({ pending, session }) => {
+  const issuer = await fenceActiveIssuerUser({
+    issuerId: pending.issuer,
+    session,
+  });
+
+  if (!issuer) throw consumeFailed();
 
   const issuerAdminMembership = await Membership.exists({
     user: pending.issuer,
@@ -95,10 +112,13 @@ const assertCurrentIssuerAuthority = async ({ pending, session }) => {
 export const consumeTenantOnboarding = async ({ onboardingId }) => {
   const onboarding = strictObjectId(onboardingId);
   const session = await mongoose.startSession();
-  let membership = null;
+  let membershipId = null;
 
   try {
     await session.withTransaction(async () => {
+      // `withTransaction()` may run this callback more than once after a
+      // transient conflict. Never retain an id produced by an aborted attempt.
+      membershipId = null;
       const startedAt = new Date();
 
       // A write (without committing a new lifecycle state) is deliberately the
@@ -124,9 +144,9 @@ export const consumeTenantOnboarding = async ({ onboardingId }) => {
         throw consumeFailed();
       }
 
-      // Team/B mutations write this same Business fencing document. Therefore a
-      // concurrent issuer de-authorization cannot be hidden by snapshot isolation:
-      // one transaction wins and the other retries against current persistence.
+      // Team/B mutations write this same Business fencing document. This fence
+      // protects tenant Membership authority; issuer User activity is fenced
+      // separately on the User document below.
       const business = await fenceOperationalBusiness({
         businessId: pending.business,
         session,
@@ -164,7 +184,7 @@ export const consumeTenantOnboarding = async ({ onboardingId }) => {
         isActive: true,
         isBookable: CANONICAL_INITIAL_BOOKABILITY,
       }], { session });
-      membership = created[0];
+      membershipId = created[0]._id;
 
       // Recheck logical expiry at the terminal write. Any failure here aborts the
       // transaction and rolls the Membership creation back as well.
@@ -179,18 +199,18 @@ export const consumeTenantOnboarding = async ({ onboardingId }) => {
       if (!terminalized) throw consumeFailed();
     });
   } catch (error) {
-    membership = null;
+    membershipId = null;
     if (error?.code === TENANT_ONBOARDING_CONSUME_ERROR_CODE) throw error;
     throw consumeFailed();
   } finally {
     await session.endSession();
   }
 
-  if (!membership) throw consumeFailed();
+  if (!membershipId) throw consumeFailed();
 
   return {
     completed: true,
     onboardingId: onboarding,
-    membershipId: membership._id,
+    membershipId,
   };
 };
