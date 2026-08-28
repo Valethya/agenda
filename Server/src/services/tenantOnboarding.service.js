@@ -7,6 +7,9 @@ import {
   PENDING_ONBOARDING_PURPOSE,
   normalizePendingOnboardingEmail,
 } from "../db/models/pendingOnboarding.model.js";
+import {
+  TENANT_ONBOARDING_ACCOUNT_PROOF_MAX_ATTEMPTS,
+} from "../db/models/tenantOnboardingChallenge.model.js";
 import * as pendingOnboardingRepository from "../repositories/pendingOnboarding.repository.js";
 import * as challengeRepository from "../repositories/tenantOnboardingChallenge.repository.js";
 import { sendTenantOnboardingChallengeEmail } from "./email/emailService.js";
@@ -20,6 +23,7 @@ const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/u;
 const CHALLENGE_SECRET_BYTES = 32;
 
 export const TENANT_ONBOARDING_TTL_MS = 15 * 60 * 1000;
+export { TENANT_ONBOARDING_ACCOUNT_PROOF_MAX_ATTEMPTS };
 
 export const TENANT_ONBOARDING_ERROR_CODES = Object.freeze({
   INVALID_INPUT: "TENANT_ONBOARDING_INVALID_INPUT",
@@ -131,6 +135,40 @@ const revokeUndeliveredGrant = async ({ pending, challenge }) => {
   }
 };
 
+const confirmDeliveredChallenge = async ({ pending, challenge }) => (
+  challengeRepository.confirmDelivered({
+    challengeId: challenge._id,
+    pendingOnboardingId: pending._id,
+    businessId: pending.business,
+    now: new Date(),
+  })
+);
+
+const retireExpiredGrantForReissue = async ({
+  businessId,
+  destination,
+  now,
+  session,
+}) => {
+  const expired = await pendingOnboardingRepository.revokeExpiredPendingForBusinessEmail({
+    businessId,
+    email: destination,
+    now,
+    session,
+  });
+  if (!expired) return null;
+
+  // A consumed challenge is historical evidence and is not rewritten. Any
+  // still-pending challenge, delivered or not, becomes unusable with the grant.
+  await challengeRepository.revokePendingForOnboarding({
+    pendingOnboardingId: expired._id,
+    businessId: expired.business,
+    now,
+    session,
+  });
+  return expired;
+};
+
 /**
  * Admin-only orchestration. The caller identity and Business come from the
  * authenticated tenant boundary; target-account existence is never consulted at
@@ -141,6 +179,8 @@ export const issueTenantOnboarding = async ({
   issuerUserId,
   email,
   deliver = sendTenantOnboardingChallengeEmail,
+  activateDelivery = confirmDeliveredChallenge,
+  cleanupUndelivered = revokeUndeliveredGrant,
 }) => {
   const business = strictObjectId(businessId);
   const issuer = strictObjectId(issuerUserId);
@@ -153,6 +193,14 @@ export const issueTenantOnboarding = async ({
 
   try {
     await session.withTransaction(async () => {
+      const now = new Date();
+      await retireExpiredGrantForReissue({
+        businessId: business,
+        destination,
+        now,
+        session,
+      });
+
       pending = await pendingOnboardingRepository.createPendingForBusiness(
         business,
         issuer,
@@ -176,6 +224,8 @@ export const issueTenantOnboarding = async ({
         secretHash,
         status: "pending",
         expiresAt: pending.expiresAt,
+        deliveredAt: null,
+        accountProofAttempts: 0,
       }, { session });
     });
   } catch (error) {
@@ -200,11 +250,27 @@ export const issueTenantOnboarding = async ({
 
   if (!delivered) {
     try {
-      await revokeUndeliveredGrant({ pending, challenge });
+      await cleanupUndelivered({ pending, challenge });
     } catch {
-      // The secret was not delivered. Even if cleanup itself fails, no secret is
-      // exposed through the HTTP response or logs; startup/storage gates remain
-      // the operational recovery boundary.
+      // Cleanup is best-effort only. The security barrier is deliveredAt=null:
+      // an unconfirmed bearer is never selected by the binding path.
+    }
+    throw deliveryFailed();
+  }
+
+  let activated = null;
+  try {
+    activated = await activateDelivery({ pending, challenge });
+  } catch {
+    activated = null;
+  }
+
+  if (!activated) {
+    try {
+      await cleanupUndelivered({ pending, challenge });
+    } catch {
+      // Even without cleanup, deliveredAt was not confirmed by this activation
+      // path, so the challenge remains outside the bindable query contract.
     }
     throw deliveryFailed();
   }
@@ -247,6 +313,7 @@ const assertChallengeMatchesGrant = ({ pending, challenge, rawSecret }) => {
     || challenge.channel !== pending.channel
     || challenge.destination !== pending.email
     || challenge.purpose !== pending.purpose
+    || !(challenge.deliveredAt instanceof Date)
     || challenge.expiresAt.getTime() > pending.expiresAt.getTime()
   ) throw bindingFailed();
 
@@ -304,10 +371,37 @@ const resolveControlledUser = async ({ pending, account, session }) => {
   return created[0];
 };
 
+const reserveExactAccountProofAttempt = async ({ onboarding, rawSecret }) => {
+  const now = new Date();
+  const pending = await pendingOnboardingRepository.findContinuableForBinding({
+    onboardingId: onboarding,
+    now,
+  });
+  if (!pending) throw bindingFailed();
+
+  const challenge = await challengeRepository.findPendingForBinding({
+    pendingOnboardingId: pending._id,
+    businessId: pending.business,
+    now,
+  });
+  // Wrong bearer never consumes the password/account-proof budget.
+  assertChallengeMatchesGrant({ pending, challenge, rawSecret });
+
+  const reserved = await challengeRepository.reserveAccountProofAttempt({
+    challengeId: challenge._id,
+    pendingOnboardingId: pending._id,
+    businessId: pending.business,
+    now,
+  });
+  if (!reserved) throw bindingFailed();
+  return challenge._id;
+};
+
 /**
- * Claimant boundary. Channel proof + exact-account proof/new-account creation +
- * challenge consume + persisted binding commit atomically. PendingOnboarding
- * remains status=pending; Membership creation belongs exclusively to C3.
+ * Claimant boundary. A valid delivered bearer first reserves one persistent
+ * exact-account proof attempt outside the transaction. Then exact-account proof/
+ * new-account creation + challenge consume + persisted binding commit atomically.
+ * PendingOnboarding remains status=pending; Membership creation belongs to C3.
  */
 export const bindTenantOnboardingAccount = async ({
   onboardingId,
@@ -316,6 +410,14 @@ export const bindTenantOnboardingAccount = async ({
 }) => {
   const onboarding = strictObjectId(onboardingId);
   const rawSecret = challengeSecret(secret);
+
+  // This write deliberately precedes the binding transaction so an incorrect
+  // password cannot roll its attempt back. Atomic $inc + $lt caps concurrency.
+  const reservedChallengeId = await reserveExactAccountProofAttempt({
+    onboarding,
+    rawSecret,
+  });
+
   const session = await mongoose.startSession();
   let bound = false;
 
@@ -335,6 +437,9 @@ export const bindTenantOnboardingAccount = async ({
         now,
         session,
       });
+      if (!challenge || challenge._id.toString() !== reservedChallengeId.toString()) {
+        throw bindingFailed();
+      }
       assertChallengeMatchesGrant({ pending, challenge, rawSecret });
 
       const controlledUser = await resolveControlledUser({ pending, account, session });
