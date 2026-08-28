@@ -76,7 +76,7 @@ test("C1 creation keeps lifecycle inert; C2 operations may specialize separate r
   const model = await readServer("src/db/models/pendingOnboarding.model.js");
   const repository = await readServer("src/repositories/pendingOnboarding.repository.js");
   const createStart = repository.indexOf("export const createPendingForBusiness");
-  const createEnd = repository.indexOf("export const findContinuableForBinding");
+  const createEnd = repository.indexOf("export const revokeExpiredPendingForBusinessEmail");
   const c1Creation = repository.slice(createStart, createEnd);
 
   assert.ok(createStart >= 0 && createEnd > createStart);
