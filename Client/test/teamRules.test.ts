@@ -245,7 +245,7 @@ test('Team UI consumes canonical endpoints and preserves the corrected D1 surfac
   assert.match(teamViewSource, /Su historial no se elimina/);
   assert.match(teamViewSource, /No pudimos cargar Equipo/);
   assert.match(teamViewSource, /Reintentar/);
-  assert.doesNotMatch(teamViewSource, /Añadir persona|Crear persona|Eliminar persona|Reactivar/);
+  assert.doesNotMatch(teamViewSource, /Crear persona|Eliminar persona|Reactivar/);
 
   assert.match(sessionSource, /refreshSession: \(\) => Promise<SessionUser \| null>/);
   assert.match(sessionSource, /err\.status === 401/);

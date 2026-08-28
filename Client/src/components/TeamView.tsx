@@ -3,7 +3,7 @@ import styles from './TeamView.module.scss';
 import { useCalendarNavigation } from '../context/CalendarNavigationContext';
 import { useSession } from '../context/SessionContext';
 import { buildAdminViewUrl } from '../context/sessionPolicy';
-import { getTeam, isApiError, updateTeamMembership } from '../services/api';
+import { apiFetch, getTeam, isApiError, updateTeamMembership } from '../services/api';
 import type { TeamMembership, TeamMembershipPatch, TeamMembershipRole } from '../types';
 import {
   TEAM_ROLE_LABELS,
@@ -22,6 +22,13 @@ import {
   shouldRefetchTeamAfterMutationError,
   type TeamAccessFailure
 } from '../features/team/teamRules';
+import {
+  TEAM_ADD_PERSON_LABEL,
+  TEAM_ONBOARDING_ENDPOINT,
+  TEAM_ONBOARDING_ERROR_MESSAGE,
+  TEAM_ONBOARDING_SUCCESS_MESSAGE,
+  buildTeamOnboardingIssueBody
+} from '../features/team/teamOnboardingRules';
 
 type Feedback = {
   tone: 'success' | 'error';
@@ -58,10 +65,16 @@ export const TeamView: React.FC = () => {
   const [isReconciling, setIsReconciling] = React.useState(false);
   const [reconciliationRequired, setReconciliationRequired] = React.useState(false);
   const [accessState, setAccessState] = React.useState<TeamAccessState>('active');
+  const [isAddingPerson, setIsAddingPerson] = React.useState(false);
+  const [onboardingEmail, setOnboardingEmail] = React.useState('');
+  const [isOnboardingPending, setIsOnboardingPending] = React.useState(false);
+  const [onboardingFeedback, setOnboardingFeedback] = React.useState<Feedback | null>(null);
   const pendingRef = React.useRef<Set<string>>(new Set());
   const accessStateRef = React.useRef<TeamAccessState>('active');
   const syncRef = React.useRef(new TeamSyncCoordinator());
   const reconciliationPromiseRef = React.useRef<Promise<boolean> | null>(null);
+  const onboardingPendingRef = React.useRef(false);
+  const emailInputRef = React.useRef<HTMLInputElement>(null);
 
   const abandonTeamSurface = React.useCallback((failure: TeamAccessFailure) => {
     if (accessStateRef.current !== 'active') return;
@@ -80,6 +93,8 @@ export const TeamView: React.FC = () => {
     setConfirmingMembershipId(null);
     setLoadError(message);
     setFeedbackByMembership({});
+    setIsAddingPerson(false);
+    setOnboardingFeedback(null);
 
     setViewType('semana');
     window.history.replaceState(
@@ -190,6 +205,12 @@ export const TeamView: React.FC = () => {
     void loadCanonicalTeam();
   }, [loadCanonicalTeam]);
 
+  React.useEffect(() => {
+    if (isAddingPerson) {
+      emailInputRef.current?.focus();
+    }
+  }, [isAddingPerson]);
+
   const setMembershipPending = (membershipId: string, isPending: boolean) => {
     if (isPending) {
       pendingRef.current.add(membershipId);
@@ -268,6 +289,58 @@ export const TeamView: React.FC = () => {
     void mutateMembership(membership, bookabilityPatch(isBookable));
   };
 
+  const openAddPersonForm = () => {
+    setOnboardingEmail('');
+    setOnboardingFeedback(null);
+    setIsAddingPerson(true);
+  };
+
+  const closeAddPersonForm = () => {
+    if (onboardingPendingRef.current) return;
+    setIsAddingPerson(false);
+    setOnboardingEmail('');
+    setOnboardingFeedback(null);
+  };
+
+  const handleOnboardingSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+
+    if (accessStateRef.current !== 'active' || onboardingPendingRef.current) return;
+
+    const email = onboardingEmail.trim();
+    if (!email) return;
+
+    onboardingPendingRef.current = true;
+    setIsOnboardingPending(true);
+    setOnboardingFeedback(null);
+
+    try {
+      await apiFetch(TEAM_ONBOARDING_ENDPOINT, {
+        method: 'POST',
+        body: buildTeamOnboardingIssueBody(email)
+      });
+
+      if (accessStateRef.current !== 'active') return;
+
+      setOnboardingEmail('');
+      setOnboardingFeedback({
+        tone: 'success',
+        message: TEAM_ONBOARDING_SUCCESS_MESSAGE
+      });
+    } catch (error) {
+      const normalizedError = normalizeTeamError(error);
+      if (!handleTeamAccessError(normalizedError)) {
+        setOnboardingFeedback({
+          tone: 'error',
+          message: TEAM_ONBOARDING_ERROR_MESSAGE
+        });
+      }
+    } finally {
+      onboardingPendingRef.current = false;
+      setIsOnboardingPending(false);
+    }
+  };
+
   if (accessState !== 'active') {
     const authenticationLost = accessState === 'authentication-lost';
     return (
@@ -308,12 +381,95 @@ export const TeamView: React.FC = () => {
           <p className={styles.description}>
             El rol define permisos administrativos. “Miembro” significa acceso no administrativo; “Presta servicios” define, por separado, si la persona puede recibir nuevas reservas.
           </p>
+          {!isAddingPerson && (
+            <div className={styles.confirmActions}>
+              <button
+                type="button"
+                className={styles.primaryButton}
+                onClick={openAddPersonForm}
+              >
+                {TEAM_ADD_PERSON_LABEL}
+              </button>
+            </div>
+          )}
         </div>
         <div className={styles.summary} aria-label={`${team.length} integrantes en el equipo`}>
           <strong>{team.length}</strong>
           <span>{team.length === 1 ? 'integrante' : 'integrantes'}</span>
         </div>
       </header>
+
+      {isAddingPerson && (
+        <div className={styles.teamGrid}>
+          <form
+            className={styles.memberCard}
+            aria-labelledby="add-person-title"
+            aria-busy={isOnboardingPending}
+            onSubmit={handleOnboardingSubmit}
+          >
+            <div className={styles.memberHeader}>
+              <div className={styles.identity}>
+                <h2 id="add-person-title">{TEAM_ADD_PERSON_LABEL}</h2>
+                <p className={styles.description}>
+                  Enviaremos una invitación por correo. La persona aparecerá en Equipo sólo después de completar su proceso de acceso.
+                </p>
+              </div>
+              {isOnboardingPending && (
+                <span className={styles.saving} aria-live="polite">Enviando…</span>
+              )}
+            </div>
+
+            <div className={styles.settingGroup}>
+              <label className={styles.settingCopy} htmlFor="team-onboarding-email">
+                <span className={styles.settingLabel}>Correo electrónico</span>
+                <small>Usa el correo de la persona que recibirá la invitación.</small>
+              </label>
+              <input
+                ref={emailInputRef}
+                id="team-onboarding-email"
+                className={styles.roleSelect}
+                type="email"
+                autoComplete="email"
+                required
+                value={onboardingEmail}
+                disabled={isOnboardingPending}
+                onChange={(event) => {
+                  setOnboardingEmail(event.target.value);
+                  if (onboardingFeedback) setOnboardingFeedback(null);
+                }}
+              />
+            </div>
+
+            <div className={styles.confirmActions}>
+              <button
+                type="button"
+                className={styles.secondaryButton}
+                disabled={isOnboardingPending}
+                onClick={closeAddPersonForm}
+              >
+                Cerrar
+              </button>
+              <button
+                type="submit"
+                className={styles.primaryButton}
+                disabled={isOnboardingPending}
+              >
+                {isOnboardingPending ? 'Enviando…' : 'Enviar invitación'}
+              </button>
+            </div>
+
+            {onboardingFeedback && (
+              <p
+                className={onboardingFeedback.tone === 'error' ? styles.errorFeedback : styles.successFeedback}
+                role={onboardingFeedback.tone === 'error' ? 'alert' : 'status'}
+                aria-live={onboardingFeedback.tone === 'error' ? 'assertive' : 'polite'}
+              >
+                {onboardingFeedback.message}
+              </p>
+            )}
+          </form>
+        </div>
+      )}
 
       {isReconciling && (
         <div className={styles.refreshWarning} role="status" aria-live="polite">

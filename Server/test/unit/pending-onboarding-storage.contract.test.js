@@ -85,12 +85,14 @@ test("C1 creation keeps lifecycle inert; C2 operations may specialize separate r
   assert.doesNotMatch(model, /secret|token|hash|capability|bearer/iu);
 });
 
-test("C1 introduces no D2 Add person UI or client API", async () => {
-  const api = await readRepo("Client/src/services/api.ts");
+test("D2 consumes C1 issuance without moving onboarding authority into the client", async () => {
   const teamView = await readRepo("Client/src/components/TeamView.tsx");
+  const onboardingRules = await readRepo("Client/src/features/team/teamOnboardingRules.ts");
 
-  for (const source of [api, teamView]) {
-    assert.doesNotMatch(source, /pendingOnboarding|pending-onboarding|onboarding/u);
-  }
-  assert.doesNotMatch(teamView, /Añadir persona|Agregar persona|Invitar/iu);
+  assert.match(teamView, /TEAM_ADD_PERSON_LABEL/u);
+  assert.match(teamView, /apiFetch\(TEAM_ONBOARDING_ENDPOINT/u);
+  assert.match(onboardingRules, /TEAM_ONBOARDING_ENDPOINT\s*=\s*["']\/team\/onboardings["']/u);
+  assert.match(onboardingRules, /return\s*\{\s*email\s*\}/u);
+  assert.doesNotMatch(onboardingRules, /role|isBookable|isActive|businessId|userId|password/u);
+  assert.doesNotMatch(teamView, /createUser|createMembership|\/consume|\/bind|getWorkers|users\/workers/u);
 });
