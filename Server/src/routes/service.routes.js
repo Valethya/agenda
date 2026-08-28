@@ -22,8 +22,22 @@ router.get("/", scopePublicBusiness, bindResolvedPublicBusinessOrigin, getServic
 router.get("/:id", scopePublicBusiness, bindResolvedPublicBusinessOrigin, validate(objectIdParamSchema), getService);
 
 // Mutaciones administrativas siempre usan autoridad tenant de sesión vigente.
-router.post("/", scopeBusiness, isAuthenticated, isAdmin, validate(createServiceSchema), createService);
-router.put("/:id", scopeBusiness, isAuthenticated, isAdmin, validate(updateServiceSchema), updateService);
+router.post(
+  "/",
+  scopeBusiness,
+  isAuthenticated,
+  isAdmin,
+  validate(createServiceSchema, { assignBody: "serviceCreateInput" }),
+  createService,
+);
+router.put(
+  "/:id",
+  scopeBusiness,
+  isAuthenticated,
+  isAdmin,
+  validate(updateServiceSchema, { assignBody: "serviceUpdateInput" }),
+  updateService,
+);
 router.delete("/:id", scopeBusiness, isAuthenticated, isAdmin, validate(objectIdParamSchema), deleteService);
 
 export default router;
