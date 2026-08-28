@@ -10,6 +10,8 @@ export const TENANT_ONBOARDING_CHALLENGE_STATUSES = Object.freeze([
   "revoked",
 ]);
 
+export const TENANT_ONBOARDING_ACCOUNT_PROOF_MAX_ATTEMPTS = 5;
+
 const tenantOnboardingChallengeSchema = new mongoose.Schema(
   {
     pendingOnboarding: {
@@ -51,6 +53,19 @@ const tenantOnboardingChallengeSchema = new mongoose.Schema(
     expiresAt: {
       type: Date,
       required: [true, "La expiración del challenge es obligatoria"],
+    },
+    // A bearer exists before trusted delivery returns, but it is not authority.
+    // Binding requires this server-owned confirmation timestamp to be present.
+    deliveredAt: {
+      type: Date,
+      default: null,
+    },
+    accountProofAttempts: {
+      type: Number,
+      default: 0,
+      min: 0,
+      max: TENANT_ONBOARDING_ACCOUNT_PROOF_MAX_ATTEMPTS,
+      required: true,
     },
     consumedAt: {
       type: Date,
