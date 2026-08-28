@@ -93,6 +93,27 @@ export const createPendingForBusiness = async (
   return documents[0];
 };
 
+/**
+ * Expiry is logical, while the C1 uniqueness barrier is status-based. Reissue
+ * therefore terminalizes only the exact expired Business+email pending grant.
+ * accountBinding/history is intentionally preserved by changing status only.
+ */
+export const revokeExpiredPendingForBusinessEmail = async ({
+  businessId,
+  email,
+  now,
+  session,
+}) => PendingOnboarding.findOneAndUpdate(
+  {
+    business: requireStrictObjectId(businessId, "businessId"),
+    email,
+    status: "pending",
+    expiresAt: { $lte: now },
+  },
+  { $set: { status: "revoked" } },
+  { new: true, session },
+);
+
 export const findContinuableForBinding = async ({ onboardingId, now, session }) => (
   queryWithSession(PendingOnboarding.findOne({
     _id: requireStrictObjectId(onboardingId, "onboardingId"),
