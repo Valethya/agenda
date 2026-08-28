@@ -33,3 +33,10 @@ export const bindTenantOnboardingSchema = z.object({
     account: z.discriminatedUnion("mode", [existingAccount, newAccount]),
   }).strict(),
 }).passthrough();
+
+// C3 authority is entirely server-side. The claimant contributes only the path
+// onboardingId; an absent or empty body is valid and every body field is rejected.
+export const consumeTenantOnboardingSchema = z.object({
+  params: z.object({ onboardingId: objectId }).strict(),
+  body: z.object({}).strict().default({}),
+}).passthrough();
