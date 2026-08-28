@@ -1,6 +1,6 @@
 import type { SessionUser } from '../types';
 
-export type ViewType = 'semana' | 'dia' | 'mes' | 'horarios' | 'equipo' | 'saas-negocios' | 'saas-metricas';
+export type ViewType = 'semana' | 'dia' | 'mes' | 'horarios' | 'equipo' | 'servicios' | 'saas-negocios' | 'saas-metricas';
 export type SessionScope = 'loading' | 'global' | 'tenant' | 'redirecting';
 
 interface CalendarSelection {
@@ -8,7 +8,7 @@ interface CalendarSelection {
   selectedProfessionalId: string | null;
 }
 
-const TENANT_VIEWS: ViewType[] = ['semana', 'dia', 'mes', 'horarios', 'equipo'];
+const TENANT_VIEWS: ViewType[] = ['semana', 'dia', 'mes', 'horarios', 'equipo', 'servicios'];
 const SAAS_VIEWS: ViewType[] = ['saas-negocios', 'saas-metricas'];
 const CALENDAR_VIEWS: ViewType[] = ['semana', 'dia', 'mes'];
 
