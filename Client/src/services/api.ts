@@ -171,6 +171,11 @@ export async function updateTeamMembership(
   return data.payload.membership;
 }
 
+export async function getMyAppointments() {
+  const data = await apiFetch<ApiResponse<Appointment[]>>("/appointments/my");
+  return data.payload;
+}
+
 export async function getAdminServices() {
   const data = await apiFetch<ApiResponse<Service[]>>(ADMIN_SERVICES_ENDPOINT);
   return data.payload;
@@ -200,11 +205,6 @@ export async function deactivateAdminService(serviceId: string) {
     `${SERVICE_MUTATION_ENDPOINT}/${encodeURIComponent(serviceId)}`,
     { method: 'DELETE' }
   );
-  return data.payload;
-}
-
-export async function getMyAppointments() {
-  const data = await apiFetch<ApiResponse<Appointment[]>>("/appointments/my");
   return data.payload;
 }
 
