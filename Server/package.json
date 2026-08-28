@@ -28,7 +28,7 @@
     "test:admin-team-existing-memberships": "node --test test/adminTeamExistingMembershipEndpoints.test.js",
     "test:pending-onboarding-storage": "node --test test/pendingOnboardingStorage.test.js && node --test test/pendingOnboardingStorageMigration.test.js",
     "test:tenant-onboarding-account-binding": "node --test test/tenantOnboardingAccountBinding.test.js && node --test test/tenantOnboardingAccountBindingHardening.test.js && node --test test/tenantOnboardingAccountBindingStorage.test.js",
-    "test:tenant-onboarding-consume-membership": "node --test test/tenantOnboardingConsumeMembership.test.js",
+    "test:tenant-onboarding-consume-membership": "node --test test/tenantOnboardingConsumeMembership.test.js && node --test test/tenantOnboardingConsumeIssuerUserRace.test.js",
     "test:customer-profile-persistence": "node --test test/customerProfilePersistence.test.js",
     "test:client-contact-verification": "node --test test/clientContactVerification.test.js",
     "test:public-web-trust": "node --test test/publicWebStorage.test.js && node --test test/publicWebDnsExpiryRace.test.js && node --test test/publicWebTrust.test.js && node --test test/publicWebSuperadminAuthority.test.js && node --test test/publicWebCorsAdmission.test.js && node --test test/publicWebCapabilityHttp.test.js && node --test test/publicWebC2Revocation.test.js",
