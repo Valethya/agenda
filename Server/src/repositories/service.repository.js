@@ -52,11 +52,3 @@ export const updateMutableByIdAndBusiness = async (id, businessId, data) => {
     { new: true, runValidators: true },
   );
 };
-
-export const deleteById = async (id) => {
-  return await Service.findByIdAndDelete(id);
-};
-
-export const deleteByIdAndBusiness = async (id, businessId) => {
-  return await Service.findOneAndDelete({ _id: id, business: businessId });
-};
