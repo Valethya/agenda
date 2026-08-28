@@ -84,10 +84,15 @@ Una Membership preexistente activa o inactiva bloquea C3. No existe reactivació
 
 ## Atomicidad y concurrencia
 
-C3 usa una transacción Mongo y dos fences:
+C3 usa una transacción Mongo y tres barreras físicas complementarias:
 
 1. una escritura transaccional sobre el PendingOnboarding todavía `pending`, sin introducir un nuevo estado persistente, serializa consumes concurrentes del mismo grant;
-2. `$inc Business.teamAdminRevision` reutiliza el fence de Team/B y serializa C3 contra cambios concurrentes de autoridad administrativa del mismo Business.
+2. `$inc Business.teamAdminRevision` reutiliza el fence de Team/B y serializa C3 contra cambios concurrentes de autoridad administrativa del mismo Business;
+3. una escritura condicional sobre el mismo documento User del issuer exige `_id=issuedBy` e `isActive=true` y ejecuta `$currentDate: { updatedAt: true }` con timestamps automáticos desactivados. Es una escritura efectiva, no un `$set` no-op, y por tanto contiende con cualquier escritura concurrente `User.isActive=false` sobre ese documento.
+
+La tercera barrera protege una condición distinta de la autoridad tenant: el issuer debe seguir globalmente activo. Si una desactivación del User gana primero, el conflicto transitorio hace que `withTransaction()` reintente el callback y C3 vuelve a evaluar grant, Business, bound User, issuer User, issuer Membership, challenge y Membership preexistente; el nuevo intento observa `isActive=false` y falla cerrado. Si C3 gana primero, su Membership puede committear y una desactivación posterior del issuer no produce rollback retrospectivo.
+
+`withTransaction()` puede ejecutar el callback más de una vez. El identificador de Membership retornado se limpia al inicio de cada intento y sólo queda asociado al intento que consigue commit, evitando conservar accidentalmente un `_id` de una creación abortada.
 
 Después de revalidar:
 
@@ -99,7 +104,7 @@ crear Membership
 
 Si falla la creación de Membership, la reserva del grant se revierte. Si falla la terminalización, la Membership se revierte. Dos consumes del mismo grant producen como máximo un éxito. Una creación concurrente de Membership queda además cerrada por el índice único físico existente `{ user: 1, business: 1 }`.
 
-No se agrega colección, índice, materializer ni startup gate en C3: C1/C2 y el índice único de Membership ya contienen las barreras físicas necesarias.
+No se agrega colección, índice, materializer, startup gate ni campo de revisión al User en C3: se reutilizan C1/C2, `Business.teamAdminRevision`, el timestamp `User.updatedAt` ya existente y el índice único de Membership.
 
 ## Terminalización
 
