@@ -40,7 +40,7 @@ test("C3 claimant input is onboardingId only", () => {
   }
 });
 
-test("C3 source consumes persisted binding and fixes initial privilege", async () => {
+test("C3 source consumes persisted binding, fixes privilege and fences issuer activity", async () => {
   const source = await readFile(servicePath, "utf8");
 
   assert.match(source, /user:\s*binding\.user/u);
@@ -51,8 +51,13 @@ test("C3 source consumes persisted binding and fixes initial privilege", async (
   assert.match(source, /CANONICAL_INITIAL_ROLE\s*=\s*"worker"/u);
   assert.match(source, /CANONICAL_INITIAL_BOOKABILITY\s*=\s*false/u);
 
+  assert.match(source, /User\.findOneAndUpdate\(/u);
+  assert.match(source, /\{\s*_id:\s*issuerId,\s*isActive:\s*true\s*\}/u);
+  assert.match(source, /\$currentDate:\s*\{\s*updatedAt:\s*true\s*\}/u);
+  assert.match(source, /timestamps:\s*false/u);
+
   assert.doesNotMatch(source, /findByEmail/u);
   assert.doesNotMatch(source, /resolveControlledUser/u);
-  assert.doesNotMatch(source, /User\.findOne/u);
+  assert.doesNotMatch(source, /User\.findOne\s*\(/u);
   assert.doesNotMatch(source, /Shift|Service\.workers|Appointment|jsonwebtoken|JWT/u);
 });
