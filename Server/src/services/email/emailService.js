@@ -9,6 +9,7 @@ import * as businessRepository from "../../repositories/business.repository.js";
 import { sendMail, sendSensitiveMail } from "./transporter.js";
 import * as templates from "./templates.js";
 import { guestAppointmentVerificationTemplate } from "./guestAppointmentVerification.template.js";
+import { tenantOnboardingTemplate } from "./tenantOnboarding.template.js";
 import { frontendUrl } from "../../config/env.js";
 
 const brandingCache = new Map();
@@ -113,6 +114,34 @@ export const sendGuestAppointmentVerificationEmail = async ({
   const branding = await getBrandingSettings(businessId);
   const template = guestAppointmentVerificationTemplate({
     accessUrl,
+    businessName: branding.businessName,
+  });
+  const meta = getMailMeta(branding);
+  const result = await sendSensitiveMail({
+    to: destination,
+    ...template,
+    ...meta,
+  });
+  return Boolean(result);
+};
+
+/**
+ * Trusted Team-onboarding delivery. `challengeSecret` is bearer material and is
+ * therefore always sent through the sensitive transport, which suppresses the
+ * recipient, body, provider errors and preview links from logs.
+ */
+export const sendTenantOnboardingChallengeEmail = async ({
+  destination,
+  businessId,
+  onboardingId,
+  challengeSecret,
+  expiresAt,
+}) => {
+  const branding = await getBrandingSettings(businessId);
+  const template = tenantOnboardingTemplate({
+    onboardingId: onboardingId.toString(),
+    challengeSecret,
+    expiresAt,
     businessName: branding.businessName,
   });
   const meta = getMailMeta(branding);

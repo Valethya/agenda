@@ -72,24 +72,17 @@ test("C1 repository never binds the target email to User and never creates User/
   assert.doesNotMatch(repository, /email[\s\S]{0,120}User\.(?:find|exists)/u);
 });
 
-test("C1 reserves only inert lifecycle states; no consume/revoke workflow or bearer material is implemented", async () => {
+test("C1 creation keeps lifecycle inert; C2 operations may specialize separate repository functions", async () => {
   const model = await readServer("src/db/models/pendingOnboarding.model.js");
   const repository = await readServer("src/repositories/pendingOnboarding.repository.js");
+  const createStart = repository.indexOf("export const createPendingForBusiness");
+  const createEnd = repository.indexOf("export const revokeExpiredPendingForBusinessEmail");
+  const c1Creation = repository.slice(createStart, createEnd);
 
+  assert.ok(createStart >= 0 && createEnd > createStart);
   assert.match(model, /["']pending["'][\s\S]*["']consumed["'][\s\S]*["']revoked["']/u);
-  assert.doesNotMatch(repository, /consume|revoke|reactivat|findOneAndUpdate|updateOne/u);
+  assert.doesNotMatch(c1Creation, /consume|revoke|reactivat|findOneAndUpdate|updateOne/u);
   assert.doesNotMatch(model, /secret|token|hash|capability|bearer/iu);
-});
-
-test("C1 introduces no HTTP onboarding/claim/consume routes and no email delivery", async () => {
-  const routesIndex = await readServer("src/routes/index.js");
-  const teamRoutes = await readServer("src/routes/adminTeam.routes.js");
-  const emailService = await readServer("src/services/email/emailService.js");
-
-  for (const source of [routesIndex, teamRoutes, emailService]) {
-    assert.doesNotMatch(source, /pendingOnboarding|pending-onboarding/u);
-  }
-  assert.doesNotMatch(teamRoutes, /invite|claim|consume|reactivat/iu);
 });
 
 test("C1 introduces no D2 Add person UI or client API", async () => {

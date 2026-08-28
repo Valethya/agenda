@@ -24,6 +24,7 @@ export const startServerLifecycle = async ({
   guestCapabilityGate,
   publicWebGate,
   membershipBookabilityGate = async () => ({ enforced: false }),
+  tenantOnboardingGate = async () => ({ enforced: false }),
   database = getConnectedDatabase,
   appInstance,
   listenPort,
@@ -38,6 +39,7 @@ export const startServerLifecycle = async ({
   await guestCapabilityGate(db, processEnvironment);
   await publicWebGate(db, processEnvironment);
   await membershipBookabilityGate(db, processEnvironment);
+  await tenantOnboardingGate(db, processEnvironment);
 
   const httpServer = appInstance.listen(listenPort);
   await waitUntilListening(httpServer);

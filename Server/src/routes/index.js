@@ -11,6 +11,7 @@ import businessConfigRoutes from "./businessConfig.routes.js";
 import superadminRoutes from "./superadmin.routes.js";
 import internalBookingRoutes from "./internalBooking.routes.js";
 import adminTeamRoutes from "./adminTeam.routes.js";
+import tenantOnboardingRoutes from "./tenantOnboarding.routes.js";
 import { paymentRoutesEnabled } from "../config/env.js";
 
 const router = Router();
@@ -20,6 +21,7 @@ router.use("/", authRoutes);
 // Surface administrativa fijada por routing del servidor. El caller no puede
 // obtenerla declarando un header en una ruta pública.
 router.use("/internal", internalBookingRoutes);
+router.use("/team/onboardings", tenantOnboardingRoutes);
 router.use("/team", adminTeamRoutes);
 
 // Contrato headless público. Cookies incidentales no cambian estas políticas.
@@ -28,7 +30,8 @@ router.use("/availability", availabilityRoutes);
 router.use("/appointments", appointmentRoutes);
 router.use("/users", userRoutes);
 
-// C2 tiene su propio contrato businessId/capability y permanece independiente.
+// C2 guest Appointment tiene su propio contrato businessId/capability y permanece
+// independiente del account binding de onboarding Team.
 router.use("/guest-appointments", guestAppointmentCapabilityRoutes);
 
 if (paymentRoutesEnabled) {
