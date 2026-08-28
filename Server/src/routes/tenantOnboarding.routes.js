@@ -1,6 +1,7 @@
 import { Router } from "express";
 import {
   bindOnboardingAccount,
+  consumeOnboarding,
   issueOnboarding,
 } from "../controllers/tenantOnboarding.controller.js";
 import { isAuthenticated } from "../middleware/auth.middleware.js";
@@ -13,6 +14,7 @@ import {
 import { validate } from "../middleware/validate.middleware.js";
 import {
   bindTenantOnboardingSchema,
+  consumeTenantOnboardingSchema,
   issueTenantOnboardingSchema,
 } from "../validations/tenantOnboarding.validation.js";
 
@@ -38,6 +40,15 @@ router.post(
   tenantOnboardingBindLimiter,
   validate(bindTenantOnboardingSchema, { assignBody: "tenantOnboardingBinding" }),
   bindOnboardingAccount,
+);
+
+// C3 does not repeat proof or create a login. The id merely selects the already
+// bound grant; User, Business and initial privilege are read from persistence.
+router.post(
+  "/:onboardingId/consume",
+  tenantOnboardingBindLimiter,
+  validate(consumeTenantOnboardingSchema),
+  consumeOnboarding,
 );
 
 export default router;
