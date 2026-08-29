@@ -8,7 +8,10 @@ import {
   SERVICE_TEAM_ENDPOINT,
   buildServiceWriteInput,
   getAssignableTeamMembers,
+  getUnavailableAssignedWorkers,
+  removeWorkerAssignment,
   replaceCanonicalService,
+  serviceToForm,
   validateServiceWriteInput
 } from '../src/features/services/serviceRules.ts';
 
@@ -46,6 +49,39 @@ test('selector de profesionales deriva exclusivamente de Team activo + bookable'
   );
   assert.equal(SERVICE_TEAM_ENDPOINT, '/team');
   assert.notEqual(SERVICE_TEAM_ENDPOINT, '/internal/users/workers');
+});
+
+test('edición permite retirar asignaciones existentes que ya no son elegibles sin volverlas candidatas', () => {
+  const eligible = member({ userId: 'worker-a', name: 'Profesional A' });
+  const nonBookable = member({ userId: 'worker-b', name: 'Profesional B', isBookable: false });
+  const inactive = member({ userId: 'worker-c', name: 'Profesional C', isActive: false });
+  const currentService = service({
+    workers: [
+      { _id: 'worker-a', firstName: 'Profesional', lastName: 'A' },
+      { _id: 'worker-b', firstName: 'Profesional', lastName: 'B' },
+      'worker-c'
+    ]
+  });
+  const team = [eligible, nonBookable, inactive];
+
+  const form = serviceToForm(currentService);
+  assert.deepEqual(form.workers, ['worker-a', 'worker-b', 'worker-c']);
+  assert.deepEqual(
+    getUnavailableAssignedWorkers(currentService, team),
+    [
+      { userId: 'worker-b', name: 'Profesional B' },
+      { userId: 'worker-c', name: 'Profesional C' }
+    ]
+  );
+  assert.deepEqual(getAssignableTeamMembers(team).map((item) => item.userId), ['worker-a']);
+
+  const withoutNonBookable = removeWorkerAssignment(form, 'worker-b');
+  const recoveredForm = removeWorkerAssignment(withoutNonBookable, 'worker-c');
+  assert.deepEqual(recoveredForm.workers, ['worker-a']);
+  assert.deepEqual(buildServiceWriteInput(recoveredForm).workers, ['worker-a']);
+
+  assert.equal(getAssignableTeamMembers(team).some((item) => item.userId === 'worker-b'), false);
+  assert.equal(getAssignableTeamMembers(team).some((item) => item.userId === 'worker-c'), false);
 });
 
 test('payload de escritura contiene sólo campos funcionales y nunca autoridad tenant', () => {
@@ -97,6 +133,7 @@ test('Servicios usa superficie admin interna para read y CRUD existente para mut
 
   const apiSource = readFileSync(new URL('../src/services/api.ts', import.meta.url), 'utf8');
   const viewSource = readFileSync(new URL('../src/components/ServicesView.tsx', import.meta.url), 'utf8');
+  const rulesSource = readFileSync(new URL('../src/features/services/serviceRules.ts', import.meta.url), 'utf8');
   const dashboardSource = readFileSync(new URL('../src/components/AdminDashboard.tsx', import.meta.url), 'utf8');
   const sidebarSource = readFileSync(new URL('../src/components/Sidebar.tsx', import.meta.url), 'utf8');
 
@@ -107,6 +144,11 @@ test('Servicios usa superficie admin interna para read y CRUD existente para mut
   assert.doesNotMatch(viewSource, /internal\/users\/workers/);
   assert.doesNotMatch(viewSource, /hard=true|Eliminar permanentemente/i);
   assert.match(viewSource, /Desactivar servicio/);
+  assert.match(viewSource, /Asignaciones existentes no disponibles/);
+  assert.match(viewSource, /Quitar del servicio/);
+  assert.match(viewSource, /getUnavailableAssignedWorkers/);
+  assert.match(viewSource, /removeWorkerAssignment/);
   assert.match(viewSource, /aria-live/);
   assert.doesNotMatch(viewSource, /name=["']business|name=["']role|name=["']isBookable/i);
+  assert.doesNotMatch(rulesSource, /member\.role|role\s*===/);
 });
