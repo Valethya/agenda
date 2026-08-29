@@ -13,6 +13,8 @@ import {
   EMPTY_SERVICE_FORM,
   buildServiceWriteInput,
   getAssignableTeamMembers,
+  getUnavailableAssignedWorkers,
+  removeWorkerAssignment,
   replaceCanonicalService,
   serviceToForm,
   validateServiceWriteInput,
@@ -77,6 +79,17 @@ export const ServicesView: React.FC = () => {
     () => new Map(team.map((member) => [member.userId, member])),
     [team]
   );
+  const editingService = React.useMemo(
+    () => services.find((service) => service._id === editingServiceId) || null,
+    [editingServiceId, services]
+  );
+  const unavailableAssignments = React.useMemo(
+    () => editorMode === 'edit' && editingService
+      ? getUnavailableAssignedWorkers(editingService, team)
+        .filter((worker) => form.workers.includes(worker.userId))
+      : [],
+    [editingService, editorMode, form.workers, team]
+  );
 
   const openCreate = () => {
     setFeedback(null);
@@ -107,6 +120,11 @@ export const ServicesView: React.FC = () => {
         ? current.workers.filter((id) => id !== userId)
         : [...current.workers, userId]
     }));
+  };
+
+  const removeUnavailableWorker = (userId: string) => {
+    if (submitting) return;
+    setForm((current) => removeWorkerAssignment(current, userId));
   };
 
   const handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
@@ -316,7 +334,7 @@ export const ServicesView: React.FC = () => {
 
           <fieldset className={styles.professionals} disabled={submitting}>
             <legend>Profesionales</legend>
-            <p>Se muestran sólo participantes activos con “Presta servicios” habilitado en Equipo.</p>
+            <p>Se muestran como disponibles sólo participantes activos con “Presta servicios” habilitado en Equipo.</p>
             {assignableTeam.length === 0 ? (
               <p className={styles.empty}>No hay profesionales bookable disponibles.</p>
             ) : (
@@ -331,6 +349,32 @@ export const ServicesView: React.FC = () => {
                     <span>{member.name || 'Integrante del equipo'}</span>
                   </label>
                 ))}
+              </div>
+            )}
+
+            {unavailableAssignments.length > 0 && (
+              <div className={styles.unavailableAssignments} aria-label="Asignaciones existentes no disponibles">
+                <p className={styles.unavailableHeading}>
+                  <strong>Asignaciones existentes no disponibles</strong>
+                  <span> Ya no cumplen las condiciones actuales de Equipo. Puedes quitarlas, pero no volver a seleccionarlas desde aquí.</span>
+                </p>
+                <div className={styles.unavailableList}>
+                  {unavailableAssignments.map((worker) => (
+                    <div key={worker.userId} className={styles.unavailableOption}>
+                      <div className={styles.unavailableIdentity}>
+                        <strong>{worker.name || 'Profesional asignado'}</strong>
+                        <small>No disponible para nuevas reservas</small>
+                      </div>
+                      <button
+                        type="button"
+                        className={styles.dangerButton}
+                        onClick={() => removeUnavailableWorker(worker.userId)}
+                      >
+                        Quitar del servicio
+                      </button>
+                    </div>
+                  ))}
+                </div>
               </div>
             )}
           </fieldset>
