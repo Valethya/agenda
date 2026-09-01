@@ -84,6 +84,15 @@ export interface Shift {
   breaks: Break[];
 }
 
+export interface ShiftWriteInput {
+  workerId: string;
+  dayOfWeek: number;
+  isOpen: boolean;
+  startTime: string;
+  endTime: string;
+  breaks: Break[];
+}
+
 export interface WorkingHour {
   dayOfWeek: number;
   isOpen: boolean;
