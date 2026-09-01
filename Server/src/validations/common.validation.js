@@ -29,6 +29,10 @@ export const initiatePaymentSchema = z.object({
 });
 
 // Callback de Webpay: tolerante porque Transbank controla el payload.
+// Flujo normal (pago completado): Transbank envía token_ws
+// Flujo abortado/cancelado: Transbank envía TBK_TOKEN + TBK_ORDEN_COMPRA + TBK_ID_SESION (sin token_ws)
+// Flujo timeout (usuario no completó): puede llegar sin ningún token
+// Validación mínima: al menos uno de los tokens debe estar presente.
 export const webpayReturnSchema = z.object({
   body: z.object({
     token_ws: z.string().optional(),
@@ -85,6 +89,8 @@ export const createWorkerSchema = z.object({
 });
 
 // --- Auth extras ---
+// Verificado: el controller (auth.controller.js:81) desestructura { idToken } de req.body.
+// El frontend no tiene componente de Google Login aún; la ruta existe solo en el backend.
 export const googleLoginSchema = z.object({
   body: z.object({
     idToken: z.string({ required_error: "El token de Google es obligatorio" })
@@ -105,6 +111,7 @@ export const switchBusinessSchema = z.object({
 });
 
 // --- Availability: Shifts ---
+// El write boundary es estricto: ningún campo de autoridad tenant puede pasar al controller.
 const shiftBreakSchema = z.object({
   startTime: timeHHMM,
   endTime: timeHHMM,
@@ -125,6 +132,8 @@ export const saveShiftSchema = z.object({
 });
 
 // --- BusinessConfig (PUT /business-settings) ---
+// Basado en el modelo Mongoose BusinessConfig. Usa strict() para rechazar propiedades desconocidas.
+// Todos los campos son opcionales porque es una actualización parcial.
 const workingHourEntry = z.object({
   dayOfWeek: z.number().int().min(0).max(6),
   isOpen: z.boolean().optional(),
@@ -138,8 +147,13 @@ const workingHourEntry = z.object({
 
 export const updateBusinessConfigSchema = z.object({
   body: z.object({
-    businessName: z.string().min(1).max(100).optional(),
-    workingHours: z.array(workingHourEntry).max(7).optional(),
+    businessName: z.string()
+      .min(1, "El nombre no puede estar vacío")
+      .max(100, "El nombre no debe exceder 100 caracteres")
+      .optional(),
+    workingHours: z.array(workingHourEntry)
+      .max(7, "No puede haber más de 7 entradas de horario")
+      .optional(),
     appointmentSettings: z.object({
       slotDuration: z.number().int().min(5).max(480).optional(),
       bufferTime: z.number().int().min(0).max(120).optional(),
@@ -157,9 +171,9 @@ export const updateBusinessConfigSchema = z.object({
       depositValue: z.number().min(0).max(100000).optional(),
     }).strict().optional(),
     emailSettings: z.object({
-      brandColor: z.string().regex(/^#[0-9a-fA-F]{6}$/).optional(),
-      logoUrl: z.string().url().or(z.literal("")).optional(),
-      customFooter: z.string().max(500).optional(),
+      brandColor: z.string().regex(/^#[0-9a-fA-F]{6}$/, "Color debe ser hexadecimal (#RRGGBB)").optional(),
+      logoUrl: z.string().url("URL de logo inválida").or(z.literal("")).optional(),
+      customFooter: z.string().max(500, "El footer no debe exceder 500 caracteres").optional(),
     }).strict().optional(),
     uiSettings: z.object({
       professionalRoleLabel: z.string().min(1).max(50).optional(),
@@ -172,6 +186,9 @@ export const updateBusinessConfigSchema = z.object({
 });
 
 // --- 6.2.6-B publicWeb commands ---
+// Trust fields are never accepted from the client. URL normalization and the
+// stronger HTTPS/443/hostname policy are enforced once, server-side, by the
+// publicWeb service after this structural allowlist.
 export const configurePublicWebSchema = z.object({
   body: z.object({
     websiteUrl: z.string().min(1).max(2048),
