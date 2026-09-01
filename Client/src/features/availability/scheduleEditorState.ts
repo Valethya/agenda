@@ -1,5 +1,5 @@
 import type { Shift } from '../../types';
-import { buildSevenDaySchedule, buildShiftWriteInput, mergeCanonicalShift } from './scheduleRules';
+import { buildSevenDaySchedule, buildShiftWriteInput, mergeCanonicalShift } from './scheduleRules.ts';
 
 export interface ScheduleEditorState {
   canonicalSchedule: Shift[];
