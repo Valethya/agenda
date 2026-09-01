@@ -14,7 +14,7 @@ import { timeToMinutes, minutesToTime, checkOverlap } from "../utils/time.js";
 import { DEFAULT_SLOT_DURATION_MINUTES } from "../config/businessConfig.defaults.js";
 
 const DEFAULT_SHIFT_STATE = Object.freeze({
-  isOpen: true,
+  isOpen: false,
   startTime: "09:00",
   endTime: "18:00",
   breaks: [],
@@ -73,12 +73,13 @@ export const saveWorkerShift = async ({ businessId, workerId, dayOfWeek, patch }
     workerId,
     dayOfWeek,
   );
+  const existingState = asShiftState(existing);
   const finalState = {
-    ...asShiftState(existing),
+    ...existingState,
     ...patch,
     breaks: patch.breaks !== undefined
       ? patch.breaks.map((entry) => ({ ...entry }))
-      : asShiftState(existing).breaks,
+      : existingState.breaks,
   };
 
   assertValidShiftState(finalState);
