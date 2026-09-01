@@ -29,6 +29,11 @@ export const getWorkerShifts = async (req, res, next) => {
 export const saveShift = async (req, res, next) => {
   try {
     const { workerId, dayOfWeek, ...patch } = req.validatedShiftInput;
+
+    // Preserve the established fail-closed boundary: an ineligible or foreign
+    // participant is hidden before authority differences are evaluated.
+    await availabilityService.resolveActiveWorkerInTenant(workerId, req.businessId);
+
     const { role, userId } = req.tenantAuthority;
     if (role !== "admin" && !(role === "worker" && userId.toString() === workerId)) {
       return res.status(403).json({ status: "fail", message: "No tiene permisos para modificar turnos de otro trabajador" });
