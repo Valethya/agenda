@@ -10,12 +10,20 @@ import { scopeBusiness, scopePublicBusiness } from "../middleware/business.middl
 import { bindResolvedPublicBusinessOrigin } from "../middleware/publicWebBrowserBinding.middleware.js";
 import { validate } from "../middleware/validate.middleware.js";
 import { objectIdParamSchema } from "../validations/common.validation.js";
+import { publicProfessionalDiscoverySchema } from "../validations/publicBookingDiscovery.validation.js";
 
 const router = Router();
 
 // Discovery público fijado por routing. Callers sin Origin conservan el contrato
-// headless; navegadores deben bindear su Origin al Business explícito.
-router.get("/workers", scopePublicBusiness, bindResolvedPublicBusinessOrigin, getWorkers);
+// headless; navegadores deben bindear su Origin al Business explícito. G1 conserva
+// esta superficie existente y exige serviceId válido mediante query estricta.
+router.get(
+  "/workers",
+  scopePublicBusiness,
+  bindResolvedPublicBusinessOrigin,
+  validate(publicProfessionalDiscoverySchema),
+  getWorkers,
+);
 
 // A2: las mutaciones legacy permanecen fail-closed hasta que exista el onboarding
 // canónico. El POST no valida ni consume password/email porque nunca materializa
