@@ -38,9 +38,9 @@ const login = async (email, password) => {
 const adminA = await login("test-admin@example.com", "passwordAdmin");
 const adminB = await login("user-b@example.com", "passwordUserB");
 const workerA = await login("test-worker@example.com", "passwordWorker");
-assert.equal(adminA.response.status, 200);
-assert.equal(adminB.response.status, 200);
-assert.equal(workerA.response.status, 200);
+assert.equal(adminA.response.ok, true);
+assert.equal(adminB.response.ok, true);
+assert.equal(workerA.response.ok, true);
 
 const otherWorker = await User.create({
   firstName: "Otra",
