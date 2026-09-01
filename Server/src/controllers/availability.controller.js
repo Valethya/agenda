@@ -28,24 +28,18 @@ export const getWorkerShifts = async (req, res, next) => {
 
 export const saveShift = async (req, res, next) => {
   try {
-    const { workerId, dayOfWeek, isOpen, startTime, endTime, breaks } = req.body;
-    if (workerId === undefined || dayOfWeek === undefined) {
-      throw new ValidationError("workerId y dayOfWeek son obligatorios");
-    }
-
-    await availabilityService.resolveActiveWorkerInTenant(workerId, req.businessId);
-
+    const { workerId, dayOfWeek, ...patch } = req.validatedShiftInput;
     const { role, userId } = req.tenantAuthority;
     if (role !== "admin" && !(role === "worker" && userId.toString() === workerId)) {
       return res.status(403).json({ status: "fail", message: "No tiene permisos para modificar turnos de otro trabajador" });
     }
 
-    const updatedShift = await shiftRepository.upsertByBusinessWorkerAndDay(
-      req.businessId,
+    const updatedShift = await availabilityService.saveWorkerShift({
+      businessId: req.businessId,
       workerId,
       dayOfWeek,
-      { isOpen, startTime, endTime, breaks },
-    );
+      patch,
+    });
     res.status(200).json({ status: "success", message: "Configuración de turno guardada correctamente", payload: updatedShift });
   } catch (error) { next(error); }
 };
