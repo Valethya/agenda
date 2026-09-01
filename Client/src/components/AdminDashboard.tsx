@@ -9,7 +9,7 @@ import Topbar from './Topbar';
 import CalendarWeekView from './CalendarWeekView';
 import CalendarDayView from './CalendarDayView';
 import CalendarMonthView from './CalendarMonthView';
-import ProfessionalScheduleCard from './ProfessionalScheduleCard';
+import ScheduleManagementView from './ScheduleManagementView';
 import AppointmentModal from './AppointmentModal';
 import ImpersonationBanner from './ImpersonationBanner';
 import SaasBusinessesView from './SaasBusinessesView';
@@ -19,7 +19,7 @@ import ServicesView from './ServicesView';
 
 const DashboardContent: React.FC = () => {
   const { viewType } = useCalendarNavigation();
-  const { loading: dataLoading, error: dataError, profs, businessConfig } = useCalendarData();
+  const { loading: dataLoading, error: dataError, businessConfig } = useCalendarData();
   const { currentUser, loading: sessionLoading, error: sessionError } = useSession();
   const loading = sessionLoading || dataLoading;
   const error = sessionError || dataError;
@@ -94,30 +94,8 @@ const DashboardContent: React.FC = () => {
               {viewType === 'servicios' && <ServicesView />}
               {viewType === 'saas-negocios' && <SaasBusinessesView />}
               {viewType === 'saas-metricas' && <SaasMetricsView />}
-
               {viewType === 'horarios' && (
-                <div className={styles.horariosView}>
-                  <div className={styles.horariosHeader}>
-                    <h2 className={styles.horariosTitle}>Horarios del equipo</h2>
-                    <button className={styles.btnRetry} style={{ background: 'var(--niebla)', border: 'none' }}>
-                      Editar horarios
-                    </button>
-                  </div>
-                  <div className={styles.profCards}>
-                    {profs.map((p, idx) => (
-                      <ProfessionalScheduleCard
-                        key={p._id}
-                        professional={p}
-                        idx={idx}
-                      />
-                    ))}
-                    {profs.length === 0 && (
-                      <div style={{ padding: '2rem', color: 'var(--texto-suave)', textAlign: 'center', gridColumn: '1 / -1' }}>
-                        No hay profesionales disponibles.
-                      </div>
-                    )}
-                  </div>
-                </div>
+                <ScheduleManagementView canManageTeam={currentUser?.role === 'admin'} />
               )}
             </div>
           </div>
