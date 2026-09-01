@@ -22,6 +22,12 @@ export interface Professional {
 
 export type EntityReference<T extends { _id: string }> = string | T;
 
+export interface ServiceWorkerSummary {
+  _id: string;
+  firstName?: string;
+  lastName?: string;
+}
+
 export interface Service {
   _id: string;
   name: string;
@@ -30,7 +36,17 @@ export interface Service {
   price: number;
   depositAmount: number;
   isActive: boolean;
+  workers?: Array<string | ServiceWorkerSummary>;
   color?: string; // assigned dynamically or via config
+}
+
+export interface ServiceWriteInput {
+  name: string;
+  description: string;
+  duration: number;
+  price: number;
+  depositAmount: number;
+  workers: string[];
 }
 
 export type AppointmentStatus = 'pending' | 'confirmed' | 'cancelled' | 'completed' | 'pending_payment';

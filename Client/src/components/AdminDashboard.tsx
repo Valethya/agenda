@@ -15,6 +15,7 @@ import ImpersonationBanner from './ImpersonationBanner';
 import SaasBusinessesView from './SaasBusinessesView';
 import SaasMetricsView from './SaasMetricsView';
 import TeamView from './TeamView';
+import ServicesView from './ServicesView';
 
 const DashboardContent: React.FC = () => {
   const { viewType } = useCalendarNavigation();
@@ -43,7 +44,7 @@ const DashboardContent: React.FC = () => {
     );
   }
 
-  const showLeyenda = !['horarios', 'equipo', 'saas-negocios', 'saas-metricas'].includes(viewType);
+  const showLeyenda = !['horarios', 'equipo', 'servicios', 'saas-negocios', 'saas-metricas'].includes(viewType);
 
   return (
     <div className={styles.appContainer}>
@@ -90,6 +91,7 @@ const DashboardContent: React.FC = () => {
               {viewType === 'dia' && <CalendarDayView />}
               {viewType === 'mes' && <CalendarMonthView />}
               {viewType === 'equipo' && <TeamView />}
+              {viewType === 'servicios' && <ServicesView />}
               {viewType === 'saas-negocios' && <SaasBusinessesView />}
               {viewType === 'saas-metricas' && <SaasMetricsView />}
 

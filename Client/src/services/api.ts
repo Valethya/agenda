@@ -7,12 +7,18 @@ import type {
   BusinessConfigPayload,
   CreateSaasBusinessInput,
   SaasBusiness,
+  Service,
+  ServiceWriteInput,
   SessionApiResponse,
   SessionIdentity,
   SessionUser,
   TeamMembership,
   TeamMembershipPatch
 } from '../types';
+import {
+  ADMIN_SERVICES_ENDPOINT,
+  SERVICE_MUTATION_ENDPOINT
+} from '../features/services/serviceRules';
 
 const configuredApiUrl = import.meta.env.PUBLIC_API_URL;
 
@@ -167,6 +173,38 @@ export async function updateTeamMembership(
 
 export async function getMyAppointments() {
   const data = await apiFetch<ApiResponse<Appointment[]>>("/appointments/my");
+  return data.payload;
+}
+
+export async function getAdminServices() {
+  const data = await apiFetch<ApiResponse<Service[]>>(ADMIN_SERVICES_ENDPOINT);
+  return data.payload;
+}
+
+export async function createAdminService(input: ServiceWriteInput) {
+  const data = await apiFetch<ApiResponse<Service>>(SERVICE_MUTATION_ENDPOINT, {
+    method: 'POST',
+    body: input
+  });
+  return data.payload;
+}
+
+export async function updateAdminService(serviceId: string, input: ServiceWriteInput) {
+  const data = await apiFetch<ApiResponse<Service>>(
+    `${SERVICE_MUTATION_ENDPOINT}/${encodeURIComponent(serviceId)}`,
+    {
+      method: 'PUT',
+      body: input
+    }
+  );
+  return data.payload;
+}
+
+export async function deactivateAdminService(serviceId: string) {
+  const data = await apiFetch<ApiResponse<Service>>(
+    `${SERVICE_MUTATION_ENDPOINT}/${encodeURIComponent(serviceId)}`,
+    { method: 'DELETE' }
+  );
   return data.payload;
 }
 

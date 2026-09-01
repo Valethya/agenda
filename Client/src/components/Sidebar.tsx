@@ -64,7 +64,7 @@ export const Sidebar: React.FC = () => {
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
-  const selectTenantView = (nextView: 'semana' | 'horarios' | 'equipo') => {
+  const selectTenantView = (nextView: 'semana' | 'horarios' | 'equipo' | 'servicios') => {
     if (currentUser) {
       const selection = resolveCalendarSelection(currentUser, scope, nextView);
       setViewType(selection.viewType);
@@ -87,6 +87,8 @@ export const Sidebar: React.FC = () => {
       selectTenantView('horarios');
     } else if (id === 'equipo') {
       selectTenantView('equipo');
+    } else if (id === 'servicios') {
+      selectTenantView('servicios');
     } else if (id === 'saas-negocios' || id === 'saas-metricas') {
       const params = new URLSearchParams(window.location.search);
       params.delete('slug');
@@ -103,11 +105,13 @@ export const Sidebar: React.FC = () => {
     ? 'horarios'
     : viewType === 'equipo'
       ? 'equipo'
-      : viewType === 'saas-negocios'
-        ? 'saas-negocios'
-        : viewType === 'saas-metricas'
-          ? 'saas-metricas'
-          : 'calendario';
+      : viewType === 'servicios'
+        ? 'servicios'
+        : viewType === 'saas-negocios'
+          ? 'saas-negocios'
+          : viewType === 'saas-metricas'
+            ? 'saas-metricas'
+            : 'calendario';
 
   const sections = [...SECTIONS];
   const navItems = [...ALL_NAV_ITEMS];
@@ -129,6 +133,8 @@ export const Sidebar: React.FC = () => {
     );
     sections.push('SaaS Admin');
   }
+
+  const canSeeServiceAdministration = currentUser?.role === 'admin' || currentUser?.role === 'superadmin';
 
   return (
     <aside className={styles.sidebar}>
@@ -175,6 +181,7 @@ export const Sidebar: React.FC = () => {
         {sections.map(sectionName => {
           const sectionItems = navItems.filter(
             item => item.section === sectionName &&
+              (item.id !== 'servicios' || canSeeServiceAdministration) &&
               (item.section === 'SaaS Admin' || businessConfig.enabledNavItems.includes(item.id))
           );
 

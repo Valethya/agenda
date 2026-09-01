@@ -105,7 +105,7 @@ const serviceAForSoftDelete = await Service.create({
 });
 
 const serviceAForHardDelete = await Service.create({
-  name: "Servicio A hard delete",
+  name: "Servicio A hard query",
   description: "Servicio del tenant A",
   duration: 30,
   price: 14000,
@@ -232,7 +232,7 @@ test("6.2.2-D adversarial tenant resource isolation", async (t) => {
     assert.equal(untouched.name, "Servicio exclusivo B");
   });
 
-  await t.test("Service A conserva lectura, update, soft delete y hard delete dentro de A", async () => {
+  await t.test("Service A conserva lectura, update y soft delete; hard=true no borra físicamente", async () => {
     const read = await request(`/internal/services/${serviceAForSoftDelete._id}`, { cookie: adminCookie });
     assert.equal(read.status, 200);
 
@@ -258,7 +258,9 @@ test("6.2.2-D adversarial tenant resource isolation", async (t) => {
       cookie: adminCookie,
     });
     assert.equal(hardDelete.status, 200);
-    assert.equal(await Service.findById(serviceAForHardDelete._id), null);
+    const persistedAfterHardQuery = await Service.findById(serviceAForHardDelete._id);
+    assert.ok(persistedAfterHardQuery);
+    assert.equal(persistedAfterHardQuery.isActive, false);
   });
 
   await t.test("Turnos de workers de B no se leen ni modifican desde contexto A", async () => {

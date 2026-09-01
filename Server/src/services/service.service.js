@@ -2,37 +2,69 @@ import * as serviceRepository from "../repositories/service.repository.js";
 import { validateProfessionalAllowlist } from "./professionalEligibility.service.js";
 import { ConflictError, NotFoundError, ValidationError } from "../utils/appError.js";
 
-const MUTABLE_SERVICE_FIELDS = Object.freeze([
+const CREATE_SERVICE_FIELDS = Object.freeze([
   "name",
   "description",
   "duration",
   "price",
   "depositAmount",
   "workers",
+]);
+const MUTABLE_SERVICE_FIELDS = Object.freeze([
+  ...CREATE_SERVICE_FIELDS,
   "isActive",
 ]);
+const CREATE_SERVICE_FIELD_SET = new Set(CREATE_SERVICE_FIELDS);
 const MUTABLE_SERVICE_FIELD_SET = new Set(MUTABLE_SERVICE_FIELDS);
 
-const buildMutableServiceUpdate = (data) => {
+const buildAllowedServiceInput = (data, allowedFields, allowedFieldSet, errorMessage) => {
   if (!data || typeof data !== "object" || Array.isArray(data)) {
-    throw new ValidationError("La actualización del servicio no es válida");
+    throw new ValidationError(errorMessage);
   }
 
   const suppliedFields = Object.keys(data);
   const forbiddenFields = suppliedFields.filter(
-    (field) => field.startsWith("$") || !MUTABLE_SERVICE_FIELD_SET.has(field),
+    (field) => field.startsWith("$") || !allowedFieldSet.has(field),
   );
   if (forbiddenFields.length > 0) {
-    throw new ValidationError("La actualización contiene campos no permitidos");
+    throw new ValidationError("El servicio contiene campos no permitidos");
   }
 
-  const update = {};
-  for (const field of MUTABLE_SERVICE_FIELDS) {
+  const safeInput = {};
+  for (const field of allowedFields) {
     if (Object.prototype.hasOwnProperty.call(data, field)) {
-      update[field] = data[field];
+      safeInput[field] = data[field];
     }
   }
-  return update;
+  return safeInput;
+};
+
+const buildCreateServiceInput = (data) => buildAllowedServiceInput(
+  data,
+  CREATE_SERVICE_FIELDS,
+  CREATE_SERVICE_FIELD_SET,
+  "La creación del servicio no es válida",
+);
+
+const buildMutableServiceUpdate = (data) => buildAllowedServiceInput(
+  data,
+  MUTABLE_SERVICE_FIELDS,
+  MUTABLE_SERVICE_FIELD_SET,
+  "La actualización del servicio no es válida",
+);
+
+const assertDepositWithinPrice = (price, depositAmount) => {
+  if (
+    typeof price !== "number"
+    || !Number.isFinite(price)
+    || typeof depositAmount !== "number"
+    || !Number.isFinite(depositAmount)
+    || price < 0
+    || depositAmount < 0
+    || depositAmount > price
+  ) {
+    throw new ValidationError("El monto de abono debe estar entre 0 y el precio del servicio");
+  }
 };
 
 export const getAllServices = async (businessId, onlyActive = false) => {
@@ -49,15 +81,26 @@ export const getServiceById = async (id, businessId, onlyActive = false) => {
 };
 
 export const createService = async (data, businessId) => {
-  const { name } = data;
+  const safeData = buildCreateServiceInput(data);
+  const depositAmount = safeData.depositAmount ?? 0;
+  assertDepositWithinPrice(safeData.price, depositAmount);
 
-  const existingService = await serviceRepository.findByName(name, businessId);
+  const existingService = await serviceRepository.findByName(safeData.name, businessId);
   if (existingService) {
     throw new ConflictError("Ya existe un servicio registrado con este nombre en tu negocio");
   }
 
-  const workers = await validateProfessionalAllowlist(data.workers ?? [], businessId);
-  return await serviceRepository.create({ ...data, workers, business: businessId });
+  const workers = await validateProfessionalAllowlist(safeData.workers ?? [], businessId);
+  return await serviceRepository.create({
+    name: safeData.name,
+    description: safeData.description,
+    duration: safeData.duration,
+    price: safeData.price,
+    depositAmount,
+    workers,
+    business: businessId,
+    isActive: true,
+  });
 };
 
 export const updateService = async (id, data, businessId) => {
@@ -67,6 +110,13 @@ export const updateService = async (id, data, businessId) => {
   }
 
   const safeData = buildMutableServiceUpdate(data);
+  const finalPrice = Object.prototype.hasOwnProperty.call(safeData, "price")
+    ? safeData.price
+    : service.price;
+  const finalDepositAmount = Object.prototype.hasOwnProperty.call(safeData, "depositAmount")
+    ? safeData.depositAmount
+    : (service.depositAmount ?? 0);
+  assertDepositWithinPrice(finalPrice, finalDepositAmount);
 
   if (safeData.name && safeData.name !== service.name) {
     const nameCollision = await serviceRepository.findByName(safeData.name, businessId);
@@ -84,23 +134,17 @@ export const updateService = async (id, data, businessId) => {
   return updated;
 };
 
-export const deleteService = async (id, businessId, softDelete = true) => {
+export const deleteService = async (id, businessId) => {
   const service = await serviceRepository.findByIdAndBusiness(id, businessId);
   if (!service) {
-    throw new NotFoundError("El servicio que intenta eliminar no existe");
+    throw new NotFoundError("El servicio que intenta desactivar no existe");
   }
 
-  if (softDelete) {
-    const updated = await serviceRepository.updateMutableByIdAndBusiness(
-      id,
-      businessId,
-      { isActive: false },
-    );
-    if (!updated) throw new NotFoundError("El servicio que intenta eliminar no existe");
-    return updated;
-  }
-
-  const deleted = await serviceRepository.deleteByIdAndBusiness(id, businessId);
-  if (!deleted) throw new NotFoundError("El servicio que intenta eliminar no existe");
-  return deleted;
+  const updated = await serviceRepository.updateMutableByIdAndBusiness(
+    id,
+    businessId,
+    { isActive: false },
+  );
+  if (!updated) throw new NotFoundError("El servicio que intenta desactivar no existe");
+  return updated;
 };
