@@ -3,6 +3,7 @@ import type {
   Appointment,
   ApiResponse,
   Shift,
+  ShiftWriteInput,
   BusinessConfig,
   BusinessConfigPayload,
   CreateSaasBusinessInput,
@@ -209,7 +210,15 @@ export async function deactivateAdminService(serviceId: string) {
 }
 
 export async function getWorkerShifts(workerId: string) {
-  const data = await apiFetch<ApiResponse<Shift[]>>(`/availability/shifts/${workerId}`);
+  const data = await apiFetch<ApiResponse<Shift[]>>(`/availability/shifts/${encodeURIComponent(workerId)}`);
+  return data.payload;
+}
+
+export async function saveWorkerShift(input: ShiftWriteInput) {
+  const data = await apiFetch<ApiResponse<Shift>>("/availability/shifts", {
+    method: 'POST',
+    body: input
+  });
   return data.payload;
 }
 
