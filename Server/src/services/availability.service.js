@@ -13,8 +13,84 @@ import { parseStrictISODate } from "../utils/date.js";
 import { timeToMinutes, minutesToTime, checkOverlap } from "../utils/time.js";
 import { DEFAULT_SLOT_DURATION_MINUTES } from "../config/businessConfig.defaults.js";
 
+const DEFAULT_SHIFT_STATE = Object.freeze({
+  isOpen: false,
+  startTime: "09:00",
+  endTime: "18:00",
+  breaks: [],
+});
+
+const asShiftState = (shift) => ({
+  isOpen: shift?.isOpen ?? DEFAULT_SHIFT_STATE.isOpen,
+  startTime: shift?.startTime ?? DEFAULT_SHIFT_STATE.startTime,
+  endTime: shift?.endTime ?? DEFAULT_SHIFT_STATE.endTime,
+  breaks: Array.isArray(shift?.breaks)
+    ? shift.breaks.map((entry) => ({ startTime: entry.startTime, endTime: entry.endTime }))
+    : [],
+});
+
+export const assertValidShiftState = (shift) => {
+  if (!shift.isOpen) return shift;
+
+  const start = timeToMinutes(shift.startTime);
+  const end = timeToMinutes(shift.endTime);
+  if (start >= end) {
+    throw new ValidationError("La hora de inicio debe ser anterior a la hora de término");
+  }
+
+  const orderedBreaks = shift.breaks
+    .map((entry) => ({
+      ...entry,
+      start: timeToMinutes(entry.startTime),
+      end: timeToMinutes(entry.endTime),
+    }))
+    .sort((left, right) => left.start - right.start);
+
+  for (let index = 0; index < orderedBreaks.length; index += 1) {
+    const current = orderedBreaks[index];
+    if (current.start >= current.end) {
+      throw new ValidationError("Cada descanso debe comenzar antes de terminar");
+    }
+    if (current.start < start || current.end > end) {
+      throw new ValidationError("Los descansos deben estar contenidos dentro de la jornada");
+    }
+    if (index > 0 && current.start < orderedBreaks[index - 1].end) {
+      throw new ValidationError("Los descansos no pueden solaparse entre sí");
+    }
+  }
+
+  return shift;
+};
+
 export const resolveActiveWorkerInTenant = async (workerId, businessId) =>
   resolveBookableTenantParticipant(workerId, businessId);
+
+export const saveWorkerShift = async ({ businessId, workerId, dayOfWeek, patch }) => {
+  await resolveBookableTenantParticipant(workerId, businessId);
+
+  const existing = await shiftRepository.findByBusinessWorkerAndDay(
+    businessId,
+    workerId,
+    dayOfWeek,
+  );
+  const existingState = asShiftState(existing);
+  const finalState = {
+    ...existingState,
+    ...patch,
+    breaks: patch.breaks !== undefined
+      ? patch.breaks.map((entry) => ({ ...entry }))
+      : existingState.breaks,
+  };
+
+  assertValidShiftState(finalState);
+
+  return shiftRepository.upsertByBusinessWorkerAndDay(
+    businessId,
+    workerId,
+    dayOfWeek,
+    finalState,
+  );
+};
 
 export const getAvailableSlots = async (workerId, dateStr, serviceId, businessId, excludeAppointmentId = null) => {
   if (!businessId) throw new ValidationError("El contexto de negocio es obligatorio para consultar disponibilidad");

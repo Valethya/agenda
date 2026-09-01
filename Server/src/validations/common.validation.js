@@ -3,6 +3,7 @@ import { z } from "zod";
 // --- Helpers reutilizables ---
 const objectId = z.string().regex(/^[0-9a-fA-F]{24}$/, "ID inválido (debe ser un ObjectId de MongoDB)");
 const timeHHMM = z.string().regex(/^\d{2}:\d{2}$/, "Formato de hora inválido (use HH:MM)");
+const shiftTimeHHMM = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, "Formato de hora inválido (use HH:MM)");
 
 // --- Params comunes ---
 export const objectIdParamSchema = z.object({
@@ -111,7 +112,12 @@ export const switchBusinessSchema = z.object({
 });
 
 // --- Availability: Shifts ---
-// Verificado: availability.controller.js:54 desestructura { workerId, dayOfWeek, isOpen, startTime, endTime, breaks }
+// El write boundary es estricto: ningún campo de autoridad tenant puede pasar al controller.
+const shiftBreakSchema = z.object({
+  startTime: shiftTimeHHMM,
+  endTime: shiftTimeHHMM,
+}).strict();
+
 export const saveShiftSchema = z.object({
   body: z.object({
     workerId: objectId.describe("ID del trabajador"),
@@ -120,13 +126,10 @@ export const saveShiftSchema = z.object({
       .min(0, "El día debe ser entre 0 (Domingo) y 6 (Sábado)")
       .max(6, "El día debe ser entre 0 (Domingo) y 6 (Sábado)"),
     isOpen: z.boolean().optional(),
-    startTime: timeHHMM.optional(),
-    endTime: timeHHMM.optional(),
-    breaks: z.array(z.object({
-      startTime: timeHHMM,
-      endTime: timeHHMM,
-    })).optional(),
-  }),
+    startTime: shiftTimeHHMM.optional(),
+    endTime: shiftTimeHHMM.optional(),
+    breaks: z.array(shiftBreakSchema).optional(),
+  }).strict(),
 });
 
 // --- BusinessConfig (PUT /business-settings) ---
