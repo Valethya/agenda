@@ -84,6 +84,14 @@ const slotsForMonday = async () => {
   return (await json(response)).payload;
 };
 
+const slotsForSunday = async () => {
+  const response = await request(
+    `/availability/slots?workerId=${seed.worker._id}&serviceId=${seed.service._id}&date=2099-04-05&slug=${seed.business.slug}`,
+  );
+  assert.equal(response.status, 200);
+  return (await json(response)).payload;
+};
+
 const slotAt = (slots, startTime) => slots.find((slot) => slot.startTime === startTime);
 
 test("F admin availability schedule hardening", async (t) => {
@@ -231,6 +239,51 @@ test("F admin availability schedule hardening", async (t) => {
     });
     assert.equal(persisted.startTime, "09:00");
     assert.equal(persisted.endTime, "18:00");
+  });
+
+  await t.test("missing Shift stays closed after partial write until explicitly opened", async () => {
+    await Shift.deleteOne({
+      business: seed.business._id,
+      worker: seed.worker._id,
+      dayOfWeek: 0,
+    });
+    assert.equal(await Shift.exists({
+      business: seed.business._id,
+      worker: seed.worker._id,
+      dayOfWeek: 0,
+    }), null);
+
+    const partial = await postShift(adminA.cookie, {
+      workerId: seed.worker._id.toString(),
+      dayOfWeek: 0,
+      startTime: "10:00",
+    });
+    assert.equal(partial.status, 200);
+    const persistedClosed = await Shift.findOne({
+      business: seed.business._id,
+      worker: seed.worker._id,
+      dayOfWeek: 0,
+    });
+    assert.ok(persistedClosed);
+    assert.equal(persistedClosed.isOpen, false);
+    assert.equal(persistedClosed.startTime, "10:00");
+    assert.equal(persistedClosed.endTime, "18:00");
+
+    let slots = await slotsForSunday();
+    assert.ok(slots.length > 0);
+    assert.ok(slots.every((slot) => slot.available === false));
+
+    const explicitOpen = await postShift(adminA.cookie, {
+      workerId: seed.worker._id.toString(),
+      dayOfWeek: 0,
+      isOpen: true,
+      startTime: "10:00",
+      endTime: "18:00",
+      breaks: [],
+    });
+    assert.equal(explicitOpen.status, 200);
+    slots = await slotsForSunday();
+    assert.equal(slotAt(slots, "10:00")?.available, true);
   });
 
   await t.test("closed day yields no available slots and reopening uses breaks immediately", async () => {
