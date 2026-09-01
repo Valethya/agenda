@@ -11,8 +11,15 @@ export const findByBusinessWorkerAndDay = async (businessId, workerId, dayOfWeek
 export const upsertByBusinessWorkerAndDay = async (businessId, workerId, dayOfWeek, shiftData) => {
   return await Shift.findOneAndUpdate(
     { business: businessId, worker: workerId, dayOfWeek },
-    { ...shiftData, business: businessId, worker: workerId, dayOfWeek },
-    { new: true, upsert: true, runValidators: true }
+    {
+      $set: {
+        ...shiftData,
+        business: businessId,
+        worker: workerId,
+        dayOfWeek,
+      },
+    },
+    { new: true, upsert: true, runValidators: true, setDefaultsOnInsert: true }
   );
 };
 
