@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import styles from './ProfessionalScheduleCard.module.scss';
 import type { Break, Shift, TeamMembership } from '../types';
 import * as api from '../services/api';
@@ -11,6 +11,7 @@ import {
   reconcileScheduleEditor,
   type ScheduleEditorState
 } from '../features/availability/scheduleEditorState';
+import { runWithScheduleSaveGuard } from '../features/availability/scheduleSaveGuard';
 import { timeToMinutes } from '../utils/time';
 
 interface ProfessionalScheduleCardProps {
@@ -37,6 +38,7 @@ export const ProfessionalScheduleCard: React.FC<ProfessionalScheduleCardProps> =
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
+  const saveGuard = useRef(false);
 
   const { canonicalSchedule, draftSchedule, dirtyDays, saving } = editor;
 
@@ -102,23 +104,26 @@ export const ProfessionalScheduleCard: React.FC<ProfessionalScheduleCardProps> =
   };
 
   const saveChanges = async () => {
-    const savingState = beginScheduleSave(editor);
-    if (savingState === editor) return;
-    setEditor(savingState);
-    setError(null);
-    setSuccess(null);
+    await runWithScheduleSaveGuard(saveGuard, async () => {
+      const savingState = beginScheduleSave(editor);
+      if (savingState === editor) return;
 
-    const result = await persistPreparedSchedule(savingState, member.userId, {
-      saveShift: api.saveWorkerShift,
-      loadShifts: async () => api.getWorkerShifts(member.userId)
+      setEditor(savingState);
+      setError(null);
+      setSuccess(null);
+
+      const result = await persistPreparedSchedule(savingState, member.userId, {
+        saveShift: api.saveWorkerShift,
+        loadShifts: async () => api.getWorkerShifts(member.userId)
+      });
+      setEditor(result.state);
+
+      if (result.error) {
+        setError(result.error instanceof Error ? result.error.message : 'No se pudieron guardar los horarios.');
+        return;
+      }
+      setSuccess('Horarios guardados correctamente.');
     });
-    setEditor(result.state);
-
-    if (result.error) {
-      setError(result.error instanceof Error ? result.error.message : 'No se pudieron guardar los horarios.');
-      return;
-    }
-    setSuccess('Horarios guardados correctamente.');
   };
 
   return (
