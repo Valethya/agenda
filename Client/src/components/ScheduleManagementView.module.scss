@@ -1,0 +1,67 @@
+@use '../styles/variables' as *;
+
+.view {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.title {
+  margin: 0;
+  font-family: $font-serif;
+  font-size: 1.55rem;
+  font-weight: 400;
+  color: $texto;
+}
+
+.subtitle {
+  margin: 0.3rem 0 0;
+  font-size: 0.78rem;
+  color: $texto-muted;
+}
+
+.editButton {
+  border: 1px solid $borde;
+  border-radius: 4px;
+  background: $blanco;
+  color: $texto;
+  padding: 0.65rem 0.9rem;
+  cursor: pointer;
+}
+
+.selectorLabel {
+  font-size: 0.65rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: $texto-muted;
+}
+
+.selector {
+  width: min(100%, 420px);
+  border: 1px solid $borde;
+  border-radius: 4px;
+  background: $blanco;
+  color: $texto;
+  padding: 0.7rem 0.8rem;
+}
+
+.state,
+.notice {
+  padding: 1.2rem;
+  border: 1px solid $borde;
+  border-radius: 6px;
+  background: $blanco;
+  color: $texto-muted;
+}
+
+.error {
+  color: #8a2f2f;
+}
