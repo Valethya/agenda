@@ -29,7 +29,14 @@ router.get(
   getWorkerShifts,
 );
 
-router.post("/shifts", scopeBusiness, isAuthenticated, isWorkerOrAdmin, validate(saveShiftSchema), saveShift);
+router.post(
+  "/shifts",
+  scopeBusiness,
+  isAuthenticated,
+  isWorkerOrAdmin,
+  validate(saveShiftSchema, { assignBody: "validatedShiftInput" }),
+  saveShift,
+);
 router.post("/blocks", scopeBusiness, isAuthenticated, isWorkerOrAdmin, validate(createBlockSchema), createBlock);
 router.delete("/blocks/:id", scopeBusiness, isAuthenticated, isWorkerOrAdmin, validate(objectIdParamSchema), deleteBlock);
 
