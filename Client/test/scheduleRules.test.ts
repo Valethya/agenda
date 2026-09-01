@@ -10,6 +10,14 @@ import {
   filterScheduleCandidates,
   mergeCanonicalShift
 } from '../src/features/availability/scheduleRules.ts';
+import {
+  beginScheduleSave,
+  createScheduleEditorState,
+  discardScheduleDraft,
+  editScheduleDay,
+  persistPreparedSchedule,
+  reconcileScheduleEditor
+} from '../src/features/availability/scheduleEditorState.ts';
 
 const member = (overrides: Partial<TeamMembership> = {}): TeamMembership => ({
   membershipId: '64f000000000000000000001',
@@ -47,16 +55,134 @@ test('Horarios deriva candidatos exclusivamente de Team activo + bookable', () =
 });
 
 test('se representan siempre siete días y la ausencia de Shift es día cerrado', () => {
-  const schedule = buildSevenDaySchedule('worker-a', [
+  const state = createScheduleEditorState('worker-a', [
     shift({ worker: 'worker-a', dayOfWeek: 1, isOpen: true })
   ]);
 
-  assert.deepEqual(schedule.map((day) => day.dayOfWeek), [1, 2, 3, 4, 5, 6, 0]);
-  assert.equal(schedule.length, 7);
-  assert.equal(schedule[0].isOpen, true);
-  assert.equal(schedule[1].isOpen, false);
-  assert.equal(schedule[1].startTime, '09:00');
-  assert.equal(schedule[1].endTime, '18:00');
+  assert.deepEqual(state.draftSchedule.map((day) => day.dayOfWeek), [1, 2, 3, 4, 5, 6, 0]);
+  assert.equal(state.draftSchedule.length, 7);
+  assert.equal(state.draftSchedule[0].isOpen, true);
+  assert.equal(state.draftSchedule[1].isOpen, false);
+  assert.equal(state.dirtyDays.length, 0);
+});
+
+test('cargar un día ausente no dispara guardado ni marca dirty state', async () => {
+  const state = createScheduleEditorState('worker-a', []);
+  let saveCalls = 0;
+  const result = await persistPreparedSchedule(state, 'worker-a', {
+    saveShift: async () => {
+      saveCalls += 1;
+      return shift();
+    },
+    loadShifts: async () => []
+  });
+
+  assert.equal(saveCalls, 0);
+  assert.equal(result.state.dirtyDays.length, 0);
+  assert.equal(result.state.draftSchedule.every((day) => day.isOpen === false), true);
+});
+
+test('editar un único día marca exclusivamente ese día', () => {
+  const initial = createScheduleEditorState('worker-a', []);
+  const edited = editScheduleDay(initial, 3, (day) => ({ ...day, isOpen: true }));
+
+  assert.deepEqual(edited.dirtyDays, [3]);
+  assert.equal(edited.draftSchedule.find((day) => day.dayOfWeek === 3)?.isOpen, true);
+  assert.equal(edited.draftSchedule.find((day) => day.dayOfWeek === 2)?.isOpen, false);
+});
+
+test('guardar persiste exclusivamente días modificados y usa respuesta canónica', async () => {
+  let state = createScheduleEditorState('worker-a', []);
+  state = editScheduleDay(state, 4, (day) => ({
+    ...day,
+    isOpen: true,
+    startTime: '10:00',
+    endTime: '17:00'
+  }));
+  state = beginScheduleSave(state);
+
+  const payloads: Array<ReturnType<typeof buildShiftWriteInput>> = [];
+  const result = await persistPreparedSchedule(state, 'worker-a', {
+    saveShift: async (payload) => {
+      payloads.push(payload);
+      return shift({
+        worker: 'worker-a',
+        dayOfWeek: payload.dayOfWeek,
+        isOpen: payload.isOpen,
+        startTime: '10:30',
+        endTime: '16:30',
+        breaks: payload.breaks
+      });
+    },
+    loadShifts: async () => []
+  });
+
+  assert.deepEqual(payloads.map((payload) => payload.dayOfWeek), [4]);
+  assert.equal(result.error, null);
+  assert.equal(result.state.canonicalSchedule.find((day) => day.dayOfWeek === 4)?.startTime, '10:30');
+  assert.equal(result.state.draftSchedule.find((day) => day.dayOfWeek === 4)?.endTime, '16:30');
+  assert.deepEqual(result.state.dirtyDays, []);
+  assert.equal(result.state.saving, false);
+});
+
+test('saving bloquea doble submit y nuevas ediciones', () => {
+  let state = createScheduleEditorState('worker-a', []);
+  state = editScheduleDay(state, 2, (day) => ({ ...day, isOpen: true }));
+  const saving = beginScheduleSave(state);
+  const secondBegin = beginScheduleSave(saving);
+  const attemptedEdit = editScheduleDay(saving, 3, (day) => ({ ...day, isOpen: true }));
+
+  assert.equal(saving.saving, true);
+  assert.equal(secondBegin, saving);
+  assert.equal(attemptedEdit, saving);
+  assert.deepEqual(saving.dirtyDays, [2]);
+});
+
+test('fallo de guardado recarga autoridad y elimina optimismo falso', async () => {
+  let state = createScheduleEditorState('worker-a', [
+    shift({ worker: 'worker-a', dayOfWeek: 1, startTime: '09:00' })
+  ]);
+  state = editScheduleDay(state, 1, (day) => ({ ...day, startTime: '12:00' }));
+  state = beginScheduleSave(state);
+  let reloads = 0;
+
+  const result = await persistPreparedSchedule(state, 'worker-a', {
+    saveShift: async () => { throw new Error('rechazado'); },
+    loadShifts: async () => {
+      reloads += 1;
+      return [shift({ worker: 'worker-a', dayOfWeek: 1, startTime: '08:30', endTime: '17:30' })];
+    }
+  });
+
+  assert.equal(reloads, 1);
+  assert.match((result.error as Error).message, /rechazado/);
+  assert.equal(result.state.canonicalSchedule.find((day) => day.dayOfWeek === 1)?.startTime, '08:30');
+  assert.equal(result.state.draftSchedule.find((day) => day.dayOfWeek === 1)?.startTime, '08:30');
+  assert.deepEqual(result.state.dirtyDays, []);
+  assert.equal(result.state.saving, false);
+});
+
+test('cerrar edición sin guardar descarta draft y restaura canónico', () => {
+  let state = createScheduleEditorState('worker-a', [shift({ worker: 'worker-a', dayOfWeek: 1 })]);
+  state = editScheduleDay(state, 1, (day) => ({ ...day, startTime: '14:00' }));
+  const discarded = discardScheduleDraft(state);
+
+  assert.equal(discarded.draftSchedule.find((day) => day.dayOfWeek === 1)?.startTime, '09:00');
+  assert.equal(discarded.canonicalSchedule.find((day) => day.dayOfWeek === 1)?.startTime, '09:00');
+  assert.deepEqual(discarded.dirtyDays, []);
+});
+
+test('cambiar profesional reemplaza estado y no conserva dirty state anterior', () => {
+  let state = createScheduleEditorState('worker-a', []);
+  state = editScheduleDay(state, 5, (day) => ({ ...day, isOpen: true }));
+  const nextProfessional = reconcileScheduleEditor('worker-b', [
+    shift({ worker: 'worker-b', dayOfWeek: 2, startTime: '11:00' })
+  ]);
+
+  assert.deepEqual(state.dirtyDays, [5]);
+  assert.deepEqual(nextProfessional.dirtyDays, []);
+  assert.equal(nextProfessional.draftSchedule.every((day) => day.worker === 'worker-b'), true);
+  assert.equal(nextProfessional.draftSchedule.find((day) => day.dayOfWeek === 2)?.startTime, '11:00');
 });
 
 test('payload de Shift sólo contiene campos funcionales de horario', () => {
@@ -82,7 +208,7 @@ test('payload de Shift sólo contiene campos funcionales de horario', () => {
   }
 });
 
-test('estado canónico sólo se reemplaza con la respuesta confirmada', () => {
+test('merge canónico conserva la respuesta confirmada del backend', () => {
   const schedule = buildSevenDaySchedule('worker-a', [shift({ worker: 'worker-a' })]);
   const confirmed = shift({
     worker: 'worker-a',
@@ -97,10 +223,9 @@ test('estado canónico sólo se reemplaza con la respuesta confirmada', () => {
   assert.deepEqual(next.find((day) => day.dayOfWeek === 1)?.breaks, confirmed.breaks);
 });
 
-test('la vista Horarios usa Team, edición real y reconciliación canónica', () => {
+test('policy auxiliar: la vista administrativa sigue usando Team y no workers legacy', () => {
   const apiSource = readFileSync(new URL('../src/services/api.ts', import.meta.url), 'utf8');
   const viewSource = readFileSync(new URL('../src/components/ScheduleManagementView.tsx', import.meta.url), 'utf8');
-  const cardSource = readFileSync(new URL('../src/components/ProfessionalScheduleCard.tsx', import.meta.url), 'utf8');
   const dashboardSource = readFileSync(new URL('../src/components/AdminDashboard.tsx', import.meta.url), 'utf8');
   const rulesSource = readFileSync(new URL('../src/features/availability/scheduleRules.ts', import.meta.url), 'utf8');
 
@@ -110,22 +235,5 @@ test('la vista Horarios usa Team, edición real y reconciliación canónica', ()
   assert.doesNotMatch(viewSource, /getWorkers|internal\/users\/workers/);
   assert.doesNotMatch(rulesSource, /member\.role\s*===\s*['"]worker['"]|role\s*===\s*['"]worker['"]/);
   assert.match(dashboardSource, /viewType === 'horarios'.*<ScheduleManagementView/s);
-  assert.match(viewSource, /Editar horarios/);
-  assert.match(viewSource, /setEditing/);
-
-  assert.match(cardSource, /type="checkbox"/);
-  assert.match(cardSource, /type="time"/);
-  assert.match(cardSource, /Añadir descanso/);
-  assert.match(cardSource, /Quitar/);
-  assert.match(cardSource, /Guardar cambios/);
-  assert.match(cardSource, /saving \|\| dirtyDays\.size === 0/);
-  assert.match(cardSource, /api\.saveWorkerShift/);
-  assert.match(cardSource, /mergeCanonicalShift/);
-  assert.match(cardSource, /await loadCanonicalSchedule\(\)/);
-  assert.match(cardSource, /Horarios guardados correctamente/);
-  assert.match(cardSource, /setError/);
-
   assert.match(apiSource, /getTeam\(\)/);
-  assert.match(apiSource, /saveWorkerShift/);
-  assert.match(apiSource, /POST|method: 'POST'/);
 });
