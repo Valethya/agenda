@@ -1,11 +1,21 @@
 import type { Shift } from '../../types';
-import { buildSevenDaySchedule, mergeCanonicalShift } from './scheduleRules';
+import { buildSevenDaySchedule, buildShiftWriteInput, mergeCanonicalShift } from './scheduleRules';
 
 export interface ScheduleEditorState {
   canonicalSchedule: Shift[];
   draftSchedule: Shift[];
   dirtyDays: number[];
   saving: boolean;
+}
+
+export interface ScheduleSaveDependencies {
+  saveShift: (input: ReturnType<typeof buildShiftWriteInput>) => Promise<Shift>;
+  loadShifts: () => Promise<Shift[]>;
+}
+
+export interface ScheduleSaveResult {
+  state: ScheduleEditorState;
+  error: unknown | null;
 }
 
 export const cloneSchedule = (schedule: Shift[]): Shift[] => schedule.map((shift) => ({
@@ -73,3 +83,39 @@ export const discardScheduleDraft = (state: ScheduleEditorState): ScheduleEditor
   dirtyDays: [],
   saving: false
 });
+
+export const persistPreparedSchedule = async (
+  state: ScheduleEditorState,
+  workerId: string,
+  dependencies: ScheduleSaveDependencies
+): Promise<ScheduleSaveResult> => {
+  if (!state.saving || state.dirtyDays.length === 0) {
+    return { state, error: null };
+  }
+
+  try {
+    const savedShifts: Shift[] = [];
+    for (const dayOfWeek of [...state.dirtyDays].sort((left, right) => left - right)) {
+      const day = state.draftSchedule.find((shift) => shift.dayOfWeek === dayOfWeek);
+      if (!day) continue;
+      savedShifts.push(await dependencies.saveShift(buildShiftWriteInput(workerId, day)));
+    }
+    return {
+      state: applyCanonicalSaveResponses(state, savedShifts),
+      error: null
+    };
+  } catch (error) {
+    try {
+      const shifts = await dependencies.loadShifts();
+      return {
+        state: reconcileScheduleEditor(workerId, shifts),
+        error
+      };
+    } catch {
+      return {
+        state: discardScheduleDraft({ ...state, saving: false }),
+        error
+      };
+    }
+  }
+};
