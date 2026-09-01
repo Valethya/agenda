@@ -2,11 +2,16 @@ import React, { useEffect, useMemo, useState } from 'react';
 import styles from './ProfessionalScheduleCard.module.scss';
 import type { Break, Shift, TeamMembership } from '../types';
 import * as api from '../services/api';
+import { buildShiftWriteInput } from '../features/availability/scheduleRules';
 import {
-  buildSevenDaySchedule,
-  buildShiftWriteInput,
-  mergeCanonicalShift
-} from '../features/availability/scheduleRules';
+  applyCanonicalSaveResponses,
+  beginScheduleSave,
+  createScheduleEditorState,
+  discardScheduleDraft,
+  editScheduleDay,
+  reconcileScheduleEditor,
+  type ScheduleEditorState
+} from '../features/availability/scheduleEditorState';
 import { timeToMinutes } from '../utils/time';
 
 interface ProfessionalScheduleCardProps {
@@ -16,10 +21,12 @@ interface ProfessionalScheduleCardProps {
 
 const DAYS_LABEL = ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'];
 
-const cloneSchedule = (schedule: Shift[]): Shift[] => schedule.map((shift) => ({
-  ...shift,
-  breaks: shift.breaks.map((entry) => ({ ...entry }))
-}));
+const EMPTY_EDITOR: ScheduleEditorState = {
+  canonicalSchedule: [],
+  draftSchedule: [],
+  dirtyDays: [],
+  saving: false
+};
 
 const getInitials = (name: string | null) => {
   const parts = (name || 'P').trim().split(/\s+/).filter(Boolean);
@@ -27,21 +34,18 @@ const getInitials = (name: string | null) => {
 };
 
 export const ProfessionalScheduleCard: React.FC<ProfessionalScheduleCardProps> = ({ member, editable }) => {
-  const [canonicalSchedule, setCanonicalSchedule] = useState<Shift[]>([]);
-  const [draftSchedule, setDraftSchedule] = useState<Shift[]>([]);
-  const [dirtyDays, setDirtyDays] = useState<Set<number>>(new Set());
+  const [editor, setEditor] = useState<ScheduleEditorState>(EMPTY_EDITOR);
   const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
 
+  const { canonicalSchedule, draftSchedule, dirtyDays, saving } = editor;
+
   const loadCanonicalSchedule = async () => {
     const shifts = await api.getWorkerShifts(member.userId);
-    const normalized = buildSevenDaySchedule(member.userId, shifts || []);
-    setCanonicalSchedule(normalized);
-    setDraftSchedule(cloneSchedule(normalized));
-    setDirtyDays(new Set());
-    return normalized;
+    const next = reconcileScheduleEditor(member.userId, shifts || []);
+    setEditor(next);
+    return next;
   };
 
   useEffect(() => {
@@ -53,10 +57,7 @@ export const ProfessionalScheduleCard: React.FC<ProfessionalScheduleCardProps> =
         setError(null);
         const shifts = await api.getWorkerShifts(member.userId);
         if (cancelled) return;
-        const normalized = buildSevenDaySchedule(member.userId, shifts || []);
-        setCanonicalSchedule(normalized);
-        setDraftSchedule(cloneSchedule(normalized));
-        setDirtyDays(new Set());
+        setEditor(createScheduleEditorState(member.userId, shifts || []));
       } catch (loadError) {
         if (!cancelled) {
           setError(loadError instanceof Error ? loadError.message : 'No se pudieron cargar los horarios.');
@@ -72,12 +73,11 @@ export const ProfessionalScheduleCard: React.FC<ProfessionalScheduleCardProps> =
 
   useEffect(() => {
     if (!editable && !saving) {
-      setDraftSchedule(cloneSchedule(canonicalSchedule));
-      setDirtyDays(new Set());
+      setEditor((current) => discardScheduleDraft(current));
       setError(null);
       setSuccess(null);
     }
-  }, [editable, saving, canonicalSchedule]);
+  }, [editable, saving]);
 
   const totalHours = useMemo(() => draftSchedule.reduce((total, shift) => {
     if (!shift.isOpen) return total;
@@ -89,11 +89,8 @@ export const ProfessionalScheduleCard: React.FC<ProfessionalScheduleCardProps> =
   }, 0), [draftSchedule]);
 
   const updateDay = (dayOfWeek: number, updater: (shift: Shift) => Shift) => {
-    if (!editable || saving) return;
-    setDraftSchedule((current) => current.map((shift) =>
-      shift.dayOfWeek === dayOfWeek ? updater(shift) : shift
-    ));
-    setDirtyDays((current) => new Set(current).add(dayOfWeek));
+    if (!editable) return;
+    setEditor((current) => editScheduleDay(current, dayOfWeek, updater));
     setSuccess(null);
     setError(null);
   };
@@ -106,33 +103,28 @@ export const ProfessionalScheduleCard: React.FC<ProfessionalScheduleCardProps> =
   };
 
   const saveChanges = async () => {
-    if (saving || dirtyDays.size === 0) return;
-    setSaving(true);
+    const savingState = beginScheduleSave(editor);
+    if (savingState === editor) return;
+    setEditor(savingState);
     setError(null);
     setSuccess(null);
 
     try {
-      let nextCanonical = cloneSchedule(canonicalSchedule);
-      for (const dayOfWeek of Array.from(dirtyDays).sort((left, right) => left - right)) {
-        const day = draftSchedule.find((shift) => shift.dayOfWeek === dayOfWeek);
+      const savedShifts: Shift[] = [];
+      for (const dayOfWeek of [...savingState.dirtyDays].sort((left, right) => left - right)) {
+        const day = savingState.draftSchedule.find((shift) => shift.dayOfWeek === dayOfWeek);
         if (!day) continue;
-        const saved = await api.saveWorkerShift(buildShiftWriteInput(member.userId, day));
-        nextCanonical = mergeCanonicalShift(nextCanonical, saved);
+        savedShifts.push(await api.saveWorkerShift(buildShiftWriteInput(member.userId, day)));
       }
-      setCanonicalSchedule(nextCanonical);
-      setDraftSchedule(cloneSchedule(nextCanonical));
-      setDirtyDays(new Set());
+      setEditor((current) => applyCanonicalSaveResponses(current, savedShifts));
       setSuccess('Horarios guardados correctamente.');
     } catch (saveError) {
       try {
         await loadCanonicalSchedule();
       } catch {
-        setDraftSchedule(cloneSchedule(canonicalSchedule));
-        setDirtyDays(new Set());
+        setEditor((current) => discardScheduleDraft({ ...current, saving: false }));
       }
       setError(saveError instanceof Error ? saveError.message : 'No se pudieron guardar los horarios.');
-    } finally {
-      setSaving(false);
     }
   };
 
@@ -262,7 +254,7 @@ export const ProfessionalScheduleCard: React.FC<ProfessionalScheduleCardProps> =
           <button
             type="button"
             className={styles.saveButton}
-            disabled={saving || dirtyDays.size === 0}
+            disabled={saving || dirtyDays.length === 0}
             onClick={() => void saveChanges()}
           >
             {saving ? 'Guardando...' : 'Guardar cambios'}
