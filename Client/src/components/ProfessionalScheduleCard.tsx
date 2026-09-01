@@ -2,13 +2,12 @@ import React, { useEffect, useMemo, useState } from 'react';
 import styles from './ProfessionalScheduleCard.module.scss';
 import type { Break, Shift, TeamMembership } from '../types';
 import * as api from '../services/api';
-import { buildShiftWriteInput } from '../features/availability/scheduleRules';
 import {
-  applyCanonicalSaveResponses,
   beginScheduleSave,
   createScheduleEditorState,
   discardScheduleDraft,
   editScheduleDay,
+  persistPreparedSchedule,
   reconcileScheduleEditor,
   type ScheduleEditorState
 } from '../features/availability/scheduleEditorState';
@@ -109,23 +108,17 @@ export const ProfessionalScheduleCard: React.FC<ProfessionalScheduleCardProps> =
     setError(null);
     setSuccess(null);
 
-    try {
-      const savedShifts: Shift[] = [];
-      for (const dayOfWeek of [...savingState.dirtyDays].sort((left, right) => left - right)) {
-        const day = savingState.draftSchedule.find((shift) => shift.dayOfWeek === dayOfWeek);
-        if (!day) continue;
-        savedShifts.push(await api.saveWorkerShift(buildShiftWriteInput(member.userId, day)));
-      }
-      setEditor((current) => applyCanonicalSaveResponses(current, savedShifts));
-      setSuccess('Horarios guardados correctamente.');
-    } catch (saveError) {
-      try {
-        await loadCanonicalSchedule();
-      } catch {
-        setEditor((current) => discardScheduleDraft({ ...current, saving: false }));
-      }
-      setError(saveError instanceof Error ? saveError.message : 'No se pudieron guardar los horarios.');
+    const result = await persistPreparedSchedule(savingState, member.userId, {
+      saveShift: api.saveWorkerShift,
+      loadShifts: async () => api.getWorkerShifts(member.userId)
+    });
+    setEditor(result.state);
+
+    if (result.error) {
+      setError(result.error instanceof Error ? result.error.message : 'No se pudieron guardar los horarios.');
+      return;
     }
+    setSuccess('Horarios guardados correctamente.');
   };
 
   return (
