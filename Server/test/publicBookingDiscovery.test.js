@@ -151,6 +151,42 @@ test("G1 public booking discovery", async (t) => {
     assert.deepStrictEqual(ids(data.payload), [serviceA._id.toString()]);
   });
 
+  await t.test("businessId=A + slug=B falla cerrado en las tres superficies G1", async () => {
+    const conflictingTenant = `businessId=${businessA._id}&slug=${businessB.slug}`;
+    const responses = await Promise.all([
+      fetch(`${baseUrl}/services?${conflictingTenant}`),
+      fetch(`${baseUrl}/services/${serviceA._id}?${conflictingTenant}`),
+      fetch(`${baseUrl}/users/workers?${conflictingTenant}&serviceId=${serviceA._id}`),
+    ]);
+
+    for (const response of responses) {
+      assert.strictEqual(response.status, 400);
+      const data = await response.json();
+      assert.strictEqual(data.code, "VALIDATION_ERROR");
+    }
+  });
+
+  await t.test("businessId=A + slug=A conserva compatibilidad en las tres superficies G1", async () => {
+    const coherentTenant = `businessId=${businessA._id}&slug=${businessA.slug}`;
+
+    const services = await fetch(`${baseUrl}/services?${coherentTenant}`);
+    assert.strictEqual(services.status, 200);
+    const servicesData = await services.json();
+    assert.deepStrictEqual(ids(servicesData.payload), [serviceA._id.toString()]);
+
+    const service = await fetch(`${baseUrl}/services/${serviceA._id}?${coherentTenant}`);
+    assert.strictEqual(service.status, 200);
+    const serviceData = await service.json();
+    assert.strictEqual(serviceData.payload.id, serviceA._id.toString());
+
+    const professionals = await fetch(
+      `${baseUrl}/users/workers?${coherentTenant}&serviceId=${serviceA._id}`,
+    );
+    assert.strictEqual(professionals.status, 200);
+    const professionalsData = await professionals.json();
+    assert.deepStrictEqual(ids(professionalsData.payload), expectedVisibleProfessionals);
+  });
+
   await t.test("Service de Business B no aparece y Service inactivo no aparece", async () => {
     const response = await fetch(servicesUrl());
     const data = await response.json();
