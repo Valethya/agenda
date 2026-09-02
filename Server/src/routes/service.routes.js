@@ -13,13 +13,31 @@ import { bindResolvedPublicBusinessOrigin } from "../middleware/publicWebBrowser
 import { validate } from "../middleware/validate.middleware.js";
 import { createServiceSchema, updateServiceSchema } from "../validations/service.validation.js";
 import { objectIdParamSchema } from "../validations/common.validation.js";
+import {
+  publicServiceListSchema,
+  publicServiceLookupSchema,
+} from "../validations/publicBookingDiscovery.validation.js";
 
 const router = Router();
 
 // Estos paths son contractualmente públicos. Una cookie o header del caller no
 // puede convertirlos en lecturas administrativas. El panel usa /api/internal/services.
-router.get("/", scopePublicBusiness, bindResolvedPublicBusinessOrigin, getServices);
-router.get("/:id", scopePublicBusiness, bindResolvedPublicBusinessOrigin, validate(objectIdParamSchema), getService);
+// G1 mantiene esta superficie existente y endurece sus inputs sin crear una ruta
+// paralela de discovery.
+router.get(
+  "/",
+  scopePublicBusiness,
+  bindResolvedPublicBusinessOrigin,
+  validate(publicServiceListSchema),
+  getServices,
+);
+router.get(
+  "/:id",
+  scopePublicBusiness,
+  bindResolvedPublicBusinessOrigin,
+  validate(publicServiceLookupSchema),
+  getService,
+);
 
 // Mutaciones administrativas siempre usan autoridad tenant de sesión vigente.
 router.post(
