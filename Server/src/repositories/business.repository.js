@@ -42,6 +42,11 @@ export const toggleActiveWithBookingFence = async (businessId) => {
       const business = await Business.findById(businessId).session(session);
       if (!business) return;
 
+      // Conserva el mismo orden físico Business -> Membership usado por Team,
+      // evitando órdenes de lock administrativos invertidos.
+      business.isActive = !business.isActive;
+      await business.save({ session });
+
       // El estado del Business afecta a todos sus profesionales, pero los
       // bookings no comparten un lock global: la mutación administrativa toca
       // individualmente el fence de cada Membership del Business.
@@ -51,8 +56,6 @@ export const toggleActiveWithBookingFence = async (businessId) => {
         { session },
       );
 
-      business.isActive = !business.isActive;
-      await business.save({ session });
       result = business;
     });
     return result;
