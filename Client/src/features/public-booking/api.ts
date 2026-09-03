@@ -5,7 +5,7 @@ import type {
   PublicProfessional,
   PublicService,
   PublicSlot,
-} from './types';
+} from './types.ts';
 
 interface PublicBookingApiOptions {
   slug: string;
