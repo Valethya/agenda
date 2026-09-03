@@ -44,6 +44,11 @@ const userSchema = new mongoose.Schema(
       type: Boolean,
       default: true,
     },
+    bookingEligibilityRevision: {
+      type: Number,
+      default: 0,
+      select: false,
+    },
     resetPasswordToken: {
       type: String,
       select: false, // No se incluye por defecto en las consultas
