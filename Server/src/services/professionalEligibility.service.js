@@ -5,12 +5,20 @@ import { NotFoundError, ValidationError } from "../utils/appError.js";
 
 const PROFESSIONAL_NOT_AVAILABLE = "El profesional especificado no está disponible";
 let afterEligibilityReadTestHook = null;
+let afterEligibilityFenceTestHook = null;
 
 export const setAfterEligibilityReadTestHookForTests = (hook) => {
   if (process.env.NODE_ENV !== "test") {
     throw new Error("Los hooks de concurrencia sólo están disponibles en tests");
   }
   afterEligibilityReadTestHook = hook;
+};
+
+export const setAfterEligibilityFenceTestHookForTests = (hook) => {
+  if (process.env.NODE_ENV !== "test") {
+    throw new Error("Los hooks de concurrencia sólo están disponibles en tests");
+  }
+  afterEligibilityFenceTestHook = hook;
 };
 
 const asId = (value) => {
@@ -84,13 +92,15 @@ const fenceResolvedBookingEligibility = async ({
   session,
   notFoundMessage,
 }) => {
+  const context = {
+    businessId: asId(businessId),
+    userId: asId(userId),
+    membershipId: asId(participant.membership),
+    serviceId: asId(service),
+  };
+
   if (afterEligibilityReadTestHook) {
-    await afterEligibilityReadTestHook({
-      businessId: asId(businessId),
-      userId: asId(userId),
-      membershipId: asId(participant.membership),
-      serviceId: asId(service),
-    });
+    await afterEligibilityReadTestHook(context);
   }
 
   // El fence físico es per-worker/per-Business sobre su Membership. Las
@@ -105,6 +115,12 @@ const fenceResolvedBookingEligibility = async ({
     session,
   });
   if (!fencedMembership) throw new NotFoundError(notFoundMessage);
+
+  // Sólo tests: esta barrera ocurre después del write físico del fence y antes
+  // de que el booking continúe hacia overlap/insert/commit.
+  if (afterEligibilityFenceTestHook) {
+    await afterEligibilityFenceTestHook(context);
+  }
 };
 
 export const assertServiceBookingEligibility = async ({
