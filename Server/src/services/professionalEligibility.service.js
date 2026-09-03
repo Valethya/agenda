@@ -1,9 +1,19 @@
 import mongoose from "mongoose";
 import * as userRepository from "../repositories/user.repository.js";
 import * as membershipRepository from "../repositories/membership.repository.js";
+import * as businessRepository from "../repositories/business.repository.js";
+import * as serviceRepository from "../repositories/service.repository.js";
 import { NotFoundError, ValidationError } from "../utils/appError.js";
 
 const PROFESSIONAL_NOT_AVAILABLE = "El profesional especificado no está disponible";
+let afterEligibilityReadTestHook = null;
+
+export const setAfterEligibilityReadTestHookForTests = (hook) => {
+  if (process.env.NODE_ENV !== "test") {
+    throw new Error("Los hooks de concurrencia sólo están disponibles en tests");
+  }
+  afterEligibilityReadTestHook = hook;
+};
 
 const asId = (value) => {
   const candidate = value?._id ?? value;
@@ -68,6 +78,50 @@ export const resolveBookableTenantParticipant = async (
   return participant;
 };
 
+const fenceResolvedBookingEligibility = async ({
+  participant,
+  service,
+  userId,
+  businessId,
+  session,
+  notFoundMessage,
+}) => {
+  if (afterEligibilityReadTestHook) {
+    await afterEligibilityReadTestHook({
+      businessId: asId(businessId),
+      userId: asId(userId),
+      membershipId: asId(participant.membership),
+      serviceId: asId(service),
+    });
+  }
+
+  // Orden estable de writes: Business -> Membership -> User -> Service.
+  // Cada fence toca el mismo documento que las mutaciones administrativas
+  // relevantes. Si una de ellas committed después del snapshot leído arriba,
+  // Mongo produce write conflict y withTransaction reintenta la revalidación.
+  const fencedBusiness = await businessRepository.fenceBookingEligibility(businessId, { session });
+  if (!fencedBusiness) throw new NotFoundError(notFoundMessage);
+
+  const fencedMembership = await membershipRepository.fenceBookingEligibility({
+    membershipId: participant.membership._id,
+    userId,
+    businessId,
+    session,
+  });
+  if (!fencedMembership) throw new NotFoundError(notFoundMessage);
+
+  const fencedUser = await userRepository.fenceBookingEligibility(userId, { session });
+  if (!fencedUser) throw new NotFoundError(notFoundMessage);
+
+  const fencedService = await serviceRepository.fenceBookingEligibility({
+    serviceId: service._id,
+    businessId,
+    workerId: userId,
+    session,
+  });
+  if (!fencedService) throw new NotFoundError(notFoundMessage);
+};
+
 export const assertServiceBookingEligibility = async ({
   userId,
   businessId,
@@ -87,6 +141,17 @@ export const assertServiceBookingEligibility = async ({
   const participant = await resolveBookableTenantParticipant(userId, businessId, { notFoundMessage, session });
   if (!serviceIncludesProfessional(service, userId)) {
     throw new NotFoundError(notFoundMessage);
+  }
+
+  if (session) {
+    await fenceResolvedBookingEligibility({
+      participant,
+      service,
+      userId,
+      businessId,
+      session,
+      notFoundMessage,
+    });
   }
 
   return participant;
