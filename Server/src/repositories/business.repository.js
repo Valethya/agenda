@@ -31,3 +31,11 @@ export const update = async (id, data) => {
 export const save = async (businessDoc) => {
   return await businessDoc.save();
 };
+
+export const fenceBookingEligibility = async (businessId, { session }) => {
+  return await Business.findOneAndUpdate(
+    { _id: businessId, isActive: true },
+    { $inc: { bookingEligibilityRevision: 1 } },
+    { new: true, session },
+  ).select("_id isActive");
+};
