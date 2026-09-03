@@ -13,7 +13,7 @@ import {
   RequestIdentityGate,
   validateClientInfo,
 } from './bookingModel';
-import type { PublicClientInfo, PublicProfessional, PublicService } from './types';
+import type { PublicClientInfo, PublicProfessional, PublicService, PublicSlot } from './types';
 import styles from './PublicBookingFlow.module.scss';
 
 interface PublicBookingFlowProps {
@@ -179,7 +179,7 @@ export default function PublicBookingFlow({ slug: rawSlug }: PublicBookingFlowPr
     }
   };
 
-  const selectSlot = (slot: Parameters<typeof bookingReducer>[1] extends { type: 'selectSlot'; slot: infer T } ? T : never) => {
+  const selectSlot = (slot: PublicSlot) => {
     commitCoordinatorRef.current.invalidate();
     dispatch({ type: 'selectSlot', slot });
   };
