@@ -1,10 +1,18 @@
+import mongoose from "mongoose";
 import Service from "../db/models/service.model.js";
+import Membership from "../db/models/membership.model.js";
 
 const MUTABLE_SERVICE_FIELDS = Object.freeze([
   "name",
   "description",
   "duration",
   "price",
+  "depositAmount",
+  "workers",
+  "isActive",
+]);
+const BOOKING_RELEVANT_SERVICE_FIELDS = new Set([
+  "duration",
   "depositAmount",
   "workers",
   "isActive",
@@ -19,6 +27,8 @@ const pickMutableServiceFields = (data = {}) => {
   }
   return update;
 };
+
+const asIdStrings = (values = []) => values.map((value) => value?._id?.toString?.() || value?.toString?.()).filter(Boolean);
 
 export const findAll = async (query = {}) => {
   return await Service.find(query).populate("workers", "firstName lastName email phone");
@@ -51,22 +61,48 @@ export const create = async (data) => {
 
 export const updateMutableByIdAndBusiness = async (id, businessId, data) => {
   const mutableUpdate = pickMutableServiceFields(data);
-  return await Service.findOneAndUpdate(
-    { _id: id, business: businessId },
-    { $set: mutableUpdate },
-    { new: true, runValidators: true },
-  );
-};
+  const touchesBookingEligibility = Object.keys(mutableUpdate)
+    .some((field) => BOOKING_RELEVANT_SERVICE_FIELDS.has(field));
 
-export const fenceBookingEligibility = async ({ serviceId, businessId, workerId, session }) => {
-  return await Service.findOneAndUpdate(
-    {
-      _id: serviceId,
-      business: businessId,
-      isActive: true,
-      workers: workerId,
-    },
-    { $inc: { bookingEligibilityRevision: 1 } },
-    { new: true, session },
-  ).select("_id business duration depositAmount workers isActive");
+  if (!touchesBookingEligibility) {
+    return await Service.findOneAndUpdate(
+      { _id: id, business: businessId },
+      { $set: mutableUpdate },
+      { new: true, runValidators: true },
+    );
+  }
+
+  const session = await mongoose.startSession();
+  let result = null;
+  try {
+    await session.withTransaction(async () => {
+      const current = await Service.findOne({ _id: id, business: businessId }).session(session);
+      if (!current) return;
+
+      const affectedWorkers = new Set(asIdStrings(current.workers));
+      if (Object.prototype.hasOwnProperty.call(mutableUpdate, "workers")) {
+        for (const workerId of asIdStrings(mutableUpdate.workers)) affectedWorkers.add(workerId);
+      }
+
+      if (affectedWorkers.size > 0) {
+        // El Service puede afectar a varios workers, pero cada booking sólo
+        // escribe su propia Membership. La mutación administrativa participa
+        // en todos los fences afectados sin serializar bookings entre sí.
+        await Membership.updateMany(
+          { business: businessId, user: { $in: [...affectedWorkers] } },
+          { $inc: { bookingEligibilityRevision: 1 } },
+          { session },
+        );
+      }
+
+      result = await Service.findOneAndUpdate(
+        { _id: id, business: businessId },
+        { $set: mutableUpdate },
+        { new: true, runValidators: true, session },
+      );
+    });
+    return result;
+  } finally {
+    await session.endSession();
+  }
 };
