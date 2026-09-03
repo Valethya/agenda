@@ -207,9 +207,18 @@ const findTenantAppointment = async (appointmentId, businessId) => {
   return assertAppointmentTenantCoherence(appointment, businessId);
 };
 
+// El authority preloaded puede haber quedado obsoleto entre middleware y acción;
+// las operaciones sobre historial revalidan autoridad tenant actual.
 const resolveActorTenantAuthority = async (userId, businessId, _preloadedAuthority = null) =>
   findTenantAuthority(userId, businessId);
 
+/**
+ * Appointment.client equality is deliberately NOT a grant.
+ * Capacidad sobre una Appointment YA EXISTENTE. Deliberadamente no depende de
+ * Membership.isBookable ni de la presencia actual en Service.workers. La
+ * autoridad tenant vigente continúa siendo requisito y por eso una Membership,
+ * User o Business inactivos revocan esta capacidad.
+ */
 export const resolveExistingAppointmentActorCapabilities = async ({
   appointment,
   userId,
