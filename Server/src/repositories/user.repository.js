@@ -46,3 +46,11 @@ export const findOne = async (query = {}) => {
 export const aggregate = async (pipeline) => {
   return await User.aggregate(pipeline);
 };
+
+export const fenceBookingEligibility = async (userId, { session }) => {
+  return await User.findOneAndUpdate(
+    { _id: userId, isActive: true },
+    { $inc: { bookingEligibilityRevision: 1 } },
+    { new: true, session },
+  ).select("_id isActive");
+};
