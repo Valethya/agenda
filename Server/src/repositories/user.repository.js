@@ -1,7 +1,7 @@
 import User from "../db/models/user.model.js";
 
-export const findById = async (id) => {
-  return await User.findById(id);
+export const findById = async (id, { session = null } = {}) => {
+  return await User.findById(id).session(session || null);
 };
 
 export const findByEmail = async (email) => {
