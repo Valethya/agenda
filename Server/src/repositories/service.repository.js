@@ -57,3 +57,16 @@ export const updateMutableByIdAndBusiness = async (id, businessId, data) => {
     { new: true, runValidators: true },
   );
 };
+
+export const fenceBookingEligibility = async ({ serviceId, businessId, workerId, session }) => {
+  return await Service.findOneAndUpdate(
+    {
+      _id: serviceId,
+      business: businessId,
+      isActive: true,
+      workers: workerId,
+    },
+    { $inc: { bookingEligibilityRevision: 1 } },
+    { new: true, session },
+  ).select("_id business duration depositAmount workers isActive");
+};
