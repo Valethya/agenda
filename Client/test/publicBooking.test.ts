@@ -1,7 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  BookingCommitCoordinator,
   bookingReducer,
+  buildBookingCommitIdentity,
   buildPublicBookingPayload,
   createBookingCommitGuard,
   initialBookingState,
@@ -42,6 +44,7 @@ const professionalB: PublicProfessional = {
   lastName: 'Soto',
 };
 const slotA: PublicSlot = { startTime: '10:00', endTime: '10:30', available: true };
+const slotB: PublicSlot = { startTime: '11:00', endTime: '11:30', available: true };
 const appointment: PublicAppointmentCreated = {
   appointmentId: '555555555555555555555555',
   businessId: 'aaaaaaaaaaaaaaaaaaaaaaaa',
@@ -75,6 +78,16 @@ function selectedState() {
   return state;
 }
 
+function selectedStateB() {
+  let state = selectedState();
+  state = bookingReducer(state, { type: 'selectService', service: serviceB });
+  state = bookingReducer(state, { type: 'professionalsLoaded', professionals: [professionalB] });
+  state = bookingReducer(state, { type: 'selectProfessional', professional: professionalB });
+  state = bookingReducer(state, { type: 'selectDate', date: '2026-09-11' });
+  state = bookingReducer(state, { type: 'slotsLoaded', slots: [slotB] });
+  return bookingReducer(state, { type: 'selectSlot', slot: slotB });
+}
+
 test('entrada pública normaliza slug y rechaza una entrada vacía', () => {
   assert.equal(normalizePublicBookingSlug('  atmosfera  '), 'atmosfera');
   assert.equal(normalizePublicBookingSlug('   '), null);
@@ -91,9 +104,7 @@ test('cliente público carga servicios con slug y sin cookies de sesión', async
     });
   }) as typeof fetch;
   const api = createPublicBookingApi({ slug: 'atmosfera', apiUrl: 'https://api.test/api/', fetchImpl });
-
   const services = await api.getServices();
-
   assert.deepEqual(services, [serviceA]);
   assert.equal(calls[0]?.url, 'https://api.test/api/services');
   assert.equal(calls[0]?.init?.credentials, 'omit');
@@ -107,7 +118,6 @@ test('Service → Professional consume sólo el endpoint público con serviceId'
     return new Response(JSON.stringify({ status: 'success', payload: [professionalA] }), { status: 200 });
   }) as typeof fetch;
   const api = createPublicBookingApi({ slug: 'atmosfera', apiUrl: 'https://api.test/api', fetchImpl });
-
   assert.deepEqual(await api.getProfessionals(serviceA.id), [professionalA]);
   assert.equal(requested, `https://api.test/api/users/workers?serviceId=${serviceA.id}`);
   assert.equal(requested.includes('/internal/'), false);
@@ -120,12 +130,7 @@ test('Professional + Date → Slots usa workerId, serviceId y fecha exactos', as
     return new Response(JSON.stringify({ status: 'success', payload: [slotA] }), { status: 200 });
   }) as typeof fetch;
   const api = createPublicBookingApi({ slug: 'atmosfera', apiUrl: 'https://api.test/api', fetchImpl });
-
-  assert.deepEqual(await api.getSlots({
-    workerId: professionalA.id,
-    serviceId: serviceA.id,
-    date: '2026-09-10',
-  }), [slotA]);
+  assert.deepEqual(await api.getSlots({ workerId: professionalA.id, serviceId: serviceA.id, date: '2026-09-10' }), [slotA]);
   const url = new URL(requested);
   assert.equal(url.pathname, '/api/availability/slots');
   assert.equal(url.searchParams.get('workerId'), professionalA.id);
@@ -151,6 +156,19 @@ test('cambiar Professional o Date invalida siempre el Slot previo', () => {
   assert.deepEqual(dateChanged.slots, []);
 });
 
+test('cambio de slug/contexto elimina toda selección tenant-specific y confirmación', () => {
+  let state = bookingReducer(selectedState(), { type: 'submitSuccess', appointment });
+  state = bookingReducer(state, { type: 'contextReset' });
+  assert.equal(state.service, null);
+  assert.equal(state.professional, null);
+  assert.equal(state.date, '');
+  assert.equal(state.slot, null);
+  assert.equal(state.confirmation, null);
+  assert.equal(state.step, 'service');
+  assert.equal(state.submitting, false);
+  assert.equal(state.clientInfo.email, 'valentina@example.com');
+});
+
 test('payload público contiene exactamente campos contractuales y ningún knob legacy', () => {
   const payload = buildPublicBookingPayload(selectedState());
   assert.deepEqual(payload, {
@@ -159,21 +177,14 @@ test('payload público contiene exactamente campos contractuales y ningún knob 
     date: '2026-09-10',
     startTime: '10:00',
     clientInfo: {
-      firstName: 'Valentina',
-      lastName: 'Rojas',
-      email: 'valentina@example.com',
-      phone: '+56912345678',
+      firstName: 'Valentina', lastName: 'Rojas', email: 'valentina@example.com', phone: '+56912345678',
     },
     notes: 'Sin fragancias',
   });
   const keys = Object.keys(payload);
-  assert.equal(keys.includes('paymentOption'), false);
-  assert.equal(keys.includes('isSuggestion'), false);
-  assert.equal(keys.includes('status'), false);
-  assert.equal(keys.includes('endTime'), false);
-  assert.equal(keys.includes('duration'), false);
-  assert.equal(keys.includes('business'), false);
-  assert.equal(keys.includes('businessId'), false);
+  for (const forbidden of ['paymentOption', 'isSuggestion', 'status', 'endTime', 'duration', 'business', 'businessId']) {
+    assert.equal(keys.includes(forbidden), false);
+  }
 });
 
 test('POST público usa payload exacto y sólo acepta 201 como creación autoritativa', async () => {
@@ -184,13 +195,10 @@ test('POST público usa payload exacto y sólo acepta 201 como creación autorit
     return new Response(JSON.stringify({ status: 'success', payload: appointment }), { status: 201 });
   }) as typeof fetch;
   const api = createPublicBookingApi({ slug: 'atmosfera', apiUrl: 'https://api.test/api', fetchImpl });
-
   assert.deepEqual(await api.createAppointment(payload), appointment);
   assert.deepEqual(sent, payload);
-
   const wrongStatusApi = createPublicBookingApi({
-    slug: 'atmosfera',
-    apiUrl: 'https://api.test/api',
+    slug: 'atmosfera', apiUrl: 'https://api.test/api',
     fetchImpl: (async () => new Response(JSON.stringify({ status: 'success', payload: appointment }), { status: 200 })) as typeof fetch,
   });
   await assert.rejects(() => wrongStatusApi.createAppointment(payload), PublicBookingApiError);
@@ -206,7 +214,6 @@ test('guardia de commit bloquea doble submit síncrono y permite retry manual al
     await pending;
     return appointment;
   });
-
   const first = guard(payload);
   const second = await guard(payload);
   assert.equal(second.kind, 'ignored');
@@ -217,13 +224,99 @@ test('guardia de commit bloquea doble submit síncrono y permite retry manual al
   assert.equal(calls, 2);
 });
 
+test('commit A invalidado no puede producir success sobre contexto B', async () => {
+  const coordinator = new BookingCommitCoordinator();
+  const stateA = selectedState();
+  const stateB = selectedStateB();
+  const payloadA = buildPublicBookingPayload(stateA);
+  const identityA = buildBookingCommitIdentity('business-a', stateA);
+  let release!: () => void;
+  const barrier = new Promise<void>((resolve) => { release = resolve; });
+  let calls = 0;
+  const pendingA = coordinator.execute(identityA, payloadA, async () => {
+    calls += 1;
+    await barrier;
+    return appointment;
+  });
+
+  coordinator.invalidate();
+  const identityB = buildBookingCommitIdentity('business-b', stateB);
+  assert.notDeepEqual(identityA, identityB);
+  release();
+  const resultA = await pendingA;
+  assert.equal(resultA.kind, 'stale');
+  assert.equal(calls, 1);
+});
+
+test('lifecycle/API nuevo no abre un segundo POST mientras A sigue pendiente', async () => {
+  const coordinator = new BookingCommitCoordinator();
+  const stateA = selectedState();
+  const stateB = selectedStateB();
+  let release!: () => void;
+  const barrier = new Promise<void>((resolve) => { release = resolve; });
+  let calls = 0;
+  const first = coordinator.execute(
+    buildBookingCommitIdentity('business-a', stateA),
+    buildPublicBookingPayload(stateA),
+    async () => { calls += 1; await barrier; return appointment; },
+  );
+  coordinator.invalidate();
+  const second = await coordinator.execute(
+    buildBookingCommitIdentity('business-b', stateB),
+    buildPublicBookingPayload(stateB),
+    async () => { calls += 1; return { ...appointment, appointmentId: '666666666666666666666666' }; },
+  );
+  assert.equal(second.kind, 'ignored');
+  assert.equal(calls, 1);
+  release();
+  assert.equal((await first).kind, 'stale');
+});
+
+test('409 y 404 stale no pueden ejecutar recovery ni error sobre contexto B', async () => {
+  for (const status of [409, 404]) {
+    const coordinator = new BookingCommitCoordinator();
+    const stateA = selectedState();
+    let release!: () => void;
+    const barrier = new Promise<void>((resolve) => { release = resolve; });
+    const pendingA = coordinator.execute(
+      buildBookingCommitIdentity('business-a', stateA),
+      buildPublicBookingPayload(stateA),
+      async () => {
+        await barrier;
+        throw new PublicBookingApiError(status, {
+          code: status === 409 ? 'CONFLICT_ERROR' : 'NOT_FOUND',
+          message: 'stale A',
+        });
+      },
+    );
+    coordinator.invalidate();
+    const stateB = selectedStateB();
+    const snapshotB = {
+      service: stateB.service?.id,
+      professional: stateB.professional?.id,
+      date: stateB.date,
+      slot: stateB.slot?.startTime,
+      error: stateB.error,
+    };
+    release();
+    const stale = await pendingA;
+    assert.equal(stale.kind, 'stale');
+    assert.deepEqual(snapshotB, {
+      service: serviceB.id,
+      professional: professionalB.id,
+      date: '2026-09-11',
+      slot: '11:00',
+      error: null,
+    });
+  }
+});
+
 test('conflicto de slot no produce éxito, invalida Slot y conserva selección/contacto', async () => {
   const payload = buildPublicBookingPayload(selectedState());
   const guard = createBookingCommitGuard(async () => {
     throw new PublicBookingApiError(409, { code: 'CONFLICT_ERROR', message: 'El horario seleccionado ya no se encuentra disponible' });
   });
   assert.equal((await guard(payload)).kind, 'slot-conflict');
-
   const recovered = bookingReducer(selectedState(), { type: 'slotConflict', message: 'Horario ocupado' });
   assert.equal(recovered.step, 'schedule');
   assert.equal(recovered.slot, null);
@@ -239,10 +332,8 @@ test('recurso que dejó de ser elegible vuelve a discovery sin exponer detalles 
     throw new PublicBookingApiError(404, { code: 'NOT_FOUND', message: 'El servicio solicitado no está disponible' });
   });
   assert.equal((await guard(payload)).kind, 'eligibility-lost');
-
   const recovered = bookingReducer(selectedState(), {
-    type: 'eligibilityLost',
-    message: 'La reserva ya no puede realizarse con esa selección. Elige nuevamente.',
+    type: 'eligibilityLost', message: 'La reserva ya no puede realizarse con esa selección. Elige nuevamente.',
   });
   assert.equal(recovered.step, 'service');
   assert.equal(recovered.service, null);
@@ -293,7 +384,6 @@ test('respuestas asíncronas stale y fuera de orden no son vigentes', () => {
   const newProfessionals = gate.begin('professionals', serviceB.id);
   assert.equal(gate.isCurrent(oldProfessionals, serviceA.id), false);
   assert.equal(gate.isCurrent(newProfessionals, serviceB.id), true);
-
   const oldSlots = gate.begin('slots', `${serviceB.id}:${professionalA.id}:2026-09-10`);
   const newSlots = gate.begin('slots', `${serviceB.id}:${professionalB.id}:2026-09-10`);
   assert.equal(gate.isCurrent(oldSlots, `${serviceB.id}:${professionalA.id}:2026-09-10`), false);
