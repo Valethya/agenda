@@ -1,4 +1,4 @@
-import { isPublicBookingApiError } from './api';
+import { isPublicBookingApiError } from './api.ts';
 import type {
   PublicAppointmentCreated,
   PublicBookingPayload,
@@ -6,7 +6,7 @@ import type {
   PublicProfessional,
   PublicService,
   PublicSlot,
-} from './types';
+} from './types.ts';
 
 export type BookingStep = 'service' | 'professional' | 'schedule' | 'contact' | 'review' | 'success';
 
