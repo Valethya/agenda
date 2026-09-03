@@ -8,12 +8,14 @@ export const findByUserBusinessAndRole = async (userId, businessId, role) => {
   return await Membership.findOne({ user: userId, business: businessId, role });
 };
 
-export const findActiveByUserAndBusiness = async (userId, businessId) => {
+export const findActiveByUserAndBusiness = async (userId, businessId, { session = null } = {}) => {
   return await Membership.findOne({
     user: userId,
     business: businessId,
     isActive: true,
-  }).populate("business");
+  })
+    .session(session || null)
+    .populate("business");
 };
 
 export const findActiveByIdAndUser = async (membershipId, userId) => {
