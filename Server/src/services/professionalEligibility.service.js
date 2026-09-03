@@ -1,8 +1,6 @@
 import mongoose from "mongoose";
 import * as userRepository from "../repositories/user.repository.js";
 import * as membershipRepository from "../repositories/membership.repository.js";
-import * as businessRepository from "../repositories/business.repository.js";
-import * as serviceRepository from "../repositories/service.repository.js";
 import { NotFoundError, ValidationError } from "../utils/appError.js";
 
 const PROFESSIONAL_NOT_AVAILABLE = "El profesional especificado no está disponible";
@@ -95,13 +93,11 @@ const fenceResolvedBookingEligibility = async ({
     });
   }
 
-  // Orden estable de writes: Business -> Membership -> User -> Service.
-  // Cada fence toca el mismo documento que las mutaciones administrativas
-  // relevantes. Si una de ellas committed después del snapshot leído arriba,
-  // Mongo produce write conflict y withTransaction reintenta la revalidación.
-  const fencedBusiness = await businessRepository.fenceBookingEligibility(businessId, { session });
-  if (!fencedBusiness) throw new NotFoundError(notFoundMessage);
-
+  // El fence físico es per-worker/per-Business sobre su Membership. Las
+  // mutaciones autoritativas de Service/User/Business participan incrementando
+  // esta misma revisión dentro de sus transacciones. Así un cambio committed
+  // después del snapshot produce WriteConflict y withTransaction revalida todo,
+  // sin convertir Business o Service en locks compartidos entre bookings.
   const fencedMembership = await membershipRepository.fenceBookingEligibility({
     membershipId: participant.membership._id,
     userId,
@@ -109,17 +105,6 @@ const fenceResolvedBookingEligibility = async ({
     session,
   });
   if (!fencedMembership) throw new NotFoundError(notFoundMessage);
-
-  const fencedUser = await userRepository.fenceBookingEligibility(userId, { session });
-  if (!fencedUser) throw new NotFoundError(notFoundMessage);
-
-  const fencedService = await serviceRepository.fenceBookingEligibility({
-    serviceId: service._id,
-    businessId,
-    workerId: userId,
-    session,
-  });
-  if (!fencedService) throw new NotFoundError(notFoundMessage);
 };
 
 export const assertServiceBookingEligibility = async ({
