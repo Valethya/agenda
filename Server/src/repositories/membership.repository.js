@@ -61,3 +61,17 @@ export const save = async (membershipDoc) => {
 export const deleteOne = async (membershipDoc) => {
   return await membershipDoc.deleteOne();
 };
+
+export const fenceBookingEligibility = async ({ userId, businessId, membershipId, session }) => {
+  return await Membership.findOneAndUpdate(
+    {
+      _id: membershipId,
+      user: userId,
+      business: businessId,
+      isActive: true,
+      isBookable: true,
+    },
+    { $inc: { bookingEligibilityRevision: 1 } },
+    { new: true, session },
+  ).select("_id user business isActive isBookable");
+};
