@@ -42,11 +42,6 @@ const serviceSchema = new mongoose.Schema(
       type: Boolean,
       default: true,
     },
-    bookingEligibilityRevision: {
-      type: Number,
-      default: 0,
-      select: false,
-    },
   },
   {
     timestamps: true,
