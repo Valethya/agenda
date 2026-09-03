@@ -28,11 +28,16 @@ export const findById = async (id) => {
   return await Service.findById(id).populate("workers", "firstName lastName email phone");
 };
 
-export const findByIdAndBusiness = async (id, businessId, { onlyActive = false } = {}) => {
+export const findByIdAndBusiness = async (
+  id,
+  businessId,
+  { onlyActive = false, session = null } = {},
+) => {
   const query = { _id: id, business: businessId };
   if (onlyActive) query.isActive = true;
 
   return await Service.findOne(query)
+    .session(session || null)
     .populate("workers", "firstName lastName email phone");
 };
 
