@@ -7,8 +7,6 @@ const PAYMENT_SETTLEMENT_STATUSES = new Set(["partially_paid", "fully_paid"]);
 const ACTIVE_BOOKING_STATUSES = Object.freeze(["pending_payment", "pending", "confirmed", "completed"]);
 
 const populateProtectedTenantRelations = (query, businessId) => query
-  // Sólo las lecturas internas protegidas necesitan guestContact para construir
-  // el DTO operacional. Nunca se serializa este subdocumento raw.
   .select("+guestContact")
   .populate("client", "firstName lastName email phone")
   .populate("worker", "firstName lastName email phone")
@@ -32,8 +30,6 @@ const ensureBookingMutex = async (lockId) => {
       { upsert: true },
     );
   } catch (error) {
-    // Dos procesos pueden intentar materializar por primera vez la misma fila.
-    // La unicidad de _id resuelve la carrera; el perdedor puede continuar.
     if (error?.code !== 11000) throw error;
   }
 };
@@ -49,8 +45,6 @@ export const withSerializedBookingInterval = async (
   let result;
   try {
     await session.withTransaction(async () => {
-      // Este write es el punto de serialización cross-process para el worker/día.
-      // No hay lease que pueda expirar: la exclusión existe sólo durante la txn.
       const lock = await AppointmentBookingMutex.findOneAndUpdate(
         { _id: lockId },
         { $inc: { version: 1 } },
@@ -120,7 +114,10 @@ const createWithSession = async (data, session) => {
   return created;
 };
 
-export const create = async (data, { session = null } = {}) => {
+export const create = async (
+  data,
+  { session = null, prepareCommit = null } = {},
+) => {
   if (session) return await createWithSession(data, session);
 
   return await withSerializedBookingInterval(
@@ -130,12 +127,16 @@ export const create = async (data, { session = null } = {}) => {
       date: data.date,
     },
     async (transactionSession) => {
+      const commitData = prepareCommit
+        ? await prepareCommit(transactionSession, data)
+        : data;
+
       const overlap = await findActiveOverlapForBusinessWorkerAndDate({
-        businessId: data.business,
-        workerId: data.worker,
-        date: data.date,
-        startTime: data.startTime,
-        endTime: data.endTime,
+        businessId: commitData.business,
+        workerId: commitData.worker,
+        date: commitData.date,
+        startTime: commitData.startTime,
+        endTime: commitData.endTime,
         session: transactionSession,
       });
 
@@ -144,10 +145,8 @@ export const create = async (data, { session = null } = {}) => {
       }
 
       try {
-        return await createWithSession(data, transactionSession);
+        return await createWithSession(commitData, transactionSession);
       } catch (error) {
-        // Conserva el contrato estable si una fila legacy/no serializada colisiona
-        // con el índice exacto de startTime durante la transición.
         if (error?.code === 11000) {
           throw new ConflictError("El horario seleccionado ya no se encuentra disponible");
         }
@@ -157,9 +156,6 @@ export const create = async (data, { session = null } = {}) => {
   );
 };
 
-// Legacy Payment-only commands. Payment/Webpay remains deny-by-default; these
-// commands deliberately expose only the fixed fields required by the disabled
-// legacy flow and are not generic Appointment mutation APIs.
 export const markPendingPaymentFromLegacyPayment = async (id) => {
   return await Appointment.findByIdAndUpdate(
     id,
@@ -237,9 +233,6 @@ export const findByIdAndBusiness = async (id, businessId) => {
   );
 };
 
-// Dedicated C2 bootstrap query. It deliberately selects the immutable
-// Appointment-scoped booking contact and tenant Service coherence, and it never
-// populates Appointment.client/User, CustomerProfile, or historical contacts.
 export const findGuestCapabilityBootstrapByIdAndBusiness = async (id, businessId) => (
   Appointment.findOne({ _id: id, business: businessId })
     .select("business service +guestContact")
@@ -250,8 +243,6 @@ export const findGuestCapabilityBootstrapByIdAndBusiness = async (id, businessId
     })
 );
 
-// Dedicated C2 projection: tenant-scoped and deliberately excludes client/contact
-// data, notes, User authority fields, history and audit timeline.
 export const findGuestReadableByIdAndBusiness = async (id, businessId) => {
   return await Appointment.findOne({ _id: id, business: businessId })
     .select("business worker service date startTime endTime status paymentStatus")
@@ -270,9 +261,6 @@ export const findCoherentAllByBusiness = async (businessId, query = {}) => {
     businessId,
   ).sort({ date: 1, startTime: 1 });
 
-  // populate(match) returns null for a missing or foreign-tenant Service.
-  // Protected collections omit those structurally incoherent resources rather
-  // than exposing any fields from the foreign Service.
   return appointments.filter((appointment) => Boolean(appointment.service));
 };
 
