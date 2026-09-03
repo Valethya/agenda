@@ -10,7 +10,10 @@ import Service from "../src/db/models/service.model.js";
 import * as serviceRepository from "../src/repositories/service.repository.js";
 import * as userRepository from "../src/repositories/user.repository.js";
 import { toggleBusinessStatus } from "../src/services/superadmin.service.js";
-import { setAfterEligibilityReadTestHookForTests } from "../src/services/professionalEligibility.service.js";
+import {
+  setAfterEligibilityFenceTestHookForTests,
+  setAfterEligibilityReadTestHookForTests,
+} from "../src/services/professionalEligibility.service.js";
 
 await connectDB();
 await cleanTestData();
@@ -63,14 +66,14 @@ const activeForDate = async (date) => Appointment.find({
   status: { $in: ["pending_payment", "pending", "confirmed", "completed"] },
 });
 
-const installEligibilityReadBarrier = () => {
+const installBarrier = (setter) => {
   let firstArrival = true;
   let resolveArrived;
   let release;
   const arrived = new Promise((resolve) => { resolveArrived = resolve; });
   const released = new Promise((resolve) => { release = resolve; });
 
-  setAfterEligibilityReadTestHookForTests(async (context) => {
+  setter(async (context) => {
     if (!firstArrival) return;
     firstArrival = false;
     resolveArrived(context);
@@ -80,9 +83,12 @@ const installEligibilityReadBarrier = () => {
   return {
     arrived,
     release,
-    clear: () => setAfterEligibilityReadTestHookForTests(null),
+    clear: () => setter(null),
   };
 };
+
+const installEligibilityReadBarrier = () => installBarrier(setAfterEligibilityReadTestHookForTests);
+const installEligibilityFenceBarrier = () => installBarrier(setAfterEligibilityFenceTestHookForTests);
 
 const runRevocationWinsRace = async ({ date, suffix, mutate, restore }) => {
   const barrier = installEligibilityReadBarrier();
@@ -94,6 +100,58 @@ const runRevocationWinsRace = async ({ date, suffix, mutate, restore }) => {
     const response = await pending;
     assert.equal(response.status, 404);
     assert.equal((await activeForDate(date)).length, 0);
+  } finally {
+    barrier.release();
+    barrier.clear();
+    await restore();
+  }
+};
+
+const runBookingWinsRace = async ({
+  date,
+  suffix,
+  mutate,
+  assertMutationStillInvisible,
+  assertFinalMutationState,
+  restore,
+}) => {
+  const barrier = installEligibilityFenceBarrier();
+  let mutationCompleted = false;
+  let resolveMutationStarted;
+  const mutationStarted = new Promise((resolve) => { resolveMutationStarted = resolve; });
+
+  try {
+    const pendingBooking = publicBook({ date, suffix });
+    await barrier.arrived;
+
+    const pendingMutation = (async () => {
+      resolveMutationStarted();
+      const result = await mutate();
+      mutationCompleted = true;
+      return result;
+    })();
+
+    await mutationStarted;
+
+    // El booking sigue detenido después de haber escrito el fence. Esta lectura
+    // externa fuerza un round-trip real a Mongo y debe seguir viendo el estado
+    // administrativo previo: la mutación concurrente no puede committear por
+    // delante del write ya abierto sobre Membership.bookingEligibilityRevision.
+    await assertMutationStillInvisible();
+    assert.equal(mutationCompleted, false);
+
+    barrier.release();
+
+    const bookingResponse = await pendingBooking;
+    assert.equal(bookingResponse.status, 201);
+    const appointments = await activeForDate(date);
+    assert.equal(appointments.length, 1);
+    assert.equal(appointments[0].startTime, "09:00");
+    assert.equal(appointments[0].endTime, "10:00");
+
+    await pendingMutation;
+    assert.equal(mutationCompleted, true);
+    await assertFinalMutationState();
   } finally {
     barrier.release();
     barrier.clear();
@@ -216,9 +274,64 @@ test("G2 eligibility write fencing", async (t) => {
       );
     }
   });
+
+  await t.test("booking gana fence antes de Membership.isBookable=false y la revocación queda después", async () => {
+    await runBookingWinsRace({
+      date: "2099-11-09",
+      suffix: 208,
+      mutate: () => Membership.updateOne(
+        { user: seed.worker._id, business: seed.business._id },
+        { $set: { isBookable: false } },
+      ),
+      assertMutationStillInvisible: async () => {
+        const membership = await Membership.findOne({
+          user: seed.worker._id,
+          business: seed.business._id,
+        });
+        assert.equal(membership.isBookable, true);
+      },
+      assertFinalMutationState: async () => {
+        const membership = await Membership.findOne({
+          user: seed.worker._id,
+          business: seed.business._id,
+        });
+        assert.equal(membership.isBookable, false);
+      },
+      restore: () => Membership.updateOne(
+        { user: seed.worker._id, business: seed.business._id },
+        { $set: { isBookable: true } },
+      ),
+    });
+  });
+
+  await t.test("booking gana fence antes de Service.isActive=false y Service queda ordenado después", async () => {
+    await runBookingWinsRace({
+      date: "2099-11-16",
+      suffix: 209,
+      mutate: () => serviceRepository.updateMutableByIdAndBusiness(
+        service._id,
+        seed.business._id,
+        { isActive: false },
+      ),
+      assertMutationStillInvisible: async () => {
+        const currentService = await Service.findById(service._id);
+        assert.equal(currentService.isActive, true);
+      },
+      assertFinalMutationState: async () => {
+        const currentService = await Service.findById(service._id);
+        assert.equal(currentService.isActive, false);
+      },
+      restore: () => serviceRepository.updateMutableByIdAndBusiness(
+        service._id,
+        seed.business._id,
+        { isActive: true },
+      ),
+    });
+  });
 });
 
 test.after(async () => {
   setAfterEligibilityReadTestHookForTests(null);
+  setAfterEligibilityFenceTestHookForTests(null);
   await teardown(server, sessionStore);
 });
