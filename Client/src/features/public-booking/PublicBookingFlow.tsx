@@ -4,9 +4,10 @@ import {
   isPublicBookingApiError,
 } from './api';
 import {
+  BookingCommitCoordinator,
   bookingReducer,
+  buildBookingCommitIdentity,
   buildPublicBookingPayload,
-  createBookingCommitGuard,
   initialBookingState,
   normalizePublicBookingSlug,
   RequestIdentityGate,
@@ -44,6 +45,8 @@ export default function PublicBookingFlow({ slug: rawSlug }: PublicBookingFlowPr
   const slug = normalizePublicBookingSlug(rawSlug);
   const [state, dispatch] = useReducer(bookingReducer, undefined, initialBookingState);
   const gateRef = useRef(new RequestIdentityGate());
+  const commitCoordinatorRef = useRef(new BookingCommitCoordinator());
+  const previousSlugRef = useRef(slug);
   const servicesAbortRef = useRef<AbortController | null>(null);
   const professionalsAbortRef = useRef<AbortController | null>(null);
   const slotsAbortRef = useRef<AbortController | null>(null);
@@ -52,11 +55,19 @@ export default function PublicBookingFlow({ slug: rawSlug }: PublicBookingFlowPr
     () => createPublicBookingApi({ slug: slug || '' }),
     [slug],
   );
-  const commitRef = useRef<ReturnType<typeof createBookingCommitGuard> | null>(null);
 
   useEffect(() => {
-    commitRef.current = createBookingCommitGuard(api.createAppointment);
-  }, [api]);
+    if (previousSlugRef.current === slug) return;
+    previousSlugRef.current = slug;
+    servicesAbortRef.current?.abort();
+    professionalsAbortRef.current?.abort();
+    slotsAbortRef.current?.abort();
+    gateRef.current.invalidate('services');
+    gateRef.current.invalidate('professionals');
+    gateRef.current.invalidate('slots');
+    commitCoordinatorRef.current.invalidate();
+    dispatch({ type: 'contextReset' });
+  }, [slug]);
 
   const loadServices = useCallback(async () => {
     if (!slug) return;
@@ -120,6 +131,7 @@ export default function PublicBookingFlow({ slug: rawSlug }: PublicBookingFlowPr
     slotsAbortRef.current?.abort();
     gateRef.current.invalidate('professionals');
     gateRef.current.invalidate('slots');
+    commitCoordinatorRef.current.invalidate();
     dispatch({ type: 'selectService', service });
     void loadProfessionals(service);
   };
@@ -127,6 +139,7 @@ export default function PublicBookingFlow({ slug: rawSlug }: PublicBookingFlowPr
   const selectProfessional = (professional: PublicProfessional) => {
     slotsAbortRef.current?.abort();
     gateRef.current.invalidate('slots');
+    commitCoordinatorRef.current.invalidate();
     dispatch({ type: 'selectProfessional', professional });
   };
 
@@ -159,10 +172,16 @@ export default function PublicBookingFlow({ slug: rawSlug }: PublicBookingFlowPr
   const selectDate = (date: string) => {
     slotsAbortRef.current?.abort();
     gateRef.current.invalidate('slots');
+    commitCoordinatorRef.current.invalidate();
     dispatch({ type: 'selectDate', date });
     if (date && state.service && state.professional) {
       void loadSlots(date, state.service.id, state.professional.id);
     }
+  };
+
+  const selectSlot = (slot: Parameters<typeof bookingReducer>[1] extends { type: 'selectSlot'; slot: infer T } ? T : never) => {
+    commitCoordinatorRef.current.invalidate();
+    dispatch({ type: 'selectSlot', slot });
   };
 
   const updateClientInfo = (field: keyof PublicClientInfo, value: string) => {
@@ -187,20 +206,22 @@ export default function PublicBookingFlow({ slug: rawSlug }: PublicBookingFlowPr
   };
 
   const submit = async () => {
-    if (!commitRef.current || state.submitting) return;
+    if (state.submitting || commitCoordinatorRef.current.isInFlight()) return;
 
     let payload;
+    let identity;
     try {
       payload = buildPublicBookingPayload(state);
+      identity = buildBookingCommitIdentity(slug || '', state);
     } catch {
       dispatch({ type: 'submitError', message: 'La selección ya no está completa. Revisa el horario elegido.' });
       return;
     }
 
     dispatch({ type: 'submitStart' });
-    const result = await commitRef.current(payload);
+    const result = await commitCoordinatorRef.current.execute(identity, payload, api.createAppointment);
 
-    if (result.kind === 'ignored') return;
+    if (result.kind === 'ignored' || result.kind === 'stale') return;
     if (result.kind === 'success') {
       dispatch({ type: 'submitSuccess', appointment: result.appointment });
       return;
@@ -329,7 +350,7 @@ export default function PublicBookingFlow({ slug: rawSlug }: PublicBookingFlowPr
                   key={slot.startTime}
                   type="button"
                   className={state.slot?.startTime === slot.startTime ? styles.slotSelected : styles.slot}
-                  onClick={() => dispatch({ type: 'selectSlot', slot })}
+                  onClick={() => selectSlot(slot)}
                 >
                   {slot.startTime}
                 </button>
