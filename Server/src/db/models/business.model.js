@@ -36,6 +36,11 @@ const businessSchema = new mongoose.Schema(
       default: 0,
       select: false,
     },
+    bookingEligibilityRevision: {
+      type: Number,
+      default: 0,
+      select: false,
+    },
   },
   {
     timestamps: true,
