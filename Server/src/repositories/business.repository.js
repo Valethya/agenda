@@ -1,4 +1,6 @@
+import mongoose from "mongoose";
 import Business from "../db/models/business.model.js";
+import Membership from "../db/models/membership.model.js";
 
 export const findById = async (id) => {
   return await Business.findById(id);
@@ -32,10 +34,29 @@ export const save = async (businessDoc) => {
   return await businessDoc.save();
 };
 
-export const fenceBookingEligibility = async (businessId, { session }) => {
-  return await Business.findOneAndUpdate(
-    { _id: businessId, isActive: true },
-    { $inc: { bookingEligibilityRevision: 1 } },
-    { new: true, session },
-  ).select("_id isActive");
+export const toggleActiveWithBookingFence = async (businessId) => {
+  const session = await mongoose.startSession();
+  let result = null;
+  try {
+    await session.withTransaction(async () => {
+      const business = await Business.findById(businessId).session(session);
+      if (!business) return;
+
+      // El estado del Business afecta a todos sus profesionales, pero los
+      // bookings no comparten un lock global: la mutación administrativa toca
+      // individualmente el fence de cada Membership del Business.
+      await Membership.updateMany(
+        { business: businessId },
+        { $inc: { bookingEligibilityRevision: 1 } },
+        { session },
+      );
+
+      business.isActive = !business.isActive;
+      await business.save({ session });
+      result = business;
+    });
+    return result;
+  } finally {
+    await session.endSession();
+  }
 };
