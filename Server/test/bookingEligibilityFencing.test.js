@@ -5,10 +5,11 @@ import app, { sessionStore } from "../src/app.js";
 import { connectDB } from "../src/db/db.js";
 import { seedTestData, cleanTestData, teardown } from "./fixtures.js";
 import Appointment from "../src/db/models/appointment.model.js";
-import Business from "../src/db/models/business.model.js";
 import Membership from "../src/db/models/membership.model.js";
 import Service from "../src/db/models/service.model.js";
-import User from "../src/db/models/user.model.js";
+import * as serviceRepository from "../src/repositories/service.repository.js";
+import * as userRepository from "../src/repositories/user.repository.js";
+import { toggleBusinessStatus } from "../src/services/superadmin.service.js";
 import { setAfterEligibilityReadTestHookForTests } from "../src/services/professionalEligibility.service.js";
 
 await connectDB();
@@ -105,6 +106,8 @@ test("G2 eligibility write fencing", async (t) => {
     await runRevocationWinsRace({
       date: "2099-09-21",
       suffix: 201,
+      // Team muta físicamente esta misma Membership; no necesita un fence
+      // auxiliar porque el booking también escribe este documento.
       mutate: () => Membership.updateOne(
         { user: seed.worker._id, business: seed.business._id },
         { $set: { isBookable: false } },
@@ -131,49 +134,69 @@ test("G2 eligibility write fencing", async (t) => {
     });
   });
 
-  await t.test("Service.isActive true -> false committed después del read impide Appointment stale", async () => {
+  await t.test("Service.isActive true -> false usa el fence per-worker y evita Appointment stale", async () => {
     await runRevocationWinsRace({
       date: "2099-10-05",
       suffix: 203,
-      mutate: () => Service.updateOne({ _id: service._id }, { $set: { isActive: false } }),
-      restore: () => Service.updateOne({ _id: service._id }, { $set: { isActive: true } }),
+      mutate: () => serviceRepository.updateMutableByIdAndBusiness(
+        service._id,
+        seed.business._id,
+        { isActive: false },
+      ),
+      restore: () => serviceRepository.updateMutableByIdAndBusiness(
+        service._id,
+        seed.business._id,
+        { isActive: true },
+      ),
     });
   });
 
-  await t.test("eliminar worker de Service después del read impide Appointment stale", async () => {
+  await t.test("eliminar worker de Service después del read participa en el mismo fence", async () => {
     await runRevocationWinsRace({
       date: "2099-10-12",
       suffix: 204,
-      mutate: () => Service.updateOne({ _id: service._id }, { $set: { workers: [] } }),
-      restore: () => Service.updateOne({ _id: service._id }, { $set: { workers: [seed.worker._id] } }),
+      mutate: () => serviceRepository.updateMutableByIdAndBusiness(
+        service._id,
+        seed.business._id,
+        { workers: [] },
+      ),
+      restore: () => serviceRepository.updateMutableByIdAndBusiness(
+        service._id,
+        seed.business._id,
+        { workers: [seed.worker._id] },
+      ),
     });
   });
 
-  await t.test("User.isActive true -> false committed después del read impide Appointment stale", async () => {
+  await t.test("User.isActive true -> false usa sus Memberships como fences", async () => {
     await runRevocationWinsRace({
       date: "2099-10-19",
       suffix: 205,
-      mutate: () => User.updateOne({ _id: seed.worker._id }, { $set: { isActive: false } }),
-      restore: () => User.updateOne({ _id: seed.worker._id }, { $set: { isActive: true } }),
+      mutate: () => userRepository.updateUser(seed.worker._id, { isActive: false }),
+      restore: () => userRepository.updateUser(seed.worker._id, { isActive: true }),
     });
   });
 
-  await t.test("Business.isActive true -> false committed después del read impide Appointment stale", async () => {
+  await t.test("Business.isActive true -> false fencerea Memberships sin lock global de booking", async () => {
     await runRevocationWinsRace({
       date: "2099-10-26",
       suffix: 206,
-      mutate: () => Business.updateOne({ _id: seed.business._id }, { $set: { isActive: false } }),
-      restore: () => Business.updateOne({ _id: seed.business._id }, { $set: { isActive: true } }),
+      mutate: () => toggleBusinessStatus(seed.business._id),
+      restore: () => toggleBusinessStatus(seed.business._id),
     });
   });
 
-  await t.test("cambio concurrente de Service.duration se reintenta y persiste una duración serializable", async () => {
+  await t.test("cambio concurrente de Service.duration reintenta y persiste duración serializable", async () => {
     const date = "2099-11-02";
     const barrier = installEligibilityReadBarrier();
     try {
       const pending = publicBook({ date, suffix: 207 });
       await barrier.arrived;
-      await Service.updateOne({ _id: service._id }, { $set: { duration: 90 } });
+      await serviceRepository.updateMutableByIdAndBusiness(
+        service._id,
+        seed.business._id,
+        { duration: 90 },
+      );
       barrier.release();
 
       const response = await pending;
@@ -186,7 +209,11 @@ test("G2 eligibility write fencing", async (t) => {
     } finally {
       barrier.release();
       barrier.clear();
-      await Service.updateOne({ _id: service._id }, { $set: { duration: 60 } });
+      await serviceRepository.updateMutableByIdAndBusiness(
+        service._id,
+        seed.business._id,
+        { duration: 60 },
+      );
     }
   });
 });
