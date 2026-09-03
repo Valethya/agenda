@@ -43,7 +43,7 @@
     "test:internal-surface-boundary": "node --test test/internalSurfaceAuthorityBoundary.test.js",
     "test:authenticated-origin-boundary": "node --test test/authenticatedOriginBoundary.test.js",
     "test:business-settings-boundary": "node --test test/businessSettingsBoundary.test.js",
-    "test:concurrent-appointment-interval": "node --test test/concurrentAppointmentInterval.test.js",
+    "test:concurrent-appointment-interval": "node --test test/concurrentAppointmentInterval.test.js && node --test test/bookingEligibilityFencing.test.js",
     "test:headless-public-contract": "node --test test/headlessPublicContract.test.js",
     "test:public-booking-discovery": "node --test test/publicBookingDiscovery.test.js",
     "test:public-booking-input": "node --test test/publicBookingInputBoundary.test.js",
