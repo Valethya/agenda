@@ -58,6 +58,7 @@ export const initialBookingState = (): BookingState => ({
 });
 
 export type BookingAction =
+  | { type: 'contextReset' }
   | { type: 'servicesLoading' }
   | { type: 'servicesLoaded'; services: PublicService[] }
   | { type: 'servicesError'; message: string }
@@ -83,6 +84,12 @@ export type BookingAction =
 
 export function bookingReducer(state: BookingState, action: BookingAction): BookingState {
   switch (action.type) {
+    case 'contextReset':
+      return {
+        ...initialBookingState(),
+        clientInfo: state.clientInfo,
+        notes: state.notes,
+      };
     case 'servicesLoading':
       return { ...state, loadingServices: true, error: null };
     case 'servicesLoaded':
@@ -219,37 +226,113 @@ export function buildPublicBookingPayload(state: BookingState): PublicBookingPay
   return payload;
 }
 
+export interface BookingCommitIdentity {
+  slug: string;
+  serviceId: string;
+  professionalId: string;
+  date: string;
+  startTime: string;
+}
+
+export function buildBookingCommitIdentity(slug: string, state: BookingState): BookingCommitIdentity {
+  if (!state.service || !state.professional || !state.date || !state.slot) {
+    throw new Error('La identidad de commit está incompleta');
+  }
+  return {
+    slug,
+    serviceId: state.service.id,
+    professionalId: state.professional.id,
+    date: state.date,
+    startTime: state.slot.startTime,
+  };
+}
+
+const commitIdentityKey = (identity: BookingCommitIdentity) => [
+  identity.slug,
+  identity.serviceId,
+  identity.professionalId,
+  identity.date,
+  identity.startTime,
+].join(':');
+
 export type CommitResult =
   | { kind: 'success'; appointment: PublicAppointmentCreated }
   | { kind: 'slot-conflict' }
   | { kind: 'eligibility-lost' }
   | { kind: 'validation-error'; message: string }
   | { kind: 'error'; message: string }
-  | { kind: 'ignored' };
+  | { kind: 'ignored' }
+  | { kind: 'stale' };
+
+const classifyCommitError = (error: unknown): CommitResult => {
+  if (isPublicBookingApiError(error)) {
+    if (error.status === 409) return { kind: 'slot-conflict' };
+    if (error.status === 404) return { kind: 'eligibility-lost' };
+    if (error.status === 400) return { kind: 'validation-error', message: error.message };
+    return { kind: 'error', message: 'No pudimos completar la reserva. Intenta nuevamente.' };
+  }
+  return { kind: 'error', message: 'No pudimos conectar con el servicio de reservas. Intenta nuevamente.' };
+};
+
+interface CommitToken {
+  generation: number;
+  key: string;
+}
+
+export class BookingCommitCoordinator {
+  private generation = 0;
+  private inFlight = false;
+
+  invalidate(): void {
+    this.generation += 1;
+  }
+
+  isInFlight(): boolean {
+    return this.inFlight;
+  }
+
+  async execute(
+    identity: BookingCommitIdentity,
+    payload: PublicBookingPayload,
+    createAppointment: (payload: PublicBookingPayload) => Promise<PublicAppointmentCreated>,
+  ): Promise<CommitResult> {
+    if (this.inFlight) return { kind: 'ignored' };
+
+    this.inFlight = true;
+    const token: CommitToken = {
+      generation: ++this.generation,
+      key: commitIdentityKey(identity),
+    };
+
+    let result: CommitResult;
+    try {
+      const appointment = await createAppointment(payload);
+      result = { kind: 'success', appointment };
+    } catch (error) {
+      result = classifyCommitError(error);
+    }
+
+    const isCurrent = token.generation === this.generation
+      && token.key === commitIdentityKey(identity);
+    this.inFlight = false;
+    return isCurrent ? result : { kind: 'stale' };
+  }
+}
 
 export function createBookingCommitGuard(
   createAppointment: (payload: PublicBookingPayload) => Promise<PublicAppointmentCreated>,
 ) {
-  let inFlight = false;
-
-  return async (payload: PublicBookingPayload): Promise<CommitResult> => {
-    if (inFlight) return { kind: 'ignored' };
-    inFlight = true;
-    try {
-      const appointment = await createAppointment(payload);
-      return { kind: 'success', appointment };
-    } catch (error) {
-      if (isPublicBookingApiError(error)) {
-        if (error.status === 409) return { kind: 'slot-conflict' };
-        if (error.status === 404) return { kind: 'eligibility-lost' };
-        if (error.status === 400) return { kind: 'validation-error', message: error.message };
-        return { kind: 'error', message: 'No pudimos completar la reserva. Intenta nuevamente.' };
-      }
-      return { kind: 'error', message: 'No pudimos conectar con el servicio de reservas. Intenta nuevamente.' };
-    } finally {
-      inFlight = false;
-    }
+  const coordinator = new BookingCommitCoordinator();
+  const identity: BookingCommitIdentity = {
+    slug: 'guard',
+    serviceId: 'guard',
+    professionalId: 'guard',
+    date: 'guard',
+    startTime: 'guard',
   };
+
+  return (payload: PublicBookingPayload): Promise<CommitResult> =>
+    coordinator.execute(identity, payload, createAppointment);
 }
 
 interface RequestToken {
