@@ -24,15 +24,15 @@ export const serviceIncludesProfessional = (service, userId) =>
 export const resolveActiveTenantParticipant = async (
   userId,
   businessId,
-  { notFoundMessage = PROFESSIONAL_NOT_AVAILABLE } = {},
+  { notFoundMessage = PROFESSIONAL_NOT_AVAILABLE, session = null } = {},
 ) => {
   if (!mongoose.isValidObjectId(userId) || !mongoose.isValidObjectId(businessId)) {
     throw new NotFoundError(notFoundMessage);
   }
 
   const [user, membership] = await Promise.all([
-    userRepository.findById(userId),
-    membershipRepository.findActiveByUserAndBusiness(userId, businessId),
+    userRepository.findById(userId, { session }),
+    membershipRepository.findActiveByUserAndBusiness(userId, businessId, { session }),
   ]);
 
   const business = membership?.business;
@@ -74,6 +74,7 @@ export const assertServiceBookingEligibility = async ({
   service,
   requireActiveService = true,
   notFoundMessage = PROFESSIONAL_NOT_AVAILABLE,
+  session = null,
 }) => {
   if (
     !service
@@ -83,7 +84,7 @@ export const assertServiceBookingEligibility = async ({
     throw new NotFoundError(notFoundMessage);
   }
 
-  const participant = await resolveBookableTenantParticipant(userId, businessId, { notFoundMessage });
+  const participant = await resolveBookableTenantParticipant(userId, businessId, { notFoundMessage, session });
   if (!serviceIncludesProfessional(service, userId)) {
     throw new NotFoundError(notFoundMessage);
   }
