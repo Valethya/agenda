@@ -4,6 +4,22 @@ import * as membershipRepository from "../repositories/membership.repository.js"
 import { NotFoundError, ValidationError } from "../utils/appError.js";
 
 const PROFESSIONAL_NOT_AVAILABLE = "El profesional especificado no está disponible";
+let afterEligibilityReadTestHook = null;
+let afterEligibilityFenceTestHook = null;
+
+export const setAfterEligibilityReadTestHookForTests = (hook) => {
+  if (process.env.NODE_ENV !== "test") {
+    throw new Error("Los hooks de concurrencia sólo están disponibles en tests");
+  }
+  afterEligibilityReadTestHook = hook;
+};
+
+export const setAfterEligibilityFenceTestHookForTests = (hook) => {
+  if (process.env.NODE_ENV !== "test") {
+    throw new Error("Los hooks de concurrencia sólo están disponibles en tests");
+  }
+  afterEligibilityFenceTestHook = hook;
+};
 
 const asId = (value) => {
   const candidate = value?._id ?? value;
@@ -24,15 +40,15 @@ export const serviceIncludesProfessional = (service, userId) =>
 export const resolveActiveTenantParticipant = async (
   userId,
   businessId,
-  { notFoundMessage = PROFESSIONAL_NOT_AVAILABLE } = {},
+  { notFoundMessage = PROFESSIONAL_NOT_AVAILABLE, session = null } = {},
 ) => {
   if (!mongoose.isValidObjectId(userId) || !mongoose.isValidObjectId(businessId)) {
     throw new NotFoundError(notFoundMessage);
   }
 
   const [user, membership] = await Promise.all([
-    userRepository.findById(userId),
-    membershipRepository.findActiveByUserAndBusiness(userId, businessId),
+    userRepository.findById(userId, { session }),
+    membershipRepository.findActiveByUserAndBusiness(userId, businessId, { session }),
   ]);
 
   const business = membership?.business;
@@ -68,12 +84,52 @@ export const resolveBookableTenantParticipant = async (
   return participant;
 };
 
+const fenceResolvedBookingEligibility = async ({
+  participant,
+  service,
+  userId,
+  businessId,
+  session,
+  notFoundMessage,
+}) => {
+  const context = {
+    businessId: asId(businessId),
+    userId: asId(userId),
+    membershipId: asId(participant.membership),
+    serviceId: asId(service),
+  };
+
+  if (afterEligibilityReadTestHook) {
+    await afterEligibilityReadTestHook(context);
+  }
+
+  // El fence físico es per-worker/per-Business sobre su Membership. Las
+  // mutaciones autoritativas de Service/User/Business participan incrementando
+  // esta misma revisión dentro de sus transacciones. Así un cambio committed
+  // después del snapshot produce WriteConflict y withTransaction revalida todo,
+  // sin convertir Business o Service en locks compartidos entre bookings.
+  const fencedMembership = await membershipRepository.fenceBookingEligibility({
+    membershipId: participant.membership._id,
+    userId,
+    businessId,
+    session,
+  });
+  if (!fencedMembership) throw new NotFoundError(notFoundMessage);
+
+  // Sólo tests: esta barrera ocurre después del write físico del fence y antes
+  // de que el booking continúe hacia overlap/insert/commit.
+  if (afterEligibilityFenceTestHook) {
+    await afterEligibilityFenceTestHook(context);
+  }
+};
+
 export const assertServiceBookingEligibility = async ({
   userId,
   businessId,
   service,
   requireActiveService = true,
   notFoundMessage = PROFESSIONAL_NOT_AVAILABLE,
+  session = null,
 }) => {
   if (
     !service
@@ -83,9 +139,20 @@ export const assertServiceBookingEligibility = async ({
     throw new NotFoundError(notFoundMessage);
   }
 
-  const participant = await resolveBookableTenantParticipant(userId, businessId, { notFoundMessage });
+  const participant = await resolveBookableTenantParticipant(userId, businessId, { notFoundMessage, session });
   if (!serviceIncludesProfessional(service, userId)) {
     throw new NotFoundError(notFoundMessage);
+  }
+
+  if (session) {
+    await fenceResolvedBookingEligibility({
+      participant,
+      service,
+      userId,
+      businessId,
+      session,
+      notFoundMessage,
+    });
   }
 
   return participant;

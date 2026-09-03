@@ -28,6 +28,11 @@ const membershipSchema = new mongoose.Schema(
       default: false,
       required: [true, "El estado de agendabilidad es obligatorio"],
     },
+    bookingEligibilityRevision: {
+      type: Number,
+      default: 0,
+      select: false,
+    },
   },
   {
     timestamps: true,

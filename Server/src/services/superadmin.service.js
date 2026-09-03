@@ -54,10 +54,8 @@ export const createBusiness = async (businessData) => {
 export const listBusinesses = async () => await businessRepository.findAll();
 
 export const toggleBusinessStatus = async (id) => {
-  const business = await businessRepository.findById(id);
+  const business = await businessRepository.toggleActiveWithBookingFence(id);
   if (!business) throw new NotFoundError("El negocio especificado no existe");
-  business.isActive = !business.isActive;
-  await businessRepository.save(business);
   return business;
 };
 

@@ -18,6 +18,14 @@ const STATUS_TRANSITIONS = Object.freeze({
 });
 
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/u;
+let beforeBookingCommitTestHook = null;
+
+export const setBeforeBookingCommitTestHookForTests = (hook) => {
+  if (process.env.NODE_ENV !== "test") {
+    throw new Error("Los hooks de concurrencia sólo están disponibles en tests");
+  }
+  beforeBookingCommitTestHook = hook;
+};
 
 export const buildGuestBookingContactSnapshot = (clientInfo) => {
   const rawEmail = clientInfo?.email;
@@ -56,13 +64,13 @@ const assertAppointmentTenantCoherence = (appointment, businessId) => {
   return appointment;
 };
 
-export const validateBookingTenantScope = async ({ worker, service, businessId }) => {
+export const validateBookingTenantScope = async ({ worker, service, businessId, session = null }) => {
   if (!businessId) throw new ValidationError("El contexto de negocio es obligatorio para reservar");
 
   const serviceDetail = await serviceRepository.findByIdAndBusiness(
     service,
     businessId,
-    { onlyActive: true },
+    { onlyActive: true, session },
   );
   if (!serviceDetail) throw new NotFoundError("El servicio solicitado no está disponible");
 
@@ -71,6 +79,7 @@ export const validateBookingTenantScope = async ({ worker, service, businessId }
     businessId,
     service: serviceDetail,
     requireActiveService: true,
+    session,
   });
 
   return { serviceDetail, workerDetail };
@@ -99,7 +108,7 @@ export const bookAppointment = async (appointmentData) => {
     metadata: { worker, service, date, startTime, isSuggestion },
   });
 
-  const initialScope = tenantScope || await validateBookingTenantScope({ worker, service, businessId });
+  await (tenantScope ? Promise.resolve(tenantScope) : validateBookingTenantScope({ worker, service, businessId }));
   const targetDate = new Date(date);
   const dateStr = targetDate.toISOString().split("T")[0];
 
@@ -129,47 +138,66 @@ export const bookAppointment = async (appointmentData) => {
   let finalNotes = notes;
   if (isSuggestion) finalNotes = `[⚠️ SUGERENCIA DE CLIENTE: Horario propuesto no disponible en turnos estándar]\n${notes || ""}`;
 
-  // El slot y cualquier tenantScope observado previamente no son grants durables.
-  // Esta lectura sucede inmediatamente antes de materializar la Appointment.
-  const commitScope = await validateBookingTenantScope({ worker, service, businessId });
-  const serviceDetail = commitScope.serviceDetail;
-  const endTime = addMinutesToTime(startTime, serviceDetail.duration);
-  const isLocalBooking = serviceDetail.depositAmount === 0 || paymentOption === "local";
-  const initialStatus = autoConfirm && isLocalBooking && !isSuggestion ? "confirmed" : "pending";
+  if (beforeBookingCommitTestHook) {
+    await beforeBookingCommitTestHook({ businessId, worker, service, date: dateStr, startTime });
+  }
 
-  await logEvent({
-    userId: client,
-    event: "APPOINTMENT_VALIDATION_SUCCESS",
-    level: "INFO",
-    message: "Validación de reserva exitosa: horario, servicio y bookability vigentes.",
-    metadata: { worker, dateStr, startTime },
-  });
-
-  const newAppointment = await appointmentRepository.create({
+  const baseAppointment = {
     client,
     worker,
     service,
     date: targetDate,
     startTime,
-    endTime,
-    status: initialStatus,
     notes: finalNotes,
     business: businessId,
     guestContact,
+  };
+
+  const newAppointment = await appointmentRepository.create(baseAppointment, {
+    prepareCommit: async (session, data) => {
+      // La selección previa y getAvailableSlots() son informativos. La autoridad
+      // final se revalida después de adquirir el mutex worker/día y dentro de la
+      // misma sesión que comprueba overlap e inserta la Appointment.
+      const commitScope = await validateBookingTenantScope({
+        worker,
+        service,
+        businessId,
+        session,
+      });
+      const serviceDetail = commitScope.serviceDetail;
+      const endTime = addMinutesToTime(startTime, serviceDetail.duration);
+      const isLocalBooking = serviceDetail.depositAmount === 0 || paymentOption === "local";
+      const initialStatus = autoConfirm && isLocalBooking && !isSuggestion ? "confirmed" : "pending";
+
+      return {
+        ...data,
+        service: serviceDetail._id,
+        endTime,
+        status: initialStatus,
+      };
+    },
+  });
+
+  await logEvent({
+    userId: client,
+    event: "APPOINTMENT_VALIDATION_SUCCESS",
+    level: "INFO",
+    message: "Validación de reserva exitosa: horario, servicio y bookability vigentes al commit.",
+    metadata: { worker, dateStr, startTime },
   });
 
   await auditLogRepository.associateOrphanedLogs(client, newAppointment._id);
   await logEvent({
     appointmentId: newAppointment._id,
     userId: client,
-    event: initialStatus === "confirmed" ? "APPOINTMENT_CONFIRMED" : "APPOINTMENT_PENDING_CREATED",
+    event: newAppointment.status === "confirmed" ? "APPOINTMENT_CONFIRMED" : "APPOINTMENT_PENDING_CREATED",
     level: "INFO",
     message: `Reserva creada en estado inicial (${newAppointment.status}).`,
     metadata: { appointmentId: newAppointment._id, status: newAppointment.status },
   });
 
   emitAvailabilityChange(worker, dateStr, businessId);
-  notifyBookingCreated(newAppointment._id, client, initialStatus);
+  notifyBookingCreated(newAppointment._id, client, newAppointment.status);
   return newAppointment;
 };
 
