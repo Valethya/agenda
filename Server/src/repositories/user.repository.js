@@ -1,4 +1,6 @@
+import mongoose from "mongoose";
 import User from "../db/models/user.model.js";
+import Membership from "../db/models/membership.model.js";
 
 export const findById = async (id, { session = null } = {}) => {
   return await User.findById(id).session(session || null);
@@ -25,7 +27,28 @@ export const createUser = async (data) => {
 };
 
 export const updateUser = async (id, updateData) => {
-  return await User.findByIdAndUpdate(id, updateData, { new: true });
+  if (!Object.prototype.hasOwnProperty.call(updateData ?? {}, "isActive")) {
+    return await User.findByIdAndUpdate(id, updateData, { new: true });
+  }
+
+  const session = await mongoose.startSession();
+  let result = null;
+  try {
+    await session.withTransaction(async () => {
+      // User.isActive es autoridad global para bookability. La transición toca
+      // cada Membership del usuario para entrar en el mismo fence per-worker
+      // que usa el booking, sin crear exclusión entre workers distintos.
+      await Membership.updateMany(
+        { user: id },
+        { $inc: { bookingEligibilityRevision: 1 } },
+        { session },
+      );
+      result = await User.findByIdAndUpdate(id, updateData, { new: true, session });
+    });
+    return result;
+  } finally {
+    await session.endSession();
+  }
 };
 
 export const findByResetToken = async (token) => {
@@ -45,12 +68,4 @@ export const findOne = async (query = {}) => {
 
 export const aggregate = async (pipeline) => {
   return await User.aggregate(pipeline);
-};
-
-export const fenceBookingEligibility = async (userId, { session }) => {
-  return await User.findOneAndUpdate(
-    { _id: userId, isActive: true },
-    { $inc: { bookingEligibilityRevision: 1 } },
-    { new: true, session },
-  ).select("_id isActive");
 };
