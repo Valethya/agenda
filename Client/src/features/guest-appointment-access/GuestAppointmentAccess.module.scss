@@ -71,7 +71,8 @@
 }
 
 .form button,
-.secondary {
+.secondary,
+.danger {
   min-height: 44px;
   padding: 10px 16px;
   border: 1px solid #151515;
@@ -83,16 +84,48 @@
   cursor: pointer;
 }
 
-.form button:disabled {
+.form button:disabled,
+.secondary:disabled,
+.danger:disabled {
   cursor: not-allowed;
   opacity: .45;
 }
 
-.secondary {
+.secondary,
+.danger {
   width: 100%;
   margin-top: 20px;
+}
+
+.secondary {
   background: transparent;
   color: #151515;
+}
+
+.danger {
+  border-color: #8f1d1d;
+  background: #8f1d1d;
+}
+
+.actions,
+.confirmation {
+  margin-top: 24px;
+}
+
+.actions .secondary {
+  margin-top: 10px;
+}
+
+.confirmation {
+  padding: 18px;
+  border: 1px solid #deded8;
+  border-radius: 12px;
+}
+
+.confirmation p {
+  margin: 0 0 10px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
 }
 
 .appointment {
