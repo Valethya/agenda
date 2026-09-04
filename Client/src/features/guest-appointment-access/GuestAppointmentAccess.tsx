@@ -1,11 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { createGuestAppointmentAccessApi, GuestAppointmentAccessApiError } from './api.ts';
 import {
+  bootstrapGuestAppointmentAccess,
   createGuestAccessLifecycleCleanup,
   formatGuestCalendarDate,
   isGuestObjectId,
-  parseGuestAppointmentIdentity,
-  parseGuestAppointmentProof,
   RequestIdentityGate,
 } from './model.ts';
 import type {
@@ -142,27 +141,20 @@ export default function GuestAppointmentAccess() {
     if (bootstrapped.current) return cleanup;
     bootstrapped.current = true;
 
-    const fragment = window.location.hash;
-    const proof = parseGuestAppointmentProof(fragment);
-    const queryIdentity = parseGuestAppointmentIdentity(window.location.search);
-
-    // El fragment contiene el bearer del challenge. Se elimina de la barra de
-    // direcciones antes de cualquier llamada de red; nunca se guarda en storage.
-    if (fragment) {
-      window.history.replaceState(null, '', `${window.location.pathname}${window.location.search}`);
-    }
-
-    if (proof) {
-      void verifyAndConsume(proof);
-    } else {
-      if (queryIdentity) replaceIdentity(queryIdentity);
-      if (fragment) {
+    return bootstrapGuestAppointmentAccess({
+      fragment: window.location.hash,
+      search: window.location.search,
+      clearSensitiveFragment: () => {
+        window.history.replaceState(null, '', `${window.location.pathname}${window.location.search}`);
+      },
+      onProof: (proof) => { void verifyAndConsume(proof); },
+      onIdentity: replaceIdentity,
+      onInvalidProof: () => {
         setView('invalid-proof');
         setMessage('El enlace es inválido, venció o ya fue utilizado. Solicita un acceso nuevo.');
-      }
-    }
-
-    return cleanup;
+      },
+      cleanup,
+    });
   }, []);
 
   const canRequest = isGuestObjectId(identity.businessId) && isGuestObjectId(identity.appointmentId);
