@@ -2,10 +2,36 @@ import type { GuestAppointmentIdentity, GuestAppointmentProof } from './types.ts
 
 const ID_RE = /^[0-9a-fA-F]{24}$/u;
 const BEARER_RE = /^[A-Za-z0-9_-]{43}$/u;
+const CALENDAR_DATE_RE = /^(\d{4})-(\d{2})-(\d{2})(?:T.*)?$/u;
 const PURPOSE = 'appointment-read-bootstrap' as const;
 
 export const isGuestObjectId = (value: string): boolean => ID_RE.test(value);
 export const isGuestBearer = (value: string): boolean => BEARER_RE.test(value);
+
+export function formatGuestCalendarDate(
+  value: string,
+  formatter = new Intl.DateTimeFormat('es-CL', { dateStyle: 'long' }),
+): string {
+  const match = CALENDAR_DATE_RE.exec(value);
+  if (!match) return value;
+
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const calendarDate = new Date(year, month - 1, day);
+
+  if (
+    calendarDate.getFullYear() !== year
+    || calendarDate.getMonth() !== month - 1
+    || calendarDate.getDate() !== day
+  ) return value;
+
+  try {
+    return formatter.format(calendarDate);
+  } catch {
+    return value;
+  }
+}
 
 export function identityKey(identity: GuestAppointmentIdentity): string {
   return `${identity.businessId}:${identity.appointmentId}`;
@@ -57,6 +83,10 @@ export class RequestIdentityGate {
     this.#identity = identity ? identityKey(identity) : '';
   }
 
+  invalidate(): void {
+    this.reset(null);
+  }
+
   begin(identity: GuestAppointmentIdentity): { generation: number; identity: string } {
     this.#generation += 1;
     this.#identity = identityKey(identity);
@@ -66,6 +96,16 @@ export class RequestIdentityGate {
   isCurrent(token: { generation: number; identity: string }): boolean {
     return token.generation === this.#generation && token.identity === this.#identity;
   }
+}
+
+export function createGuestAccessLifecycleCleanup(
+  controller: { current: AbortController | null },
+  gate: RequestIdentityGate,
+): () => void {
+  return () => {
+    controller.current?.abort();
+    gate.invalidate();
+  };
 }
 
 export function createExclusiveAsyncAction<TArgs extends unknown[], TResult>(
