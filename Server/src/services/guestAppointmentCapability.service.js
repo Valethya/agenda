@@ -18,7 +18,6 @@ import {
 } from "../security/guestAppointmentCapability.constants.js";
 import { emitAvailabilityChange } from "../config/socket.js";
 import { notifyAppointmentCancelled } from "./appointment.notifications.js";
-import { logEvent } from "../utils/auditLogger.js";
 import { ConflictError } from "../utils/appError.js";
 
 const ID_RE = /^[0-9a-fA-F]{24}$/u;
@@ -89,14 +88,12 @@ const requestChallenge = async ({ businessId, appointmentId, purpose }) => {
   return ACCEPTED;
 };
 
-/** Public READ acceptance boundary. */
 export const requestGuestAppointmentReadChallenge = ({ businessId, appointmentId }) => requestChallenge({
   businessId,
   appointmentId,
   purpose: GUEST_APPOINTMENT_PURPOSES.READ,
 });
 
-/** Public CANCEL acceptance boundary. It does not probe Appointment synchronously. */
 export const requestGuestAppointmentCancelChallenge = ({ businessId, appointmentId }) => requestChallenge({
   businessId,
   appointmentId,
@@ -122,13 +119,7 @@ const resolveDeliveryPublicWebTrust = async ({ delivered, business, appointment 
   return jobMatches ? trust : null;
 };
 
-const exchangeChallenge = async ({
-  businessId,
-  appointmentId,
-  verificationId,
-  challengeSecret,
-  purpose,
-}) => {
+const exchangeChallenge = async ({ businessId, appointmentId, verificationId, challengeSecret, purpose }) => {
   const business = objectId(businessId);
   const appointment = objectId(appointmentId);
   const verification = objectId(verificationId);
@@ -156,9 +147,7 @@ const exchangeChallenge = async ({
   });
   if (!trustedJob) throw invalidProof();
 
-  if (!await resolveDeliveryPublicWebTrust({ delivered, business, appointment })) {
-    throw invalidProof();
-  }
+  if (!await resolveDeliveryPublicWebTrust({ delivered, business, appointment })) throw invalidProof();
 
   try {
     await consumeExactVerificationForBusiness({
@@ -174,21 +163,13 @@ const exchangeChallenge = async ({
   const currentTrust = await resolveDeliveryPublicWebTrust({ delivered, business, appointment });
   if (!currentTrust) throw invalidProof();
 
-  const fence = await acquirePublicWebSendFence({
-    businessId: business,
-    trust: currentTrust,
-    now: new Date(),
-  });
+  const fence = await acquirePublicWebSendFence({ businessId: business, trust: currentTrust, now: new Date() });
   if (!fence) throw invalidProof();
 
   const secret = crypto.randomBytes(32).toString("base64url");
   const expiresAt = new Date(Date.now() + CAPABILITY_TTL_MS);
   try {
-    const stillAuthorized = await confirmPublicWebSendFence({
-      businessId: business,
-      fence,
-      now: new Date(),
-    });
+    const stillAuthorized = await confirmPublicWebSendFence({ businessId: business, fence, now: new Date() });
     if (!stillAuthorized) throw invalidProof();
 
     const capability = await capabilityRepository.createActiveForScope({
@@ -282,14 +263,6 @@ export const consumeGuestAppointmentCancelCapability = async ({ businessId, appo
   if (outcome.kind === "conflict") throw stateConflict();
   const cancelled = outcome.appointment;
   if (!cancelled || cancelled.status !== "cancelled") throw invalidProof();
-
-  await logEvent({
-    appointmentId: appointment,
-    event: "APPOINTMENT_CANCELLED",
-    level: "INFO",
-    message: "Reserva cancelada mediante autoridad guest.",
-    metadata: { actorCapability: "guest-cancel", businessId: business },
-  });
 
   const dateStr = new Date(cancelled.date).toISOString().split("T")[0];
   emitAvailabilityChange(cancelled.worker.toString(), dateStr, business);
