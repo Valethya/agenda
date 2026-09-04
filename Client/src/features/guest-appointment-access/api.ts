@@ -70,7 +70,7 @@ export function createGuestAppointmentAccessApi(options: GuestAppointmentAccessA
   const apiUrl = (options.apiUrl || configuredApiUrl()).replace(/\/+$/u, '');
   const fetchImpl = options.fetchImpl || fetch;
 
-  const post = async <T>(path: string, body: Record<string, string>, expectedStatus: number, signal?: AbortSignal): Promise<T> => {
+  const post = async <T>(path: string, body: object, expectedStatus: number, signal?: AbortSignal): Promise<T> => {
     const response = await fetchImpl(`${apiUrl}${path}`, {
       method: 'POST',
       credentials: 'omit',
