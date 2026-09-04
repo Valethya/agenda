@@ -202,7 +202,7 @@ test('lifecycle anterior no puede publicar loaded, invalid-proof ni recoverable-
   gate.invalidate();
   for (const outcome of ['invalid-proof', 'recoverable-error'] as const) {
     assert.equal(gate.isCurrent(staleError), false);
-    assert.equal(visible.includes(outcome), false);
+    assert.equal((visible as string[]).includes(outcome), false);
   }
 });
 
