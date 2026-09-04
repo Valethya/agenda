@@ -3,14 +3,24 @@ export interface GuestAppointmentIdentity {
   appointmentId: string;
 }
 
+export type GuestAppointmentPurpose =
+  | 'appointment-read-bootstrap'
+  | 'appointment-cancel-bootstrap';
+
 export interface GuestAppointmentProof extends GuestAppointmentIdentity {
   verificationId: string;
-  purpose: 'appointment-read-bootstrap';
+  purpose: GuestAppointmentPurpose;
   challengeSecret: string;
 }
 
 export interface GuestAppointmentReadCapability extends GuestAppointmentIdentity {
   action: 'read';
+  bearer: string;
+  expiresAt: string;
+}
+
+export interface GuestAppointmentCancelCapability extends GuestAppointmentIdentity {
+  action: 'cancel';
   bearer: string;
   expiresAt: string;
 }
@@ -27,7 +37,17 @@ export interface GuestAppointmentReadProjection {
   paymentStatus: string;
 }
 
-export interface GuestReadChallengeAccepted {
+export interface GuestAppointmentCancelProjection extends GuestAppointmentIdentity {
+  status: 'cancelled';
+  date: string;
+  startTime: string;
+  endTime: string;
+}
+
+export interface GuestChallengeAccepted {
   status: 'accepted';
   message: string;
 }
+
+export type GuestReadChallengeAccepted = GuestChallengeAccepted;
+export type GuestCancelChallengeAccepted = GuestChallengeAccepted;
