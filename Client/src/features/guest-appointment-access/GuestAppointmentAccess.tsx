@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { createGuestAppointmentAccessApi, GuestAppointmentAccessApiError } from './api.ts';
 import {
+  createGuestAccessLifecycleCleanup,
+  formatGuestCalendarDate,
   isGuestObjectId,
   parseGuestAppointmentIdentity,
   parseGuestAppointmentProof,
@@ -24,14 +26,6 @@ type ViewState =
   | 'recoverable-error';
 
 const EMPTY_IDENTITY: GuestAppointmentIdentity = { businessId: '', appointmentId: '' };
-
-function formatDate(value: string): string {
-  try {
-    return new Intl.DateTimeFormat('es-CL', { dateStyle: 'long' }).format(new Date(value));
-  } catch {
-    return value;
-  }
-}
 
 function professionalName(appointment: GuestAppointmentReadProjection): string {
   const professional = appointment.professional;
@@ -144,7 +138,8 @@ export default function GuestAppointmentAccess() {
   };
 
   useEffect(() => {
-    if (bootstrapped.current) return;
+    const cleanup = createGuestAccessLifecycleCleanup(controller, gate.current);
+    if (bootstrapped.current) return cleanup;
     bootstrapped.current = true;
 
     const fragment = window.location.hash;
@@ -159,15 +154,15 @@ export default function GuestAppointmentAccess() {
 
     if (proof) {
       void verifyAndConsume(proof);
-      return;
-    }
-    if (queryIdentity) replaceIdentity(queryIdentity);
-    if (fragment && !proof) {
-      setView('invalid-proof');
-      setMessage('El enlace es inválido, venció o ya fue utilizado. Solicita un acceso nuevo.');
+    } else {
+      if (queryIdentity) replaceIdentity(queryIdentity);
+      if (fragment) {
+        setView('invalid-proof');
+        setMessage('El enlace es inválido, venció o ya fue utilizado. Solicita un acceso nuevo.');
+      }
     }
 
-    return () => controller.current?.abort();
+    return cleanup;
   }, []);
 
   const canRequest = isGuestObjectId(identity.businessId) && isGuestObjectId(identity.appointmentId);
@@ -220,7 +215,7 @@ export default function GuestAppointmentAccess() {
             <div><dt>Negocio</dt><dd>{appointment.business?.name || '—'}</dd></div>
             <div><dt>Servicio</dt><dd>{appointment.service?.name || '—'}</dd></div>
             <div><dt>Profesional</dt><dd>{professionalName(appointment)}</dd></div>
-            <div><dt>Fecha</dt><dd>{formatDate(appointment.date)}</dd></div>
+            <div><dt>Fecha</dt><dd>{formatGuestCalendarDate(appointment.date)}</dd></div>
             <div><dt>Hora</dt><dd>{appointment.startTime}–{appointment.endTime}</dd></div>
             <div><dt>Estado</dt><dd>{appointment.status}</dd></div>
             <div><dt>Pago</dt><dd>{appointment.paymentStatus}</dd></div>
