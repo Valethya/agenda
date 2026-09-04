@@ -1,0 +1,142 @@
+:global(*) {
+  box-sizing: border-box;
+}
+
+:global(body) {
+  margin: 0;
+  min-height: 100vh;
+  background: #f5f5f2;
+  color: #151515;
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.shell {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+}
+
+.card {
+  width: min(100%, 600px);
+  padding: clamp(28px, 5vw, 48px);
+  background: #fff;
+  border: 1px solid #deded8;
+  border-radius: 18px;
+}
+
+.eyebrow {
+  margin: 0 0 14px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: .14em;
+  text-transform: uppercase;
+}
+
+.card h1 {
+  margin: 0;
+  font-size: clamp(32px, 7vw, 52px);
+  line-height: 1;
+  letter-spacing: -.04em;
+}
+
+.status {
+  margin: 20px 0 0;
+  color: #555;
+  line-height: 1.55;
+}
+
+.form {
+  display: grid;
+  gap: 16px;
+  margin-top: 28px;
+}
+
+.form label {
+  display: grid;
+  gap: 8px;
+  font-size: 13px;
+  color: #555;
+}
+
+.form input {
+  width: 100%;
+  min-height: 44px;
+  padding: 10px 12px;
+  border: 1px solid #cfcfca;
+  border-radius: 10px;
+  background: #fff;
+  color: #151515;
+  font: inherit;
+}
+
+.form button,
+.secondary {
+  min-height: 44px;
+  padding: 10px 16px;
+  border: 1px solid #151515;
+  border-radius: 10px;
+  background: #151515;
+  color: #fff;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.form button:disabled {
+  cursor: not-allowed;
+  opacity: .45;
+}
+
+.secondary {
+  width: 100%;
+  margin-top: 20px;
+  background: transparent;
+  color: #151515;
+}
+
+.appointment {
+  margin: 32px 0 0;
+  border-top: 1px solid #deded8;
+}
+
+.appointment div {
+  display: grid;
+  grid-template-columns: minmax(100px, .7fr) minmax(0, 1.3fr);
+  gap: 16px;
+  padding: 14px 0;
+  border-bottom: 1px solid #ecece7;
+}
+
+.appointment dt {
+  color: #666;
+}
+
+.appointment dd {
+  min-width: 0;
+  margin: 0;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.boundary {
+  margin: 28px 0 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: #777;
+}
+
+@media (max-width: 480px) {
+  .shell {
+    padding: 14px;
+  }
+
+  .card {
+    padding: 26px 20px;
+  }
+
+  .appointment div {
+    grid-template-columns: 1fr;
+    gap: 5px;
+  }
+}
