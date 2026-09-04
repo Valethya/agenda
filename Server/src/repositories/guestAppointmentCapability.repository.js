@@ -1,5 +1,6 @@
 import mongoose from "mongoose";
 import Appointment from "../db/models/appointment.model.js";
+import AuditLog from "../db/models/auditLog.model.js";
 import ClientContactVerification, {
   CLIENT_CONTACT_VERIFICATION_PURPOSES,
 } from "../db/models/clientContactVerification.model.js";
@@ -118,10 +119,9 @@ export const consumeForScope = async ({ businessId, appointmentId, action, secre
 };
 
 /**
- * H2 sensitive mutation boundary. Capability consumption and Appointment
- * transition share one MongoDB transaction. A status conflict aborts the whole
- * transaction, so a crash/conflict cannot leave an already-consumed bearer with
- * an active Appointment, nor expose an active Appointment as a free slot.
+ * H2 sensitive mutation boundary. Capability consumption, Appointment status
+ * transition and guest actor audit share one MongoDB transaction. A state
+ * conflict or process failure aborts all three writes together.
  */
 export const consumeAndCancelForScope = async ({ businessId, appointmentId, action, secretHash, now }) => {
   const business = requireStrictObjectId(businessId, "businessId");
@@ -170,6 +170,17 @@ export const consumeAndCancelForScope = async ({ businessId, appointmentId, acti
         conflict.code = CANCEL_STATE_CONFLICT;
         throw conflict;
       }
+
+      await AuditLog.create([{
+        appointmentId: appointment,
+        event: "APPOINTMENT_CANCELLED",
+        level: "INFO",
+        message: "Reserva cancelada mediante autoridad guest.",
+        metadata: {
+          actorCapability: "guest-cancel",
+          businessId: business,
+        },
+      }], { session });
 
       result = { kind: "cancelled", appointment: cancelled };
     }, {
