@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useReducer, useRef } from 'react';
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import {
   createPublicBookingApi,
   isPublicBookingApiError,
@@ -9,16 +9,12 @@ import {
   buildBookingCommitIdentity,
   buildPublicBookingPayload,
   initialBookingState,
-  normalizePublicBookingSlug,
   RequestIdentityGate,
   validateClientInfo,
 } from './bookingModel';
+import { resolvePublicBookingSlugFromSearch } from './runtimeSlug';
 import type { PublicClientInfo, PublicProfessional, PublicService, PublicSlot } from './types';
 import styles from './PublicBookingFlow.module.scss';
-
-interface PublicBookingFlowProps {
-  slug?: string | null;
-}
 
 const isAbortError = (error: unknown) => error instanceof DOMException && error.name === 'AbortError';
 
@@ -41,8 +37,12 @@ const localToday = () => {
   return `${year}-${month}-${day}`;
 };
 
-export default function PublicBookingFlow({ slug: rawSlug }: PublicBookingFlowProps) {
-  const slug = normalizePublicBookingSlug(rawSlug);
+export default function PublicBookingFlow() {
+  const [runtimeIdentity, setRuntimeIdentity] = useState<{ resolved: boolean; slug: string | null }>({
+    resolved: false,
+    slug: null,
+  });
+  const slug = runtimeIdentity.slug;
   const [state, dispatch] = useReducer(bookingReducer, undefined, initialBookingState);
   const gateRef = useRef(new RequestIdentityGate());
   const commitCoordinatorRef = useRef(new BookingCommitCoordinator());
@@ -50,6 +50,13 @@ export default function PublicBookingFlow({ slug: rawSlug }: PublicBookingFlowPr
   const servicesAbortRef = useRef<AbortController | null>(null);
   const professionalsAbortRef = useRef<AbortController | null>(null);
   const slotsAbortRef = useRef<AbortController | null>(null);
+
+  useEffect(() => {
+    setRuntimeIdentity({
+      resolved: true,
+      slug: resolvePublicBookingSlugFromSearch(window.location.search),
+    });
+  }, []);
 
   const api = useMemo(
     () => createPublicBookingApi({ slug: slug || '' }),
@@ -91,13 +98,14 @@ export default function PublicBookingFlow({ slug: rawSlug }: PublicBookingFlowPr
   }, [api, slug]);
 
   useEffect(() => {
+    if (!runtimeIdentity.resolved) return undefined;
     void loadServices();
     return () => {
       servicesAbortRef.current?.abort();
       professionalsAbortRef.current?.abort();
       slotsAbortRef.current?.abort();
     };
-  }, [loadServices]);
+  }, [loadServices, runtimeIdentity.resolved]);
 
   const loadProfessionals = useCallback(async (service: PublicService) => {
     professionalsAbortRef.current?.abort();
@@ -248,6 +256,18 @@ export default function PublicBookingFlow({ slug: rawSlug }: PublicBookingFlowPr
     }
     dispatch({ type: 'submitError', message: result.message });
   };
+
+  if (!runtimeIdentity.resolved) {
+    return (
+      <main className={styles.shell}>
+        <section className={styles.card}>
+          <p className={styles.eyebrow}>Agenda</p>
+          <h1>Reservar una hora</h1>
+          <p className={styles.message}>Cargando enlace de reserva…</p>
+        </section>
+      </main>
+    );
+  }
 
   if (!slug) {
     return (
