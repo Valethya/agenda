@@ -12,6 +12,8 @@ import {
 } from '../src/features/guest-appointment-access/model.ts';
 import { createGuestAppointmentAccessApi, GuestAppointmentAccessApiError } from '../src/features/guest-appointment-access/api.ts';
 import type {
+  GuestAppointmentCancelCapability,
+  GuestAppointmentCancelProjection,
   GuestAppointmentIdentity,
   GuestAppointmentReadCapability,
   GuestAppointmentReadProjection,
@@ -41,12 +43,12 @@ const projection: GuestAppointmentReadProjection = {
   paymentStatus: 'pending',
 };
 
-function proofFragment(): string {
+function proofFragment(purpose: 'appointment-read-bootstrap' | 'appointment-cancel-bootstrap' = 'appointment-read-bootstrap'): string {
   return `#${new URLSearchParams({
     businessId: identityA.businessId,
     appointmentId: identityA.appointmentId,
     verificationId,
-    purpose: 'appointment-read-bootstrap',
+    purpose,
     challenge,
   }).toString()}`;
 }
@@ -70,28 +72,26 @@ test('fecha guest conserva semántica calendario sin reinterpretar medianoche UT
     },
   } as Intl.DateTimeFormat;
 
-  assert.equal(
-    formatGuestCalendarDate('2026-09-10T00:00:00.000Z', formatter),
-    '10 de septiembre de 2026',
-  );
+  assert.equal(formatGuestCalendarDate('2026-09-10T00:00:00.000Z', formatter), '10 de septiembre de 2026');
   assert.equal(formatGuestCalendarDate('2026-09-10', formatter), '10 de septiembre de 2026');
   assert.deepEqual(observed, [[2026, 9, 10], [2026, 9, 10]]);
   assert.equal(formatGuestCalendarDate('fecha-invalida', formatter), 'fecha-invalida');
   assert.equal(formatGuestCalendarDate('2026-02-31', formatter), '2026-02-31');
 });
 
-test('fragmento guest exige scope/proof exactos y el query sólo aporta identidad no autoritativa', () => {
-  const fragment = new URLSearchParams({
-    businessId: identityA.businessId,
-    appointmentId: identityA.appointmentId,
-    verificationId,
-    purpose: 'appointment-read-bootstrap',
-    challenge,
-  });
-  assert.deepEqual(parseGuestAppointmentProof(`#${fragment.toString()}`), {
+test('fragmento guest acepta sólo proofs READ/CANCEL implementados y query no es autoridad', () => {
+  const read = parseGuestAppointmentProof(proofFragment());
+  assert.deepEqual(read, {
     ...identityA,
     verificationId,
     purpose: 'appointment-read-bootstrap',
+    challengeSecret: challenge,
+  });
+  const cancel = parseGuestAppointmentProof(proofFragment('appointment-cancel-bootstrap'));
+  assert.deepEqual(cancel, {
+    ...identityA,
+    verificationId,
+    purpose: 'appointment-cancel-bootstrap',
     challengeSecret: challenge,
   });
   assert.deepEqual(
@@ -99,11 +99,13 @@ test('fragmento guest exige scope/proof exactos y el query sólo aporta identida
     identityA,
   );
   assert.equal(parseGuestAppointmentIdentity(`?appointmentId=${identityA.appointmentId}`), null);
-  fragment.set('purpose', 'appointment-cancel-bootstrap');
-  assert.equal(parseGuestAppointmentProof(`#${fragment.toString()}`), null);
-  fragment.set('purpose', 'appointment-read-bootstrap');
-  fragment.append('challenge', challenge);
-  assert.equal(parseGuestAppointmentProof(`#${fragment.toString()}`), null);
+
+  const reschedule = new URLSearchParams(proofFragment().slice(1));
+  reschedule.set('purpose', 'appointment-reschedule-bootstrap');
+  assert.equal(parseGuestAppointmentProof(`#${reschedule.toString()}`), null);
+  const duplicate = new URLSearchParams(proofFragment().slice(1));
+  duplicate.append('challenge', challenge);
+  assert.equal(parseGuestAppointmentProof(`#${duplicate.toString()}`), null);
 });
 
 test('bootstrap con proof limpia fragmento antes de verify y siempre devuelve cleanup', () => {
@@ -206,7 +208,7 @@ test('lifecycle anterior no puede publicar loaded, invalid-proof ni recoverable-
   }
 });
 
-test('cliente guest request → verify → consume usa sólo READ, no cookies y no-store', async () => {
+test('cliente guest request → verify → consume READ no usa cookies y mantiene no-store', async () => {
   const calls: Array<{ url: string; init?: RequestInit; body: Record<string, string> }> = [];
   const capability: GuestAppointmentReadCapability = {
     ...identityA,
@@ -231,8 +233,7 @@ test('cliente guest request → verify → consume usa sólo READ, no cookies y 
   }) as typeof fetch;
   const api = createGuestAppointmentAccessApi({ apiUrl: 'https://api.test/api', fetchImpl });
 
-  const accepted = await api.requestReadChallenge(identityA);
-  assert.equal(accepted.status, 'accepted');
+  await api.requestReadChallenge(identityA);
   const verified = await api.verifyReadChallenge({
     ...identityA,
     verificationId,
@@ -253,15 +254,71 @@ test('cliente guest request → verify → consume usa sólo READ, no cookies y 
     assert.equal(call.init?.referrerPolicy, 'no-referrer');
     assert.equal(new Headers(call.init?.headers).get('Cache-Control'), 'no-store');
   }
-  assert.deepEqual(calls[0]?.body, identityA);
-  assert.equal(Object.hasOwn(calls[1]?.body || {}, 'challengeSecret'), true);
-  assert.deepEqual(calls[2]?.body, { ...identityA, bearer });
-  assert.deepEqual(Object.keys(api).sort(), ['consumeReadCapability', 'requestReadChallenge', 'verifyReadChallenge']);
-  assert.equal('cancel' in api, false);
-  assert.equal('reschedule' in api, false);
 });
 
-test('challenge/capability no se persisten en storage y frontend sólo expone READ', async () => {
+test('cliente guest CANCEL usa endpoints separados y sólo muta en consume POST explícito', async () => {
+  const calls: Array<{ url: string; init?: RequestInit }> = [];
+  const capability: GuestAppointmentCancelCapability = {
+    ...identityA,
+    action: 'cancel',
+    bearer,
+    expiresAt: '2200-01-01T00:00:00.000Z',
+  };
+  const cancelled: GuestAppointmentCancelProjection = {
+    ...identityA,
+    status: 'cancelled',
+    date: projection.date,
+    startTime: projection.startTime,
+    endTime: projection.endTime,
+  };
+  const responses = [
+    new Response(JSON.stringify({ status: 'accepted', message: 'Correo enviado' }), { status: 202 }),
+    new Response(JSON.stringify({ status: 'success', capability }), { status: 200 }),
+    new Response(JSON.stringify({ status: 'success', appointment: cancelled }), { status: 200 }),
+  ];
+  const api = createGuestAppointmentAccessApi({
+    apiUrl: 'https://api.test/api',
+    fetchImpl: (async (input: string | URL | Request, init?: RequestInit) => {
+      calls.push({ url: String(input), init });
+      const response = responses.shift();
+      assert.ok(response);
+      return response;
+    }) as typeof fetch,
+  });
+
+  await api.requestCancelChallenge(identityA);
+  const verified = await api.verifyCancelChallenge({
+    ...identityA,
+    verificationId,
+    purpose: 'appointment-cancel-bootstrap',
+    challengeSecret: challenge,
+  });
+  assert.equal(verified.action, 'cancel');
+  assert.equal(calls.length, 2, 'verify no debe cancelar');
+  const result = await api.consumeCancelCapability(verified);
+  assert.deepEqual(result, cancelled);
+  assert.deepEqual(calls.map((call) => new URL(call.url).pathname), [
+    '/api/guest-appointments/cancel/challenge',
+    '/api/guest-appointments/cancel/verify',
+    '/api/guest-appointments/cancel',
+  ]);
+  assert.equal(calls.every((call) => call.init?.method === 'POST'), true);
+});
+
+test('proof READ no puede intercambiarse mediante verify CANCEL', async () => {
+  const api = createGuestAppointmentAccessApi({
+    apiUrl: 'https://api.test/api',
+    fetchImpl: (async () => assert.fail('proof READ debe rechazarse antes de red')) as typeof fetch,
+  });
+  await assert.rejects(() => api.verifyCancelChallenge({
+    ...identityA,
+    verificationId,
+    purpose: 'appointment-read-bootstrap',
+    challengeSecret: challenge,
+  }), /CANCEL/u);
+});
+
+test('challenge/capability no se persisten en storage; CANCEL existe y RESCHEDULE no', async () => {
   const sources = await Promise.all([
     readFile(new URL('../src/features/guest-appointment-access/GuestAppointmentAccess.tsx', import.meta.url), 'utf8'),
     readFile(new URL('../src/features/guest-appointment-access/api.ts', import.meta.url), 'utf8'),
@@ -271,8 +328,9 @@ test('challenge/capability no se persisten en storage y frontend sólo expone RE
   assert.equal(source.includes('localStorage'), false);
   assert.equal(source.includes('sessionStorage'), false);
   assert.equal(source.includes('document.cookie'), false);
-  assert.equal(source.includes('/cancel'), false);
+  assert.equal(source.includes('/cancel'), true);
   assert.equal(source.includes('/reschedule'), false);
+  assert.equal(source.includes('Confirmar cancelación'), true);
 });
 
 test('capability de otro Appointment o Business falla cerrado antes de consumo', async () => {
@@ -310,7 +368,7 @@ test('errores READ siguen cerrados y no se convierten en autoridad alternativa',
   );
 });
 
-test('guardia síncrona bloquea doble verify/consume y permite retry al finalizar', async () => {
+test('guardia síncrona bloquea doble submit y permite retry al finalizar', async () => {
   let calls = 0;
   const barrier = controlledPromise<void>();
   const guarded = createExclusiveAsyncAction(async (value: string) => {
@@ -319,12 +377,12 @@ test('guardia síncrona bloquea doble verify/consume y permite retry al finaliza
     return value;
   });
 
-  const first = guarded('read');
-  const second = await guarded('read');
+  const first = guarded('cancel');
+  const second = await guarded('cancel');
   assert.deepEqual(second, { kind: 'ignored' });
   assert.equal(calls, 1);
   barrier.resolve();
-  assert.deepEqual(await first, { kind: 'started', value: 'read' });
+  assert.deepEqual(await first, { kind: 'started', value: 'cancel' });
   assert.deepEqual(await guarded('retry'), { kind: 'started', value: 'retry' });
   assert.equal(calls, 2);
 });

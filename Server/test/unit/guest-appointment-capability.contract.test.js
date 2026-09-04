@@ -20,20 +20,23 @@ import {
   getTrustedGuestAppointmentOrigin,
 } from "../../src/security/guestAppointmentAccessUrl.js";
 import {
+  guestAppointmentCancelChallengeSchema,
+  guestAppointmentCancelConsumeSchema,
+  guestAppointmentCancelExchangeSchema,
   guestAppointmentReadChallengeSchema,
   guestAppointmentReadExchangeSchema,
 } from "../../src/validations/guestAppointmentCapability.validation.js";
 
 const indexByName = (model, name) => model.schema.indexes().find(([, options]) => options.name === name);
 
-test("6.2.5-C2 capability contract", async (t) => {
-  await t.test("READ is the only implemented action and purpose mapping is closed", () => {
+test("6.2.5-C2/H2 capability contract", async (t) => {
+  await t.test("READ and CANCEL are implemented separately while RESCHEDULE stays closed", () => {
     assert.deepEqual(GUEST_APPOINTMENT_ACTIONS, ["read", "cancel", "reschedule"]);
-    assert.deepEqual(GUEST_APPOINTMENT_IMPLEMENTED_ACTIONS, ["read"]);
+    assert.deepEqual(GUEST_APPOINTMENT_IMPLEMENTED_ACTIONS, ["read", "cancel"]);
     assert.deepEqual(GUEST_APPOINTMENT_IMPLEMENTED_PURPOSE_TO_ACTION, {
       "appointment-read-bootstrap": "read",
+      "appointment-cancel-bootstrap": "cancel",
     });
-    assert.equal(GUEST_APPOINTMENT_IMPLEMENTED_PURPOSE_TO_ACTION["appointment-cancel-bootstrap"], undefined);
     assert.equal(GUEST_APPOINTMENT_IMPLEMENTED_PURPOSE_TO_ACTION["appointment-reschedule-bootstrap"], undefined);
   });
 
@@ -117,20 +120,21 @@ test("6.2.5-C2 capability contract", async (t) => {
         businessId: new mongoose.Types.ObjectId(),
         appointmentId: new mongoose.Types.ObjectId(),
         verificationId: new mongoose.Types.ObjectId(),
-        purpose: "appointment-read-bootstrap",
+        purpose: "appointment-cancel-bootstrap",
         challengeSecret: "a".repeat(43),
       });
       const parsed = new URL(url);
       assert.equal(parsed.origin, "https://tenant.example.test");
       assert.equal(parsed.search, "");
       assert.ok(parsed.hash.includes("challenge="));
+      assert.ok(parsed.hash.includes("appointment-cancel-bootstrap"));
     } finally {
       if (previous === undefined) delete process.env.GUEST_APPOINTMENT_ACCESS_ORIGIN;
       else process.env.GUEST_APPOINTMENT_ACCESS_ORIGIN = previous;
     }
   });
 
-  await t.test("HTTP schemas require explicit businessId and reject authority/destination injection", () => {
+  await t.test("HTTP schemas require explicit scope and reject authority/destination injection", () => {
     const businessId = new mongoose.Types.ObjectId().toString();
     const appointmentId = new mongoose.Types.ObjectId().toString();
     const verificationId = new mongoose.Types.ObjectId().toString();
@@ -138,19 +142,23 @@ test("6.2.5-C2 capability contract", async (t) => {
     assert.equal(guestAppointmentReadChallengeSchema.safeParse({
       body: { businessId, appointmentId }, query: {}, params: {},
     }).success, true);
-    assert.equal(guestAppointmentReadChallengeSchema.safeParse({
+    assert.equal(guestAppointmentCancelChallengeSchema.safeParse({
+      body: { businessId, appointmentId }, query: {}, params: {},
+    }).success, true);
+    assert.equal(guestAppointmentCancelChallengeSchema.safeParse({
       body: { businessId, appointmentId, email: "attacker@example.com" }, query: {}, params: {},
     }).success, false);
     assert.equal(guestAppointmentReadExchangeSchema.safeParse({
-      body: {
-        businessId,
-        appointmentId,
-        verificationId,
-        challengeSecret: "a".repeat(43),
-        action: "cancel",
-      },
-      query: {},
-      params: {},
+      body: { businessId, appointmentId, verificationId, challengeSecret: "a".repeat(43), action: "cancel" },
+      query: {}, params: {},
+    }).success, false);
+    assert.equal(guestAppointmentCancelExchangeSchema.safeParse({
+      body: { businessId, appointmentId, verificationId, challengeSecret: "a".repeat(43), action: "read" },
+      query: {}, params: {},
+    }).success, false);
+    assert.equal(guestAppointmentCancelConsumeSchema.safeParse({
+      body: { businessId, appointmentId, bearer: "b".repeat(43), status: "cancelled" },
+      query: {}, params: {},
     }).success, false);
   });
 });
