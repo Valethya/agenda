@@ -1,8 +1,6 @@
 ---
 import PublicBookingFlow from '../features/public-booking/PublicBookingFlow';
 import '../styles/global.scss';
-
-const slug = Astro.url.searchParams.get('slug');
 ---
 
 <html lang="es">
@@ -13,6 +11,6 @@ const slug = Astro.url.searchParams.get('slug');
     <title>Reservar una hora | Agenda</title>
   </head>
   <body>
-    <PublicBookingFlow slug={slug} client:load />
+    <PublicBookingFlow client:load />
   </body>
 </html>
