@@ -16,16 +16,19 @@ import {
   GUEST_APPOINTMENT_IMPLEMENTED_PURPOSE_TO_ACTION,
   GUEST_APPOINTMENT_PURPOSES,
 } from "../security/guestAppointmentCapability.constants.js";
+import { emitAvailabilityChange } from "../config/socket.js";
+import { notifyAppointmentCancelled } from "./appointment.notifications.js";
+import { logEvent } from "../utils/auditLogger.js";
+import { ConflictError } from "../utils/appError.js";
 
 const ID_RE = /^[0-9a-fA-F]{24}$/u;
 const BEARER_RE = /^[A-Za-z0-9_-]{43}$/u;
-const PURPOSE = GUEST_APPOINTMENT_PURPOSES.READ;
-const ACTION = GUEST_APPOINTMENT_IMPLEMENTED_PURPOSE_TO_ACTION[PURPOSE];
 const CAPABILITY_TTL_MS = 10 * 60 * 1000;
 
 export const GUEST_APPOINTMENT_CAPABILITY_ERROR_CODES = Object.freeze({
   INVALID_INPUT: "GUEST_APPOINTMENT_CAPABILITY_INVALID_INPUT",
   INVALID_PROOF: "GUEST_APPOINTMENT_CAPABILITY_INVALID_PROOF",
+  STATE_CONFLICT: "GUEST_APPOINTMENT_CANCEL_STATE_CONFLICT",
 });
 
 const fail = (message, code, ErrorType = Error) => {
@@ -35,6 +38,11 @@ const fail = (message, code, ErrorType = Error) => {
 };
 const invalidInput = () => fail("Solicitud guest no válida", GUEST_APPOINTMENT_CAPABILITY_ERROR_CODES.INVALID_INPUT, TypeError);
 const invalidProof = () => fail("Acceso guest no válido", GUEST_APPOINTMENT_CAPABILITY_ERROR_CODES.INVALID_PROOF);
+const stateConflict = () => fail(
+  "La reserva ya no se encuentra en un estado cancelable",
+  GUEST_APPOINTMENT_CAPABILITY_ERROR_CODES.STATE_CONFLICT,
+  ConflictError,
+);
 const objectId = (value) => {
   if (value instanceof mongoose.Types.ObjectId) return value;
   if (typeof value === "string" && ID_RE.test(value)) return new mongoose.Types.ObjectId(value);
@@ -49,37 +57,51 @@ const coherent = (appointment, businessId) => Boolean(
   appointment && id(appointment.business) === id(businessId)
   && appointment.service && id(appointment.service.business) === id(businessId),
 );
-const hashCapability = ({ businessId, appointmentId, secret }) => crypto
+const scopeForPurpose = (purpose) => {
+  const action = GUEST_APPOINTMENT_IMPLEMENTED_PURPOSE_TO_ACTION[purpose];
+  if (!action) throw invalidProof();
+  return { purpose, action };
+};
+const hashCapability = ({ businessId, appointmentId, action, secret }) => crypto
   .createHash("sha256")
   .update(businessId.toHexString(), "utf8").update("\0", "utf8")
   .update(appointmentId.toHexString(), "utf8").update("\0", "utf8")
-  .update(ACTION, "utf8").update("\0", "utf8")
+  .update(action, "utf8").update("\0", "utf8")
   .update(secret, "utf8").digest("hex");
 
 const ACCEPTED = Object.freeze({ accepted: true });
 
-/**
- * Public acceptance boundary. This path never resolves Appointment, User,
- * CustomerProfile or email and never waits for external delivery. It persists
- * one durable, cooldown-protected intent for the exact resource/action scope.
- */
-export const requestGuestAppointmentReadChallenge = async ({ businessId, appointmentId }) => {
+const requestChallenge = async ({ businessId, appointmentId, purpose }) => {
   const business = objectId(businessId);
   const appointment = objectId(appointmentId);
+  const { action } = scopeForPurpose(purpose);
   try {
     await jobRepository.enqueueForScope({
       businessId: business,
       appointmentId: appointment,
-      purpose: PURPOSE,
-      action: ACTION,
+      purpose,
+      action,
       now: new Date(),
     });
   } catch {
-    // The external contract intentionally remains uniform. A storage failure
-    // must not fall back to synchronous delivery or resource probing.
+    // External response intentionally stays uniform and non-enumerative.
   }
   return ACCEPTED;
 };
+
+/** Public READ acceptance boundary. */
+export const requestGuestAppointmentReadChallenge = ({ businessId, appointmentId }) => requestChallenge({
+  businessId,
+  appointmentId,
+  purpose: GUEST_APPOINTMENT_PURPOSES.READ,
+});
+
+/** Public CANCEL acceptance boundary. It does not probe Appointment synchronously. */
+export const requestGuestAppointmentCancelChallenge = ({ businessId, appointmentId }) => requestChallenge({
+  businessId,
+  appointmentId,
+  purpose: GUEST_APPOINTMENT_PURPOSES.CANCEL,
+});
 
 const resolveDeliveryPublicWebTrust = async ({ delivered, business, appointment }) => {
   const trust = await resolveFreshPublicWebTrust({ businessId: business, now: new Date() });
@@ -100,23 +122,25 @@ const resolveDeliveryPublicWebTrust = async ({ delivered, business, appointment 
   return jobMatches ? trust : null;
 };
 
-export const exchangeGuestAppointmentReadChallenge = async ({
+const exchangeChallenge = async ({
   businessId,
   appointmentId,
   verificationId,
   challengeSecret,
+  purpose,
 }) => {
   const business = objectId(businessId);
   const appointment = objectId(appointmentId);
   const verification = objectId(verificationId);
   const challenge = bearer(challengeSecret);
+  const { action } = scopeForPurpose(purpose);
 
   const delivered = await deliveryRepository.findDeliveredByScope({
     verificationId: verification,
     businessId: business,
     appointmentId: appointment,
-    purpose: PURPOSE,
-    action: ACTION,
+    purpose,
+    action,
   });
   if (!delivered) throw invalidProof();
 
@@ -125,14 +149,13 @@ export const exchangeGuestAppointmentReadChallenge = async ({
     generation: delivered.jobGeneration,
     businessId: business,
     appointmentId: appointment,
-    purpose: PURPOSE,
-    action: ACTION,
+    purpose,
+    action,
     verificationId: verification,
     deliveryId: delivered._id,
   });
   if (!trustedJob) throw invalidProof();
 
-  // First publicWeb check is before consuming the single-use C1 proof.
   if (!await resolveDeliveryPublicWebTrust({ delivered, business, appointment })) {
     throw invalidProof();
   }
@@ -141,16 +164,13 @@ export const exchangeGuestAppointmentReadChallenge = async ({
     await consumeExactVerificationForBusiness({
       verificationId: verification,
       businessId: business,
-      purpose: PURPOSE,
+      purpose,
       secret: challenge,
     });
   } catch {
     throw invalidProof();
   }
 
-  // Re-read before mint and acquire the same persisted authority fence used by
-  // delivery. This closes the revocation TOCTOU between the second read and the
-  // capability insert: a revocation cannot confirm while the fence is current.
   const currentTrust = await resolveDeliveryPublicWebTrust({ delivered, business, appointment });
   if (!currentTrust) throw invalidProof();
 
@@ -175,16 +195,16 @@ export const exchangeGuestAppointmentReadChallenge = async ({
       businessId: business,
       appointmentId: appointment,
       verificationId: verification,
-      verificationPurpose: PURPOSE,
-      action: ACTION,
-      secretHash: hashCapability({ businessId: business, appointmentId: appointment, secret }),
+      verificationPurpose: purpose,
+      action,
+      secretHash: hashCapability({ businessId: business, appointmentId: appointment, action, secret }),
       expiresAt,
     });
     return {
       capabilityId: capability._id,
       businessId: business,
       appointmentId: appointment,
-      action: ACTION,
+      action,
       bearer: secret,
       expiresAt: capability.expiresAt,
     };
@@ -194,6 +214,16 @@ export const exchangeGuestAppointmentReadChallenge = async ({
     try { await releasePublicWebSendFence({ businessId: business, fence }); } catch {}
   }
 };
+
+export const exchangeGuestAppointmentReadChallenge = (input) => exchangeChallenge({
+  ...input,
+  purpose: GUEST_APPOINTMENT_PURPOSES.READ,
+});
+
+export const exchangeGuestAppointmentCancelChallenge = (input) => exchangeChallenge({
+  ...input,
+  purpose: GUEST_APPOINTMENT_PURPOSES.CANCEL,
+});
 
 const readProjection = (appointment) => ({
   appointmentId: appointment._id,
@@ -207,15 +237,25 @@ const readProjection = (appointment) => ({
   paymentStatus: appointment.paymentStatus,
 });
 
+const cancelProjection = (appointment) => ({
+  appointmentId: appointment._id,
+  businessId: appointment.business,
+  status: appointment.status,
+  date: appointment.date,
+  startTime: appointment.startTime,
+  endTime: appointment.endTime,
+});
+
 export const consumeGuestAppointmentReadCapability = async ({ businessId, appointmentId, bearer: rawBearer }) => {
   const business = objectId(businessId);
   const appointment = objectId(appointmentId);
   const secret = bearer(rawBearer);
+  const action = GUEST_APPOINTMENT_IMPLEMENTED_PURPOSE_TO_ACTION[GUEST_APPOINTMENT_PURPOSES.READ];
   const consumed = await capabilityRepository.consumeForScope({
     businessId: business,
     appointmentId: appointment,
-    action: ACTION,
-    secretHash: hashCapability({ businessId: business, appointmentId: appointment, secret }),
+    action,
+    secretHash: hashCapability({ businessId: business, appointmentId: appointment, action, secret }),
     now: new Date(),
   });
   if (!consumed) throw invalidProof();
@@ -223,4 +263,36 @@ export const consumeGuestAppointmentReadCapability = async ({ businessId, appoin
   const detail = await appointmentRepository.findGuestReadableByIdAndBusiness(appointment, business);
   if (!coherent(detail, business)) throw invalidProof();
   return readProjection(detail);
+};
+
+export const consumeGuestAppointmentCancelCapability = async ({ businessId, appointmentId, bearer: rawBearer }) => {
+  const business = objectId(businessId);
+  const appointment = objectId(appointmentId);
+  const secret = bearer(rawBearer);
+  const action = GUEST_APPOINTMENT_IMPLEMENTED_PURPOSE_TO_ACTION[GUEST_APPOINTMENT_PURPOSES.CANCEL];
+  const outcome = await capabilityRepository.consumeAndCancelForScope({
+    businessId: business,
+    appointmentId: appointment,
+    action,
+    secretHash: hashCapability({ businessId: business, appointmentId: appointment, action, secret }),
+    now: new Date(),
+  });
+
+  if (outcome.kind === "invalid-capability") throw invalidProof();
+  if (outcome.kind === "conflict") throw stateConflict();
+  const cancelled = outcome.appointment;
+  if (!cancelled || cancelled.status !== "cancelled") throw invalidProof();
+
+  await logEvent({
+    appointmentId: appointment,
+    event: "APPOINTMENT_CANCELLED",
+    level: "INFO",
+    message: "Reserva cancelada mediante autoridad guest.",
+    metadata: { actorCapability: "guest-cancel", businessId: business },
+  });
+
+  const dateStr = new Date(cancelled.date).toISOString().split("T")[0];
+  emitAvailabilityChange(cancelled.worker.toString(), dateStr, business);
+  notifyAppointmentCancelled(appointment, null);
+  return cancelProjection(cancelled);
 };
