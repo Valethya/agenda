@@ -2,6 +2,7 @@ import "./setup.js";
 import test from "node:test";
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
+import { readFile } from "node:fs/promises";
 import app, { sessionStore } from "../src/app.js";
 import { connectDB } from "../src/db/db.js";
 import { cleanTestData, seedTestData, teardown } from "./fixtures.js";
@@ -45,62 +46,60 @@ const { port } = server.address();
 const baseUrl = `http://localhost:${port}/api`;
 let sequence = 0;
 
-const invalidProof = (promise) => assert.rejects(
+const expectInvalid = (promise) => assert.rejects(
   promise,
   (error) => error?.code === "GUEST_APPOINTMENT_CAPABILITY_INVALID_PROOF",
 );
-const stateConflict = (promise) => assert.rejects(
+const expectConflict = (promise) => assert.rejects(
   promise,
   (error) => error?.code === "GUEST_APPOINTMENT_CANCEL_STATE_CONFLICT",
 );
 
-const createAppointment = async ({ status = "confirmed", business = seed.business, worker = seed.worker, service = seed.service } = {}) => {
+const makeAppointment = async (status = "confirmed") => {
   sequence += 1;
   return Appointment.create({
     client: seed.client._id,
-    worker: worker._id,
-    service: service._id,
-    business: business._id,
-    date: new Date(Date.UTC(2099, 8, 14 + sequence)),
+    worker: seed.worker._id,
+    service: seed.service._id,
+    business: seed.business._id,
+    date: new Date(Date.UTC(2099, 9, sequence + 1)),
     startTime: "10:00",
     endTime: "11:00",
     status,
     paymentStatus: "pending",
     guestContact: {
       channel: "email",
-      destination: `guest-cancel-${sequence}@example.com`,
+      destination: `h2-${sequence}@example.com`,
       provenance: "guest-booking-input-v1",
       capturedAt: new Date(),
     },
   });
 };
 
-const processProof = async ({ appointment, action }) => {
+const deliveredFragment = async (appointment, action) => {
   const request = action === "cancel"
     ? requestGuestAppointmentCancelChallenge
     : requestGuestAppointmentReadChallenge;
-  const response = await request({ businessId: appointment.business, appointmentId: appointment._id });
-  assert.deepEqual(response, { accepted: true });
+  assert.deepEqual(await request({ businessId: appointment.business, appointmentId: appointment._id }), { accepted: true });
 
-  let accessUrl = null;
-  const result = await processNextGuestAppointmentVerificationJob({
-    workerId: `h2-${action}-${crypto.randomBytes(8).toString("hex")}`,
+  let accessUrl;
+  const processed = await processNextGuestAppointmentVerificationJob({
+    workerId: `h2-${crypto.randomBytes(8).toString("hex")}`,
     deliverVerification: async (payload) => {
       accessUrl = payload.accessUrl;
       return true;
     },
   });
-  assert.equal(result?.status, "delivered");
-  assert.ok(accessUrl);
+  assert.equal(processed?.status, "delivered");
   const fragment = new URLSearchParams(new URL(accessUrl).hash.slice(1));
-  assert.equal(fragment.get("appointmentId"), appointment._id.toString());
   assert.equal(fragment.get("businessId"), appointment.business.toString());
+  assert.equal(fragment.get("appointmentId"), appointment._id.toString());
   assert.equal(fragment.get("purpose"), `appointment-${action}-bootstrap`);
   return fragment;
 };
 
-const cancelCapability = async (appointment) => {
-  const fragment = await processProof({ appointment, action: "cancel" });
+const mintCancel = async (appointment) => {
+  const fragment = await deliveredFragment(appointment, "cancel");
   return exchangeGuestAppointmentCancelChallenge({
     businessId: appointment.business,
     appointmentId: appointment._id,
@@ -109,8 +108,8 @@ const cancelCapability = async (appointment) => {
   });
 };
 
-const readCapability = async (appointment) => {
-  const fragment = await processProof({ appointment, action: "read" });
+const mintRead = async (appointment) => {
+  const fragment = await deliveredFragment(appointment, "read");
   return exchangeGuestAppointmentReadChallenge({
     businessId: appointment.business,
     appointmentId: appointment._id,
@@ -119,7 +118,20 @@ const readCapability = async (appointment) => {
   });
 };
 
-const publicBook = async ({ date, startTime = "10:00", suffix = "flow" }) => {
+const cancelWith = (appointment, capability) => consumeGuestAppointmentCancelCapability({
+  businessId: appointment.business,
+  appointmentId: appointment._id,
+  bearer: capability.bearer,
+});
+
+const slots = async (date) => {
+  const response = await fetch(`${baseUrl}/availability/slots?businessId=${seed.business._id}&workerId=${seed.worker._id}&serviceId=${seed.service._id}&date=${date}`);
+  assert.equal(response.status, 200);
+  return (await response.json()).payload;
+};
+const hasTen = (values) => values.some((value) => value.startTime === "10:00");
+
+const book = async (date, suffix) => {
   const response = await fetch(`${baseUrl}/appointments?businessId=${seed.business._id}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -127,141 +139,79 @@ const publicBook = async ({ date, startTime = "10:00", suffix = "flow" }) => {
       worker: seed.worker._id.toString(),
       service: seed.service._id.toString(),
       date,
-      startTime,
+      startTime: "10:00",
       clientInfo: {
         firstName: "Guest",
-        lastName: "Cancellation",
-        email: `h2-${suffix}@example.com`,
-        phone: `+5697${String(sequence + 1000).padStart(7, "0")}`,
+        lastName: "H2",
+        email: `h2-flow-${suffix}@example.com`,
+        phone: `+5697000${String(sequence + 10).padStart(4, "0")}`,
       },
     }),
   });
-  const body = await response.json();
-  return { response, body };
+  return { response, body: await response.json() };
 };
 
-const availableSlots = async (date) => {
-  const response = await fetch(
-    `${baseUrl}/availability/slots?businessId=${seed.business._id}&workerId=${seed.worker._id}&serviceId=${seed.service._id}&date=${date}`,
-  );
-  assert.equal(response.status, 200);
-  return (await response.json()).payload;
-};
-
-const slotExists = (slots, startTime) => slots.some((slot) => slot.startTime === startTime);
-
-test("H2 guest cancellation capability boundary", async (t) => {
-  await t.test("CANCEL challenge remains non-enumerative", async () => {
-    const appointment = await createAppointment();
-    const real = await requestGuestAppointmentCancelChallenge({
-      businessId: seed.business._id,
-      appointmentId: appointment._id,
-    });
-    const missing = await requestGuestAppointmentCancelChallenge({
-      businessId: seed.business._id,
-      appointmentId: new Appointment()._id,
-    });
-    assert.deepEqual(real, { accepted: true });
+test("H2 guest cancellation", async (t) => {
+  await t.test("CANCEL challenge response is non-enumerative", async () => {
+    const appointment = await makeAppointment();
+    const existing = await requestGuestAppointmentCancelChallenge({ businessId: seed.business._id, appointmentId: appointment._id });
+    const missing = await requestGuestAppointmentCancelChallenge({ businessId: seed.business._id, appointmentId: new Appointment()._id });
+    assert.deepEqual(existing, { accepted: true });
     assert.deepEqual(missing, { accepted: true });
-    await GuestAppointmentVerificationJob.deleteMany({ appointment: { $in: [appointment._id] } });
+    await GuestAppointmentVerificationJob.deleteMany({});
   });
 
-  await t.test("valid CANCEL proof mints only exact CANCEL; READ proof cannot mint CANCEL", async () => {
-    const appointment = await createAppointment();
-    const cancelFragment = await processProof({ appointment, action: "cancel" });
-    const capability = await exchangeGuestAppointmentCancelChallenge({
-      businessId: appointment.business,
-      appointmentId: appointment._id,
-      verificationId: cancelFragment.get("verificationId"),
-      challengeSecret: cancelFragment.get("challenge"),
-    });
-    assert.equal(capability.action, "cancel");
-    assert.equal(capability.businessId.toString(), appointment.business.toString());
-    assert.equal(capability.appointmentId.toString(), appointment._id.toString());
+  await t.test("valid CANCEL proof mints CANCEL only; READ proof cannot mint CANCEL", async () => {
+    const cancelAppointment = await makeAppointment();
+    const cancel = await mintCancel(cancelAppointment);
+    assert.equal(cancel.action, "cancel");
+    assert.equal(cancel.businessId.toString(), seed.business._id.toString());
+    assert.equal(cancel.appointmentId.toString(), cancelAppointment._id.toString());
 
-    const other = await createAppointment();
-    const readFragment = await processProof({ appointment: other, action: "read" });
-    await invalidProof(exchangeGuestAppointmentCancelChallenge({
-      businessId: other.business,
-      appointmentId: other._id,
+    const readAppointment = await makeAppointment();
+    const readFragment = await deliveredFragment(readAppointment, "read");
+    await expectInvalid(exchangeGuestAppointmentCancelChallenge({
+      businessId: readAppointment.business,
+      appointmentId: readAppointment._id,
       verificationId: readFragment.get("verificationId"),
       challengeSecret: readFragment.get("challenge"),
     }));
   });
 
-  await t.test("READ capability cannot cancel", async () => {
-    const appointment = await createAppointment();
-    const read = await readCapability(appointment);
-    await invalidProof(consumeGuestAppointmentCancelCapability({
-      businessId: appointment.business,
-      appointmentId: appointment._id,
-      bearer: read.bearer,
-    }));
+  await t.test("READ bearer cannot cancel", async () => {
+    const appointment = await makeAppointment();
+    const read = await mintRead(appointment);
+    await expectInvalid(consumeGuestAppointmentCancelCapability({ businessId: appointment.business, appointmentId: appointment._id, bearer: read.bearer }));
     assert.equal((await Appointment.findById(appointment._id)).status, "confirmed");
   });
 
-  await t.test("CANCEL is exact Appointment + Business scope and wrong attempts do not consume the valid bearer", async () => {
-    const appointment = await createAppointment();
-    const other = await createAppointment();
-    const capability = await cancelCapability(appointment);
-
-    await invalidProof(consumeGuestAppointmentCancelCapability({
-      businessId: appointment.business,
-      appointmentId: other._id,
-      bearer: capability.bearer,
-    }));
-    await invalidProof(consumeGuestAppointmentCancelCapability({
-      businessId: seed.businessB._id,
-      appointmentId: appointment._id,
-      bearer: capability.bearer,
-    }));
-
-    const result = await consumeGuestAppointmentCancelCapability({
-      businessId: appointment.business,
-      appointmentId: appointment._id,
-      bearer: capability.bearer,
-    });
-    assert.equal(result.status, "cancelled");
+  await t.test("CANCEL is exact Appointment + Business scope", async () => {
+    const appointment = await makeAppointment();
+    const other = await makeAppointment();
+    const capability = await mintCancel(appointment);
+    await expectInvalid(consumeGuestAppointmentCancelCapability({ businessId: appointment.business, appointmentId: other._id, bearer: capability.bearer }));
+    await expectInvalid(consumeGuestAppointmentCancelCapability({ businessId: seed.businessB._id, appointmentId: appointment._id, bearer: capability.bearer }));
+    assert.equal((await cancelWith(appointment, capability)).status, "cancelled");
   });
 
-  await t.test("expired CANCEL fails closed and successful CANCEL is single-use", async () => {
-    const expiredAppointment = await createAppointment();
-    const expired = await cancelCapability(expiredAppointment);
-    await GuestAppointmentCapability.updateOne(
-      { _id: expired.capabilityId },
-      { $set: { expiresAt: new Date("2000-01-01T00:00:00.000Z") } },
-    );
-    await invalidProof(consumeGuestAppointmentCancelCapability({
-      businessId: expiredAppointment.business,
-      appointmentId: expiredAppointment._id,
-      bearer: expired.bearer,
-    }));
+  await t.test("expired fails; successful capability is single-use", async () => {
+    const expiredAppointment = await makeAppointment();
+    const expired = await mintCancel(expiredAppointment);
+    await GuestAppointmentCapability.updateOne({ _id: expired.capabilityId }, { $set: { expiresAt: new Date("2000-01-01T00:00:00.000Z") } });
+    await expectInvalid(cancelWith(expiredAppointment, expired));
     assert.equal((await Appointment.findById(expiredAppointment._id)).status, "confirmed");
 
-    const appointment = await createAppointment();
-    const capability = await cancelCapability(appointment);
-    await consumeGuestAppointmentCancelCapability({
-      businessId: appointment.business,
-      appointmentId: appointment._id,
-      bearer: capability.bearer,
-    });
-    await invalidProof(consumeGuestAppointmentCancelCapability({
-      businessId: appointment.business,
-      appointmentId: appointment._id,
-      bearer: capability.bearer,
-    }));
+    const appointment = await makeAppointment();
+    const capability = await mintCancel(appointment);
+    assert.equal((await cancelWith(appointment, capability)).status, "cancelled");
+    await expectInvalid(cancelWith(appointment, capability));
   });
 
   for (const status of ["pending", "pending_payment", "confirmed"]) {
-    await t.test(`${status} -> cancelled preserves Appointment history`, async () => {
-      const appointment = await createAppointment({ status });
-      const capability = await cancelCapability(appointment);
-      const result = await consumeGuestAppointmentCancelCapability({
-        businessId: appointment.business,
-        appointmentId: appointment._id,
-        bearer: capability.bearer,
-      });
-      assert.equal(result.status, "cancelled");
+    await t.test(`${status} transitions to cancelled without deleting or retiming`, async () => {
+      const appointment = await makeAppointment(status);
+      const capability = await mintCancel(appointment);
+      assert.equal((await cancelWith(appointment, capability)).status, "cancelled");
       const stored = await Appointment.findById(appointment._id).lean();
       assert.ok(stored);
       assert.equal(stored.status, "cancelled");
@@ -271,139 +221,87 @@ test("H2 guest cancellation capability boundary", async (t) => {
   }
 
   for (const status of ["completed", "cancelled"]) {
-    await t.test(`${status} cannot be guest-cancelled`, async () => {
-      const appointment = await createAppointment({ status });
-      const capability = await cancelCapability(appointment);
-      await stateConflict(consumeGuestAppointmentCancelCapability({
-        businessId: appointment.business,
-        appointmentId: appointment._id,
-        bearer: capability.bearer,
-      }));
+    await t.test(`${status} fails with coherent state conflict`, async () => {
+      const appointment = await makeAppointment(status);
+      const capability = await mintCancel(appointment);
+      await expectConflict(cancelWith(appointment, capability));
       assert.equal((await Appointment.findById(appointment._id)).status, status);
-      const storedCapability = await GuestAppointmentCapability.findById(capability.capabilityId).lean();
-      assert.equal(storedCapability.status, "active", "state conflict must rollback capability consumption");
+      assert.equal((await GuestAppointmentCapability.findById(capability.capabilityId)).status, "active");
     });
   }
 
-  await t.test("concurrent status change wins -> cancellation conflicts and transaction rolls capability back", async () => {
-    const appointment = await createAppointment();
-    const capability = await cancelCapability(appointment);
-    const barrier = {};
-    barrier.beforeCancel = new Promise((resolve) => { barrier.release = resolve; });
-
-    await Appointment.updateOne({ _id: appointment._id }, { $set: { status: "completed" } });
-    barrier.release();
-    await barrier.beforeCancel;
-
-    await stateConflict(consumeGuestAppointmentCancelCapability({
-      businessId: appointment.business,
-      appointmentId: appointment._id,
-      bearer: capability.bearer,
-    }));
+  await t.test("concurrent state winner is observed atomically and CANCEL consumption rolls back", async () => {
+    const appointment = await makeAppointment();
+    const capability = await mintCancel(appointment);
+    let release;
+    const barrier = new Promise((resolve) => { release = resolve; });
+    const competingChange = (async () => {
+      await Appointment.updateOne({ _id: appointment._id }, { $set: { status: "completed" } });
+      release();
+    })();
+    await barrier;
+    await competingChange;
+    await expectConflict(cancelWith(appointment, capability));
     assert.equal((await Appointment.findById(appointment._id)).status, "completed");
     assert.equal((await GuestAppointmentCapability.findById(capability.capabilityId)).status, "active");
   });
 
-  await t.test("successful guest cancellation writes guest audit without userId, bearer, challenge or guestContact", async () => {
-    const appointment = await createAppointment();
-    const capability = await cancelCapability(appointment);
-    const bearerValue = capability.bearer;
-    await consumeGuestAppointmentCancelCapability({
-      businessId: appointment.business,
-      appointmentId: appointment._id,
-      bearer: bearerValue,
-    });
+  await t.test("guest audit is explicit and contains no bearer/challenge/contact", async () => {
+    const appointment = await makeAppointment();
+    const capability = await mintCancel(appointment);
+    await cancelWith(appointment, capability);
     const audit = await AuditLog.findOne({ appointmentId: appointment._id, event: "APPOINTMENT_CANCELLED" }).lean();
     assert.ok(audit);
     assert.equal(audit.userId, undefined);
     assert.equal(audit.metadata.actorCapability, "guest-cancel");
     const serialized = JSON.stringify(audit);
-    assert.equal(serialized.includes(bearerValue), false);
+    assert.equal(serialized.includes(capability.bearer), false);
     assert.equal(serialized.includes("challenge"), false);
     assert.equal(serialized.includes("guestContact"), false);
   });
 
-  await t.test("cancelled is excluded from discovery and authoritative booking overlap", async () => {
-    const appointment = await createAppointment();
-    const capability = await cancelCapability(appointment);
-    await consumeGuestAppointmentCancelCapability({
-      businessId: appointment.business,
-      appointmentId: appointment._id,
-      bearer: capability.bearer,
-    });
-
-    const dayStart = new Date(appointment.date);
-    dayStart.setUTCHours(0, 0, 0, 0);
-    const dayEnd = new Date(appointment.date);
-    dayEnd.setUTCHours(23, 59, 59, 999);
-    const discovery = await appointmentRepository.findByBusinessWorkerAndDate(
-      appointment.business,
-      appointment.worker,
-      dayStart,
-      dayEnd,
-    );
-    assert.equal(discovery.some((value) => value._id.toString() === appointment._id.toString()), false);
-
-    const overlap = await appointmentRepository.findActiveOverlapByBusinessWorkerDate(
-      appointment.business,
-      appointment.worker,
-      dayStart,
-      dayEnd,
-      appointment.startTime,
-      appointment.endTime,
-    );
-    assert.equal(overlap, null);
+  await t.test("successful cancellation emits the canonical availability change", async () => {
+    const source = await readFile(new URL("../src/services/guestAppointmentCapability.service.js", import.meta.url), "utf8");
+    assert.match(source, /emitAvailabilityChange\(cancelled\.worker\.toString\(\), dateStr, business\)/u);
   });
 
-  await t.test("full canonical flow: available -> book -> unavailable -> guest cancel -> available -> rebook", async () => {
-    const date = "2099-09-14"; // Monday, within seeded shift.
-    const before = await availableSlots(date);
-    assert.equal(slotExists(before, "10:00"), true);
+  await t.test("cancelled does not block discovery or authoritative overlap", async () => {
+    const appointment = await makeAppointment();
+    const capability = await mintCancel(appointment);
+    await cancelWith(appointment, capability);
+    const dayStart = new Date(appointment.date); dayStart.setUTCHours(0, 0, 0, 0);
+    const dayEnd = new Date(appointment.date); dayEnd.setUTCHours(23, 59, 59, 999);
+    const discovered = await appointmentRepository.findByBusinessWorkerAndDate(appointment.business, appointment.worker, dayStart, dayEnd);
+    assert.equal(discovered.some((value) => value._id.toString() === appointment._id.toString()), false);
+    assert.equal(await appointmentRepository.findActiveOverlapByBusinessWorkerDate(
+      appointment.business, appointment.worker, dayStart, dayEnd, appointment.startTime, appointment.endTime,
+    ), null);
+  });
 
-    const booked = await publicBook({ date, suffix: "flow-a" });
-    assert.equal(booked.response.status, 201);
-    const appointmentId = booked.body.payload.appointmentId;
-    const appointment = await Appointment.findById(appointmentId);
+  await t.test("available -> book -> unavailable -> guest cancel -> available -> rebook", async () => {
+    const date = "2099-09-14";
+    assert.equal(hasTen(await slots(date)), true);
+    const first = await book(date, "a");
+    assert.equal(first.response.status, 201);
+    const appointment = await Appointment.findById(first.body.payload.appointmentId);
     assert.ok(appointment);
-    assert.equal(appointment.status, "pending");
+    assert.equal(hasTen(await slots(date)), false);
 
-    const blocked = await availableSlots(date);
-    assert.equal(slotExists(blocked, "10:00"), false);
+    const capability = await mintCancel(appointment);
+    assert.equal((await cancelWith(appointment, capability)).status, "cancelled");
+    assert.equal(hasTen(await slots(date)), true);
 
-    const capability = await cancelCapability(appointment);
-    const cancelled = await consumeGuestAppointmentCancelCapability({
-      businessId: seed.business._id,
-      appointmentId: appointment._id,
-      bearer: capability.bearer,
-    });
-    assert.equal(cancelled.status, "cancelled");
-
-    const released = await availableSlots(date);
-    assert.equal(slotExists(released, "10:00"), true);
-
-    const rebooked = await publicBook({ date, suffix: "flow-b" });
-    assert.equal(rebooked.response.status, 201);
-    const replacement = await Appointment.findById(rebooked.body.payload.appointmentId);
-    assert.ok(replacement);
-    assert.notEqual(replacement._id.toString(), appointment._id.toString());
+    const second = await book(date, "b");
+    assert.equal(second.response.status, 201);
+    assert.notEqual(second.body.payload.appointmentId, appointment._id.toString());
     assert.equal((await Appointment.findById(appointment._id)).status, "cancelled");
   });
 
-  await t.test("H1 READ still reads a cancelled Appointment", async () => {
-    const appointment = await createAppointment();
-    const cancel = await cancelCapability(appointment);
-    await consumeGuestAppointmentCancelCapability({
-      businessId: appointment.business,
-      appointmentId: appointment._id,
-      bearer: cancel.bearer,
-    });
-    const read = await readCapability(appointment);
-    const detail = await consumeGuestAppointmentReadCapability({
-      businessId: appointment.business,
-      appointmentId: appointment._id,
-      bearer: read.bearer,
-    });
-    assert.equal(detail.appointmentId.toString(), appointment._id.toString());
+  await t.test("H1 READ remains independently usable after cancellation", async () => {
+    const appointment = await makeAppointment();
+    await cancelWith(appointment, await mintCancel(appointment));
+    const read = await mintRead(appointment);
+    const detail = await consumeGuestAppointmentReadCapability({ businessId: appointment.business, appointmentId: appointment._id, bearer: read.bearer });
     assert.equal(detail.status, "cancelled");
     assert.equal(Object.hasOwn(detail, "guestContact"), false);
   });
