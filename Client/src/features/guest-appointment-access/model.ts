@@ -108,6 +108,32 @@ export function createGuestAccessLifecycleCleanup(
   };
 }
 
+interface GuestAccessBootstrapOptions {
+  fragment: string;
+  search: string;
+  clearSensitiveFragment: () => void;
+  onProof: (proof: GuestAppointmentProof) => void;
+  onIdentity: (identity: GuestAppointmentIdentity) => void;
+  onInvalidProof: () => void;
+  cleanup: () => void;
+}
+
+export function bootstrapGuestAppointmentAccess(options: GuestAccessBootstrapOptions): () => void {
+  const proof = parseGuestAppointmentProof(options.fragment);
+  const queryIdentity = parseGuestAppointmentIdentity(options.search);
+
+  if (options.fragment) options.clearSensitiveFragment();
+
+  if (proof) {
+    options.onProof(proof);
+  } else {
+    if (queryIdentity) options.onIdentity(queryIdentity);
+    if (options.fragment) options.onInvalidProof();
+  }
+
+  return options.cleanup;
+}
+
 export function createExclusiveAsyncAction<TArgs extends unknown[], TResult>(
   action: (...args: TArgs) => Promise<TResult>,
 ) {
