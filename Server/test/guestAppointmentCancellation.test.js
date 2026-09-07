@@ -269,13 +269,19 @@ test("H2 guest cancellation", async (t) => {
     const appointment = await makeAppointment();
     const capability = await mintCancel(appointment);
     await cancelWith(appointment, capability);
-    const dayStart = new Date(appointment.date); dayStart.setUTCHours(0, 0, 0, 0);
-    const dayEnd = new Date(appointment.date); dayEnd.setUTCHours(23, 59, 59, 999);
-    const discovered = await appointmentRepository.findByBusinessWorkerAndDate(appointment.business, appointment.worker, dayStart, dayEnd);
+    const discovered = await appointmentRepository.findByBusinessWorkerAndDate(
+      appointment.business,
+      appointment.worker,
+      appointment.date,
+    );
     assert.equal(discovered.some((value) => value._id.toString() === appointment._id.toString()), false);
-    assert.equal(await appointmentRepository.findActiveOverlapByBusinessWorkerDate(
-      appointment.business, appointment.worker, dayStart, dayEnd, appointment.startTime, appointment.endTime,
-    ), null);
+    assert.equal(await appointmentRepository.findActiveOverlapForBusinessWorkerAndDate({
+      businessId: appointment.business,
+      workerId: appointment.worker,
+      date: appointment.date,
+      startTime: appointment.startTime,
+      endTime: appointment.endTime,
+    }), null);
   });
 
   await t.test("available -> book -> unavailable -> guest cancel -> available -> rebook", async () => {
