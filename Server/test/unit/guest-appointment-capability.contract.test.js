@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import mongoose from "mongoose";
+import { readFile } from "node:fs/promises";
 import ClientContactVerification from "../../src/db/models/clientContactVerification.model.js";
 import GuestAppointmentCapability, { GUEST_APPOINTMENT_CAPABILITY_STATUSES } from "../../src/db/models/guestAppointmentCapability.model.js";
 import GuestAppointmentVerificationDelivery from "../../src/db/models/guestAppointmentVerificationDelivery.model.js";
@@ -19,6 +20,10 @@ import {
   buildGuestAppointmentVerificationUrl,
   getTrustedGuestAppointmentOrigin,
 } from "../../src/security/guestAppointmentAccessUrl.js";
+import {
+  emitAvailabilityChange,
+  registerAvailabilityChangeEmitter,
+} from "../../src/config/availabilityEvents.js";
 import {
   guestAppointmentCancelChallengeSchema,
   guestAppointmentCancelConsumeSchema,
@@ -160,5 +165,35 @@ test("6.2.5-C2/H2 capability contract", async (t) => {
       body: { businessId, appointmentId, bearer: "b".repeat(43), status: "cancelled" },
       query: {}, params: {},
     }).success, false);
+  });
+
+  await t.test("availability notification bridge is lifecycle-neutral until Socket.IO owns the emitter", async () => {
+    let observed = null;
+    emitAvailabilityChange("worker-before", "2099-01-01", "business-before");
+    assert.equal(observed, null);
+
+    const unregister = registerAvailabilityChangeEmitter((workerId, dateStr, businessId) => {
+      observed = { workerId, dateStr, businessId };
+    });
+    emitAvailabilityChange("worker-1", "2099-02-03", "business-1");
+    assert.deepEqual(observed, {
+      workerId: "worker-1",
+      dateStr: "2099-02-03",
+      businessId: "business-1",
+    });
+    unregister();
+    observed = null;
+    emitAvailabilityChange("worker-after", "2099-02-04", "business-after");
+    assert.equal(observed, null);
+
+    const serviceSource = await readFile(new URL("../../src/services/guestAppointmentCapability.service.js", import.meta.url), "utf8");
+    const bridgeSource = await readFile(new URL("../../src/config/availabilityEvents.js", import.meta.url), "utf8");
+    const socketSource = await readFile(new URL("../../src/config/socket.js", import.meta.url), "utf8");
+
+    assert.match(serviceSource, /from "\.\.\/config\/availabilityEvents\.js"/u);
+    assert.doesNotMatch(serviceSource, /from "\.\.\/config\/socket\.js"/u);
+    assert.doesNotMatch(bridgeSource, /app\.js|connect-mongo|sessionStore/u);
+    assert.match(socketSource, /registerAvailabilityChangeEmitter/u);
+    assert.match(socketSource, /emitTenantAvailabilityChange\(workerId, dateStr, businessId\)/u);
   });
 });
