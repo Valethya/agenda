@@ -7,7 +7,7 @@ import * as rescheduleRepository from "../repositories/guestAppointmentReschedul
 import * as jobRepository from "../repositories/guestAppointmentVerificationJob.repository.js";
 import * as publicWebJobRepository from "../repositories/guestAppointmentPublicWeb.repository.js";
 import * as availabilityService from "./availability.service.js";
-import { validateBookingTenantScope } from "./appointment.service.js";
+import { validateBookingTenantScope } from "./bookingTenantScope.service.js";
 import { consumeExactVerificationForBusiness } from "./clientContactVerification.service.js";
 import {
   acquirePublicWebSendFence,
