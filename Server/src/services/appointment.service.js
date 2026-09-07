@@ -1,15 +1,16 @@
 import * as appointmentRepository from "../repositories/appointment.repository.js";
-import * as serviceRepository from "../repositories/service.repository.js";
 import * as availabilityService from "./availability.service.js";
 import * as auditLogRepository from "../repositories/auditLog.repository.js";
 import * as businessConfigRepository from "../repositories/businessConfig.repository.js";
-import { assertServiceBookingEligibility } from "./professionalEligibility.service.js";
+import { validateBookingTenantScope } from "./bookingTenantScope.service.js";
 import { findTenantAuthority } from "./tenantAuthority.service.js";
 import { ConflictError, ForbiddenError, NotFoundError, ValidationError } from "../utils/appError.js";
 import { emitAvailabilityChange } from "../config/socket.js";
 import { notifyBookingCreated, notifyAppointmentConfirmed, notifyAppointmentCancelled } from "./appointment.notifications.js";
 import { logEvent } from "../utils/auditLogger.js";
 import { addMinutesToTime } from "../utils/time.js";
+
+export { validateBookingTenantScope } from "./bookingTenantScope.service.js";
 
 const STATUS_TRANSITIONS = Object.freeze({
   confirm: Object.freeze({ from: Object.freeze(["pending"]), to: "confirmed" }),
@@ -62,27 +63,6 @@ const assertAppointmentTenantCoherence = (appointment, businessId) => {
     throw new NotFoundError("La cita especificada no existe");
   }
   return appointment;
-};
-
-export const validateBookingTenantScope = async ({ worker, service, businessId, session = null }) => {
-  if (!businessId) throw new ValidationError("El contexto de negocio es obligatorio para reservar");
-
-  const serviceDetail = await serviceRepository.findByIdAndBusiness(
-    service,
-    businessId,
-    { onlyActive: true, session },
-  );
-  if (!serviceDetail) throw new NotFoundError("El servicio solicitado no está disponible");
-
-  const { user: workerDetail } = await assertServiceBookingEligibility({
-    userId: worker,
-    businessId,
-    service: serviceDetail,
-    requireActiveService: true,
-    session,
-  });
-
-  return { serviceDetail, workerDetail };
 };
 
 export const bookAppointment = async (appointmentData) => {
