@@ -85,10 +85,11 @@ test("6.2.5-C2/H3 capability contract", async (t) => {
     assert.doesNotMatch(rescheduleRepo, /socket\.js/u);
   });
 
-  await t.test("shared G2 lock primitive canonicalizes, deduplicates and sorts mutex keys", async () => {
+  await t.test("shared G2/H3 lock primitive deduplicates and globally sorts interval + canonical availability keys", async () => {
     const source = await readFile(new URL("../../src/repositories/appointment.repository.js", import.meta.url), "utf8");
     assert.match(source, /new Set\(scopes\.map/u);
-    assert.match(source, /\)\)\]\.sort\(\)/u);
+    assert.match(source, /new Set\(scopes\.flatMap\(\(scope\) => canonicalAvailabilityFenceIds\(scope\)\)\)/u);
+    assert.match(source, /new Set\(\[\.\.\.bookingLockIds, \.\.\.availabilityLockIds\]\)\]\.sort\(\)/u);
     assert.match(source, /for \(const lockId of lockIds\)/u);
     assert.match(source, /excludeAppointmentId/u);
   });
