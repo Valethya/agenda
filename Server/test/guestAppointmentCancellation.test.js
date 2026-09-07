@@ -66,7 +66,7 @@ const makeAppointment = async (status = "confirmed") => {
     startTime: "10:00",
     endTime: "11:00",
     status,
-    paymentStatus: "pending",
+    paymentStatus: "unpaid",
     guestContact: {
       channel: "email",
       destination: `h2-${sequence}@example.com`,
@@ -129,7 +129,7 @@ const slots = async (date) => {
   assert.equal(response.status, 200);
   return (await response.json()).payload;
 };
-const hasTen = (values) => values.some((value) => value.startTime === "10:00");
+const hasTen = (values) => values.some((value) => value.startTime === "10:00" && value.available === true);
 
 const book = async (date, suffix) => {
   const response = await fetch(`${baseUrl}/appointments?businessId=${seed.business._id}`, {
