@@ -10,6 +10,7 @@ import Appointment from "../src/db/models/appointment.model.js";
 import AuditLog from "../src/db/models/auditLog.model.js";
 import BusinessConfig from "../src/db/models/businessConfig.model.js";
 import GuestAppointmentCapability from "../src/db/models/guestAppointmentCapability.model.js";
+import GuestAppointmentVerificationJob from "../src/db/models/guestAppointmentVerificationJob.model.js";
 import Membership from "../src/db/models/membership.model.js";
 import {
   consumeGuestAppointmentCancelCapability,
@@ -96,16 +97,42 @@ const deliveredFragment = async (appointment, action) => {
     cancel: requestGuestAppointmentCancelChallenge,
     reschedule: requestGuestAppointmentRescheduleChallenge,
   };
+  const expectedPurpose = `appointment-${action}-bootstrap`;
+
+  // Some H3 cases intentionally request a second challenge for the same exact
+  // scope. Advance only that durable scope past its cooldown instead of sleeping.
+  await GuestAppointmentVerificationJob.updateOne(
+    {
+      business: appointment.business,
+      appointment: appointment._id,
+      action,
+      status: { $in: ["delivered", "failed"] },
+    },
+    { $set: { nextEligibleAt: new Date(0) } },
+  );
+
   assert.deepEqual(await requests[action]({ businessId: appointment.business, appointmentId: appointment._id }), { accepted: true });
-  let accessUrl;
-  const processed = await processNextGuestAppointmentVerificationJob({
-    workerId: `h3-${crypto.randomBytes(8).toString("hex")}`,
-    deliverVerification: async (payload) => { accessUrl = payload.accessUrl; return true; },
-  });
-  assert.equal(processed?.status, "delivered");
-  const fragment = new URLSearchParams(new URL(accessUrl).hash.slice(1));
-  assert.equal(fragment.get("purpose"), `appointment-${action}-bootstrap`);
-  return fragment;
+
+  // The worker claims the oldest durable job globally. A non-enumerative test
+  // may have intentionally queued an invalid scope before this one, so drain
+  // deterministically until the exact requested Appointment/action is delivered.
+  for (let attempt = 0; attempt < 16; attempt += 1) {
+    let accessUrl;
+    const processed = await processNextGuestAppointmentVerificationJob({
+      workerId: `h3-${crypto.randomBytes(8).toString("hex")}`,
+      deliverVerification: async (payload) => { accessUrl = payload.accessUrl; return true; },
+    });
+    assert.ok(processed, "El worker H3 debe encontrar el challenge solicitado");
+    if (processed.status !== "delivered" || !accessUrl) continue;
+
+    const fragment = new URLSearchParams(new URL(accessUrl).hash.slice(1));
+    if (
+      fragment.get("appointmentId") === appointment._id.toString()
+      && fragment.get("purpose") === expectedPurpose
+    ) return fragment;
+  }
+
+  assert.fail("El worker H3 no entregó el challenge exacto solicitado");
 };
 const mint = async (appointment, action) => {
   const fragment = await deliveredFragment(appointment, action);
