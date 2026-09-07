@@ -9,6 +9,7 @@ import {
   requestGuestAppointmentReadChallenge,
   requestGuestAppointmentRescheduleChallenge,
 } from "../services/guestAppointmentCapability.service.js";
+import { resolveGuestAppointmentRescheduleContext } from "../services/guestAppointmentRescheduleContext.service.js";
 
 const INVALID_PROOF_CODE = "GUEST_APPOINTMENT_CAPABILITY_INVALID_PROOF";
 const CANCEL_STATE_CONFLICT_CODE = "GUEST_APPOINTMENT_CANCEL_STATE_CONFLICT";
@@ -21,18 +22,14 @@ const secure = (res) => {
   return res;
 };
 const invalidProof = (res) => secure(res).status(403).json({ status: "fail", code: INVALID_PROOF_CODE, message: "Acceso guest no válido" });
-const cancelStateConflict = (res) => secure(res).status(409).json({
-  status: "fail", code: CANCEL_STATE_CONFLICT_CODE, message: "La reserva ya no se encuentra en un estado cancelable",
-});
+const cancelStateConflict = (res) => secure(res).status(409).json({ status: "fail", code: CANCEL_STATE_CONFLICT_CODE, message: "La reserva ya no se encuentra en un estado cancelable" });
 const rescheduleConflict = (res, code) => secure(res).status(409).json({
   status: "fail",
   code,
-  message: code === RESCHEDULE_SLOT_CONFLICT_CODE
-    ? "El horario seleccionado ya no se encuentra disponible"
-    : "La reserva ya no se encuentra en un estado reagendable",
+  message: code === RESCHEDULE_SLOT_CONFLICT_CODE ? "El horario seleccionado ya no se encuentra disponible" : "La reserva ya no se encuentra en un estado reagendable",
 });
 const acceptedChallenge = (res, message) => secure(res).status(202).json({ status: "accepted", message });
-const exchangeResponse = (res, capability) => secure(res).status(200).json({
+const exchangeResponse = (res, capability, extra = {}) => secure(res).status(200).json({
   status: "success",
   capability: {
     businessId: capability.businessId,
@@ -41,6 +38,7 @@ const exchangeResponse = (res, capability) => secure(res).status(200).json({
     bearer: capability.bearer,
     expiresAt: capability.expiresAt,
   },
+  ...extra,
 });
 
 export const requestReadChallenge = async (req, res) => {
@@ -57,47 +55,40 @@ export const requestRescheduleChallenge = async (req, res) => {
 };
 
 export const exchangeReadChallenge = async (req, res) => {
-  try {
-    const capability = await exchangeGuestAppointmentReadChallenge(req.body);
-    return exchangeResponse(res, capability);
-  } catch { return invalidProof(res); }
+  try { return exchangeResponse(res, await exchangeGuestAppointmentReadChallenge(req.body)); }
+  catch { return invalidProof(res); }
 };
 export const exchangeCancelChallenge = async (req, res) => {
-  try {
-    const capability = await exchangeGuestAppointmentCancelChallenge(req.body);
-    return exchangeResponse(res, capability);
-  } catch { return invalidProof(res); }
+  try { return exchangeResponse(res, await exchangeGuestAppointmentCancelChallenge(req.body)); }
+  catch { return invalidProof(res); }
 };
 export const exchangeRescheduleChallenge = async (req, res) => {
   try {
     const capability = await exchangeGuestAppointmentRescheduleChallenge(req.body);
-    return exchangeResponse(res, capability);
+    const rescheduleContext = await resolveGuestAppointmentRescheduleContext(req.body);
+    if (!rescheduleContext) {
+      capability.bearer = "";
+      return invalidProof(res);
+    }
+    return exchangeResponse(res, capability, { rescheduleContext });
   } catch { return invalidProof(res); }
 };
 
 export const consumeReadCapability = async (req, res) => {
-  try {
-    const appointment = await consumeGuestAppointmentReadCapability(req.body);
-    return secure(res).status(200).json({ status: "success", appointment });
-  } catch { return invalidProof(res); }
+  try { return secure(res).status(200).json({ status: "success", appointment: await consumeGuestAppointmentReadCapability(req.body) }); }
+  catch { return invalidProof(res); }
 };
 export const consumeCancelCapability = async (req, res) => {
-  try {
-    const appointment = await consumeGuestAppointmentCancelCapability(req.body);
-    return secure(res).status(200).json({ status: "success", appointment });
-  } catch (error) {
+  try { return secure(res).status(200).json({ status: "success", appointment: await consumeGuestAppointmentCancelCapability(req.body) }); }
+  catch (error) {
     if (error?.code === CANCEL_STATE_CONFLICT_CODE) return cancelStateConflict(res);
     return invalidProof(res);
   }
 };
 export const consumeRescheduleCapability = async (req, res) => {
-  try {
-    const appointment = await consumeGuestAppointmentRescheduleCapability(req.body);
-    return secure(res).status(200).json({ status: "success", appointment });
-  } catch (error) {
-    if (error?.code === RESCHEDULE_STATE_CONFLICT_CODE || error?.code === RESCHEDULE_SLOT_CONFLICT_CODE) {
-      return rescheduleConflict(res, error.code);
-    }
+  try { return secure(res).status(200).json({ status: "success", appointment: await consumeGuestAppointmentRescheduleCapability(req.body) }); }
+  catch (error) {
+    if (error?.code === RESCHEDULE_STATE_CONFLICT_CODE || error?.code === RESCHEDULE_SLOT_CONFLICT_CODE) return rescheduleConflict(res, error.code);
     return invalidProof(res);
   }
 };
