@@ -31,8 +31,9 @@ const cloneUnconfiguredState = () => ({
 });
 
 // Obtener la configuración única del negocio
-export const getConfig = async (businessId) => {
+export const getConfig = async (businessId, { session = null } = {}) => {
   return await BusinessConfig.findOne({ business: businessId })
+    .session(session || null)
     .populate("business", BUSINESS_SUMMARY_PROJECTION);
 };
 
@@ -42,9 +43,12 @@ export const createDefaultConfig = async (defaultData) => {
 };
 
 // Actualizar la configuración existente
-export const updateConfig = async (id, updateData) => {
-  return await BusinessConfig.findByIdAndUpdate(id, updateData, { new: true, runValidators: true })
-    .populate("business", BUSINESS_SUMMARY_PROJECTION);
+export const updateConfig = async (id, updateData, { session = null } = {}) => {
+  return await BusinessConfig.findByIdAndUpdate(
+    id,
+    updateData,
+    { new: true, runValidators: true, session },
+  ).populate("business", BUSINESS_SUMMARY_PROJECTION);
 };
 
 // Old BusinessConfig documents predate 6.2.6-B. Command paths may materialize

@@ -1,10 +1,30 @@
 import mongoose from "mongoose";
 import Appointment from "../db/models/appointment.model.js";
 import AppointmentBookingMutex from "../db/models/appointmentBookingMutex.model.js";
+import * as canonicalAvailabilityRepository from "./canonicalAvailability.repository.js";
+import {
+  canonicalAvailabilityFenceIds,
+  ensureAvailabilityFenceRows,
+} from "./availabilityFence.repository.js";
+import { buildCanonicalCalendarSlots } from "../utils/canonicalAvailability.js";
+import { timeToMinutes } from "../utils/time.js";
 import { ConflictError } from "../utils/appError.js";
 
 const PAYMENT_SETTLEMENT_STATUSES = new Set(["partially_paid", "fully_paid"]);
 const ACTIVE_BOOKING_STATUSES = Object.freeze(["pending_payment", "pending", "confirmed", "completed"]);
+const RESCHEDULE_SLOT_CONFLICT_CODE = "GUEST_APPOINTMENT_RESCHEDULE_SLOT_CONFLICT";
+let beforeCanonicalAvailabilityFenceTestHook = null;
+let afterCanonicalAvailabilityFenceTestHook = null;
+
+export const setBeforeCanonicalAvailabilityFenceTestHookForTests = (hook) => {
+  if (process.env.NODE_ENV !== "test") throw new Error("Los hooks de concurrencia sólo están disponibles en tests");
+  beforeCanonicalAvailabilityFenceTestHook = hook;
+};
+
+export const setAfterCanonicalAvailabilityFenceTestHookForTests = (hook) => {
+  if (process.env.NODE_ENV !== "test") throw new Error("Los hooks de concurrencia sólo están disponibles en tests");
+  afterCanonicalAvailabilityFenceTestHook = hook;
+};
 
 const populateProtectedTenantRelations = (query, businessId) => query
   .select("+guestContact")
@@ -34,16 +54,57 @@ const ensureBookingMutex = async (lockId) => {
   }
 };
 
+const canonicalWindowAvailableInSession = async ({
+  businessId,
+  workerId,
+  date,
+  startTime,
+  endTime,
+  session,
+}) => {
+  const dateStr = new Date(date).toISOString().slice(0, 10);
+  const serviceDuration = timeToMinutes(endTime) - timeToMinutes(startTime);
+  if (serviceDuration <= 0) return false;
+  const constraints = await canonicalAvailabilityRepository.readCanonicalAvailabilityConstraints({
+    businessId,
+    workerId,
+    date,
+    session,
+  });
+  const slots = buildCanonicalCalendarSlots({
+    dateStr,
+    serviceDuration,
+    ...constraints,
+  });
+  return slots.some((slot) => (
+    slot.startTime === startTime
+    && slot.endTime === endTime
+    && slot.available !== false
+  ));
+};
+
 /**
- * G2/H3 shared serialization primitive. Every affected worker/day mutex is
- * canonicalized, de-duplicated and acquired in lexical order inside one
- * transaction. The ordering prevents A→B/B→A lock inversion, while one-day
- * reschedules acquire the mutex exactly once.
+ * G2/H3 shared serialization primitive. Worker/day interval mutexes and every
+ * canonical availability fence for the affected scopes are materialized first,
+ * de-duplicated, then acquired in one lexical order inside one transaction.
+ * Same-day reschedules still acquire each physical row once; A→B/B→A cannot
+ * invert lock order.
  */
 export const withSerializedBookingIntervals = async (scopes, work) => {
   if (!Array.isArray(scopes) || scopes.length === 0) throw new TypeError("Se requiere al menos un dominio de booking");
-  const lockIds = [...new Set(scopes.map(({ businessId, workerId, date }) => bookingMutexId(businessId, workerId, date)))].sort();
-  await Promise.all(lockIds.map(ensureBookingMutex));
+  const bookingLockIds = [...new Set(scopes.map(({ businessId, workerId, date }) => bookingMutexId(businessId, workerId, date)))];
+  const availabilityLockIds = [...new Set(scopes.flatMap((scope) => canonicalAvailabilityFenceIds(scope)))];
+
+  await Promise.all(bookingLockIds.map(ensureBookingMutex));
+  await ensureAvailabilityFenceRows(availabilityLockIds);
+  const lockIds = [...new Set([...bookingLockIds, ...availabilityLockIds])].sort();
+
+  if (beforeCanonicalAvailabilityFenceTestHook) {
+    await beforeCanonicalAvailabilityFenceTestHook({
+      bookingLockIds: [...bookingLockIds].sort(),
+      availabilityLockIds: [...availabilityLockIds].sort(),
+    });
+  }
 
   const session = await mongoose.startSession();
   let result;
@@ -56,6 +117,13 @@ export const withSerializedBookingIntervals = async (scopes, work) => {
           { new: true, session },
         );
         if (!lock) throw new Error("No se pudo adquirir la serialización de booking");
+      }
+
+      if (afterCanonicalAvailabilityFenceTestHook) {
+        await afterCanonicalAvailabilityFenceTestHook({
+          bookingLockIds: [...bookingLockIds].sort(),
+          availabilityLockIds: [...availabilityLockIds].sort(),
+        });
       }
       result = await work(session);
     }, {
@@ -71,7 +139,7 @@ export const withSerializedBookingIntervals = async (scopes, work) => {
 export const withSerializedBookingInterval = async ({ businessId, workerId, date }, work) =>
   withSerializedBookingIntervals([{ businessId, workerId, date }], work);
 
-export const findByBusinessWorkerAndDate = async (businessId, workerId, date) => {
+export const findByBusinessWorkerAndDate = async (businessId, workerId, date, { session = null } = {}) => {
   const startOfDay = new Date(date);
   startOfDay.setUTCHours(0, 0, 0, 0);
   const endOfDay = new Date(date);
@@ -81,7 +149,7 @@ export const findByBusinessWorkerAndDate = async (businessId, workerId, date) =>
     worker: workerId,
     date: { $gte: startOfDay, $lte: endOfDay },
     status: { $ne: "cancelled" },
-  });
+  }).session(session || null);
 };
 
 export const findActiveOverlapForBusinessWorkerAndDate = async ({
@@ -155,18 +223,39 @@ export const moveGuestAppointmentWindow = async ({
   startTime,
   endTime,
   session,
-}) => Appointment.findOneAndUpdate(
-  {
-    _id: appointmentId,
-    business: businessId,
-    date: expectedDate,
-    startTime: expectedStartTime,
-    endTime: expectedEndTime,
-    status: { $in: expectedStatuses },
-  },
-  { $set: { date, startTime, endTime } },
-  { new: true, runValidators: true, session },
-);
+}) => {
+  const current = await Appointment.findOne({ _id: appointmentId, business: businessId })
+    .select("worker")
+    .session(session || null);
+  if (!current) return null;
+
+  const canonical = await canonicalWindowAvailableInSession({
+    businessId,
+    workerId: current.worker,
+    date,
+    startTime,
+    endTime,
+    session,
+  });
+  if (!canonical) {
+    const error = new ConflictError("El horario seleccionado ya no se encuentra disponible");
+    error.code = RESCHEDULE_SLOT_CONFLICT_CODE;
+    throw error;
+  }
+
+  return Appointment.findOneAndUpdate(
+    {
+      _id: appointmentId,
+      business: businessId,
+      date: expectedDate,
+      startTime: expectedStartTime,
+      endTime: expectedEndTime,
+      status: { $in: expectedStatuses },
+    },
+    { $set: { date, startTime, endTime } },
+    { new: true, runValidators: true, session },
+  );
+};
 
 export const markPendingPaymentFromLegacyPayment = async (id) => Appointment.findByIdAndUpdate(
   id,

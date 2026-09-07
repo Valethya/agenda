@@ -166,6 +166,22 @@ export const bookAppointment = async (appointmentData) => {
       });
       const serviceDetail = commitScope.serviceDetail;
       const endTime = addMinutesToTime(startTime, serviceDetail.duration);
+
+      if (!isSuggestion) {
+        const canonical = await availabilityService.isCanonicalBookingWindowAtCommit({
+          workerId: worker,
+          dateStr,
+          serviceDuration: serviceDetail.duration,
+          businessId,
+          startTime,
+          endTime,
+          session,
+        });
+        if (!canonical) {
+          throw new ConflictError("El horario seleccionado ya no se encuentra disponible");
+        }
+      }
+
       const isLocalBooking = serviceDetail.depositAmount === 0 || paymentOption === "local";
       const initialStatus = autoConfirm && isLocalBooking && !isSuggestion ? "confirmed" : "pending";
 
