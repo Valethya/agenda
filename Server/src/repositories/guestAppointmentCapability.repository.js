@@ -1,5 +1,6 @@
 import mongoose from "mongoose";
 import Appointment from "../db/models/appointment.model.js";
+import AuditLog from "../db/models/auditLog.model.js";
 import ClientContactVerification, {
   CLIENT_CONTACT_VERIFICATION_PURPOSES,
 } from "../db/models/clientContactVerification.model.js";
@@ -13,6 +14,8 @@ import {
 
 const OBJECT_ID_HEX_PATTERN = /^[0-9a-fA-F]{24}$/u;
 const SECRET_HASH_PATTERN = /^[0-9a-f]{64}$/u;
+const GUEST_CANCELABLE_STATUSES = Object.freeze(["pending", "pending_payment", "confirmed"]);
+const CANCEL_STATE_CONFLICT = "GUEST_APPOINTMENT_CANCEL_STATE_CONFLICT";
 
 const requireStrictObjectId = (value, fieldName) => {
   if (value instanceof mongoose.Types.ObjectId) return value;
@@ -113,6 +116,86 @@ export const consumeForScope = async ({ businessId, appointmentId, action, secre
     { $set: { status: "consumed", consumedAt: scopedNow } },
     { new: true, runValidators: true },
   );
+};
+
+/**
+ * H2 sensitive mutation boundary. Capability consumption, Appointment status
+ * transition and guest actor audit share one MongoDB transaction. A state
+ * conflict or process failure aborts all three writes together.
+ */
+export const consumeAndCancelForScope = async ({ businessId, appointmentId, action, secretHash, now }) => {
+  const business = requireStrictObjectId(businessId, "businessId");
+  const appointment = requireStrictObjectId(appointmentId, "appointmentId");
+  const scopedAction = requireAction(action);
+  if (scopedAction !== "cancel" || !Object.values(GUEST_APPOINTMENT_IMPLEMENTED_PURPOSE_TO_ACTION).includes(scopedAction)) {
+    throw new TypeError("action de cancelación no implementada");
+  }
+  const hash = requireSecretHash(secretHash);
+  const scopedNow = requireDate(now, "now");
+  const session = await mongoose.startSession();
+  let result = { kind: "invalid-capability", appointment: null };
+
+  try {
+    await session.withTransaction(async () => {
+      const capability = await GuestAppointmentCapability.findOneAndUpdate(
+        {
+          business,
+          appointment,
+          action: scopedAction,
+          secretHash: hash,
+          status: "active",
+          expiresAt: { $gt: scopedNow },
+        },
+        { $set: { status: "consumed", consumedAt: scopedNow } },
+        { new: true, runValidators: true, session },
+      );
+
+      if (!capability) {
+        result = { kind: "invalid-capability", appointment: null };
+        return;
+      }
+
+      const cancelled = await Appointment.findOneAndUpdate(
+        {
+          _id: appointment,
+          business,
+          status: { $in: GUEST_CANCELABLE_STATUSES },
+        },
+        { $set: { status: "cancelled" } },
+        { new: true, runValidators: true, session },
+      );
+
+      if (!cancelled) {
+        const conflict = new Error("Appointment ya no cancelable");
+        conflict.code = CANCEL_STATE_CONFLICT;
+        throw conflict;
+      }
+
+      await AuditLog.create([{
+        appointmentId: appointment,
+        event: "APPOINTMENT_CANCELLED",
+        level: "INFO",
+        message: "Reserva cancelada mediante autoridad guest.",
+        metadata: {
+          actorCapability: "guest-cancel",
+          businessId: business,
+        },
+      }], { session });
+
+      result = { kind: "cancelled", appointment: cancelled };
+    }, {
+      readConcern: { level: "snapshot" },
+      writeConcern: { w: "majority" },
+    });
+    return result;
+  } catch (error) {
+    if (error?.code === CANCEL_STATE_CONFLICT) {
+      return { kind: "conflict", appointment: null };
+    }
+    throw error;
+  } finally {
+    await session.endSession();
+  }
 };
 
 export const revokeForScope = async ({ capabilityId, businessId, appointmentId, action, now }) => {

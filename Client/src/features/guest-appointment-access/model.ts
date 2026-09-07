@@ -1,9 +1,16 @@
-import type { GuestAppointmentIdentity, GuestAppointmentProof } from './types.ts';
+import type {
+  GuestAppointmentIdentity,
+  GuestAppointmentProof,
+  GuestAppointmentPurpose,
+} from './types.ts';
 
 const ID_RE = /^[0-9a-fA-F]{24}$/u;
 const BEARER_RE = /^[A-Za-z0-9_-]{43}$/u;
 const CALENDAR_DATE_RE = /^(\d{4})-(\d{2})-(\d{2})(?:T.*)?$/u;
-const PURPOSE = 'appointment-read-bootstrap' as const;
+const IMPLEMENTED_PURPOSES = new Set<GuestAppointmentPurpose>([
+  'appointment-read-bootstrap',
+  'appointment-cancel-bootstrap',
+]);
 
 export const isGuestObjectId = (value: string): boolean => ID_RE.test(value);
 export const isGuestBearer = (value: string): boolean => BEARER_RE.test(value);
@@ -67,11 +74,17 @@ export function parseGuestAppointmentProof(fragment: string): GuestAppointmentPr
     !ID_RE.test(businessId)
     || !ID_RE.test(appointmentId)
     || !ID_RE.test(verificationId)
-    || purpose !== PURPOSE
+    || !IMPLEMENTED_PURPOSES.has(purpose as GuestAppointmentPurpose)
     || !BEARER_RE.test(challengeSecret)
   ) return null;
 
-  return { businessId, appointmentId, verificationId, purpose: PURPOSE, challengeSecret };
+  return {
+    businessId,
+    appointmentId,
+    verificationId,
+    purpose: purpose as GuestAppointmentPurpose,
+    challengeSecret,
+  };
 }
 
 export class RequestIdentityGate {

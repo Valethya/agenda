@@ -10,20 +10,26 @@ const requestEnvelope = (body) => z.object({
   params: empty,
 }).strict();
 
-export const guestAppointmentReadChallengeSchema = requestEnvelope(z.object({
+const challengeBody = z.object({
   businessId: objectId,
   appointmentId: objectId,
-}));
-
-export const guestAppointmentReadExchangeSchema = requestEnvelope(z.object({
+});
+const exchangeBody = z.object({
   businessId: objectId,
   appointmentId: objectId,
   verificationId: objectId,
   challengeSecret: bearer,
-}));
-
-export const guestAppointmentReadConsumeSchema = requestEnvelope(z.object({
+});
+const consumeBody = z.object({
   businessId: objectId,
   appointmentId: objectId,
   bearer,
-}));
+});
+
+export const guestAppointmentReadChallengeSchema = requestEnvelope(challengeBody);
+export const guestAppointmentReadExchangeSchema = requestEnvelope(exchangeBody);
+export const guestAppointmentReadConsumeSchema = requestEnvelope(consumeBody);
+
+export const guestAppointmentCancelChallengeSchema = requestEnvelope(challengeBody);
+export const guestAppointmentCancelExchangeSchema = requestEnvelope(exchangeBody);
+export const guestAppointmentCancelConsumeSchema = requestEnvelope(consumeBody);

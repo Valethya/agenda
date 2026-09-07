@@ -14,8 +14,12 @@ const makeLimiter = (limit) => rateLimit({
   legacyHeaders: false,
 });
 
-// Independent budgets prevent the issuance endpoint from becoming an email
-// amplification primitive while still allowing a reasonable verification/read flow.
+// Independent budgets prevent challenge issuance from becoming an email
+// amplification primitive and keep READ/CANCEL mutation budgets separate.
 export const guestReadChallengeLimiter = makeLimiter(5);
 export const guestReadExchangeLimiter = makeLimiter(10);
 export const guestReadConsumeLimiter = makeLimiter(20);
+
+export const guestCancelChallengeLimiter = makeLimiter(5);
+export const guestCancelExchangeLimiter = makeLimiter(10);
+export const guestCancelConsumeLimiter = makeLimiter(10);

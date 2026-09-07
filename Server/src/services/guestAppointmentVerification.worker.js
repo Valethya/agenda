@@ -16,13 +16,8 @@ import {
 } from "./publicWeb.service.js";
 import { sendGuestAppointmentVerificationEmail } from "./email/emailService.js";
 import { buildGuestAppointmentVerificationUrl } from "../security/guestAppointmentAccessUrl.js";
-import {
-  GUEST_APPOINTMENT_IMPLEMENTED_PURPOSE_TO_ACTION,
-  GUEST_APPOINTMENT_PURPOSES,
-} from "../security/guestAppointmentCapability.constants.js";
+import { GUEST_APPOINTMENT_IMPLEMENTED_PURPOSE_TO_ACTION } from "../security/guestAppointmentCapability.constants.js";
 
-const PURPOSE = GUEST_APPOINTMENT_PURPOSES.READ;
-const ACTION = GUEST_APPOINTMENT_IMPLEMENTED_PURPOSE_TO_ACTION[PURPOSE];
 const POLL_INTERVAL_MS = 1_000;
 const MAX_DRAIN_PER_TICK = 10;
 
@@ -48,19 +43,25 @@ const appointmentScopedDestination = (appointment) => {
   return contact.destination;
 };
 
-const revokeQuietly = async ({ verificationId, businessId }) => {
-  if (!verificationId) return;
+const jobScopeImplemented = (job) => (
+  typeof job?.purpose === "string"
+  && typeof job?.action === "string"
+  && GUEST_APPOINTMENT_IMPLEMENTED_PURPOSE_TO_ACTION[job.purpose] === job.action
+);
+
+const revokeQuietly = async ({ verificationId, businessId, purpose }) => {
+  if (!verificationId || !purpose) return;
   try {
     await revokeVerificationForBusiness({
       verificationId,
       businessId,
-      purpose: PURPOSE,
+      purpose,
     });
   } catch {}
 };
 
 const failDeliveryQuietly = async ({ job, verificationId, deliveryId, now }) => {
-  if (!verificationId || !deliveryId) return;
+  if (!verificationId || !deliveryId || !jobScopeImplemented(job)) return;
   try {
     await deliveryRepository.markFailed({
       deliveryId,
@@ -69,8 +70,8 @@ const failDeliveryQuietly = async ({ job, verificationId, deliveryId, now }) => 
       jobGeneration: job.generation,
       businessId: job.business,
       appointmentId: job.appointment,
-      purpose: PURPOSE,
-      action: ACTION,
+      purpose: job.purpose,
+      action: job.action,
       now,
     });
   } catch {}
@@ -83,7 +84,11 @@ const cleanupStaleArtifacts = async ({ job, now }) => {
     deliveryId: job.delivery,
     now,
   });
-  await revokeQuietly({ verificationId: job.verification, businessId: job.business });
+  await revokeQuietly({
+    verificationId: job.verification,
+    businessId: job.business,
+    purpose: job.purpose,
+  });
 };
 
 const failJob = async ({ job, workerId, now }) => {
@@ -116,6 +121,11 @@ export const processNextGuestAppointmentVerificationJob = async ({
 
   const job = await jobRepository.claimNext({ workerId, now });
   if (!job) return null;
+  if (!jobScopeImplemented(job)) {
+    await failJob({ job, workerId, now: new Date() });
+    logger.warn("Guest appointment verification job used an unimplemented action and failed closed.");
+    return { status: "failed", jobId: job._id };
+  }
 
   // A processing lease can be reclaimed after a crash. Any previous challenge
   // is unusable without its raw bearer; revoke/close its derived state before
@@ -128,8 +138,6 @@ export const processNextGuestAppointmentVerificationJob = async ({
   let delivery = null;
   let fence = null;
   try {
-    // 6.2.6-B cutover: no C1 artifact is issued until the Business itself owns
-    // a fresh verified publicWeb trust. No environment fallback exists.
     const trust = await resolveFreshPublicWebTrust({ businessId: job.business, now });
     if (!trust) {
       await failJob({ job, workerId, now: new Date() });
@@ -162,7 +170,7 @@ export const processNextGuestAppointmentVerificationJob = async ({
       businessId: job.business,
       channel: "email",
       destination,
-      purpose: PURPOSE,
+      purpose: job.purpose,
     });
 
     const verificationAttached = await jobRepository.attachVerification({
@@ -181,8 +189,8 @@ export const processNextGuestAppointmentVerificationJob = async ({
       trustedOrigin: trust.origin,
       businessId: job.business,
       appointmentId: job.appointment,
-      purpose: PURPOSE,
-      action: ACTION,
+      purpose: job.purpose,
+      action: job.action,
     });
 
     const deliveryAttached = await jobRepository.attachDelivery({
@@ -199,7 +207,7 @@ export const processNextGuestAppointmentVerificationJob = async ({
       businessId: job.business,
       appointmentId: job.appointment,
       verificationId: issued.verificationId,
-      purpose: PURPOSE,
+      purpose: job.purpose,
       challengeSecret: issued.secret,
     });
 
@@ -213,8 +221,6 @@ export const processNextGuestAppointmentVerificationJob = async ({
     });
     if (!delivering) throw new Error("JOB_OWNERSHIP_LOST");
 
-    // Tests can pause here to prove that a revocation that linearizes before the
-    // fence is acquired prevents any outbound side effect.
     if (beforeSendAuthorization) await beforeSendAuthorization({ job, trust, delivery });
 
     fence = await acquirePublicWebSendFence({
@@ -226,9 +232,6 @@ export const processNextGuestAppointmentVerificationJob = async ({
 
     if (beforeExternalSend) await beforeExternalSend({ job, trust, delivery, fence });
 
-    // This is the exact send authorization boundary. Admin revocations require
-    // absence/expiry of this persisted fence, so once confirmed they cannot
-    // linearize until the outbound call has begun or the fence is released.
     const sendAuthorized = await confirmPublicWebSendFence({
       businessId: job.business,
       fence,
@@ -257,8 +260,8 @@ export const processNextGuestAppointmentVerificationJob = async ({
       jobGeneration: job.generation,
       businessId: job.business,
       appointmentId: job.appointment,
-      purpose: PURPOSE,
-      action: ACTION,
+      purpose: job.purpose,
+      action: job.action,
       now: deliveredAt,
     });
     if (!markedDelivery) throw new Error("DELIVERY_STATE_LOST");
@@ -272,7 +275,11 @@ export const processNextGuestAppointmentVerificationJob = async ({
       now: deliveredAt,
     });
     if (!markedJob) {
-      await revokeQuietly({ verificationId: issued.verificationId, businessId: job.business });
+      await revokeQuietly({
+        verificationId: issued.verificationId,
+        businessId: job.business,
+        purpose: job.purpose,
+      });
       throw new Error("JOB_DELIVERED_STATE_LOST");
     }
 
@@ -288,7 +295,11 @@ export const processNextGuestAppointmentVerificationJob = async ({
       deliveryId: delivery?._id,
       now: failedAt,
     });
-    await revokeQuietly({ verificationId: issued?.verificationId, businessId: job.business });
+    await revokeQuietly({
+      verificationId: issued?.verificationId,
+      businessId: job.business,
+      purpose: job.purpose,
+    });
     await failJob({ job, workerId, now: failedAt });
     logger.warn("Guest appointment verification job failed closed.");
     return { status: "failed", jobId: job._id };

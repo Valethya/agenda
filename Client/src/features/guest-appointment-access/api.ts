@@ -1,9 +1,12 @@
 import { isGuestBearer, isGuestObjectId } from './model.ts';
 import type {
+  GuestAppointmentCancelCapability,
+  GuestAppointmentCancelProjection,
   GuestAppointmentIdentity,
   GuestAppointmentProof,
   GuestAppointmentReadCapability,
   GuestAppointmentReadProjection,
+  GuestCancelChallengeAccepted,
   GuestReadChallengeAccepted,
 } from './types.ts';
 
@@ -49,21 +52,22 @@ function assertIdentity(identity: GuestAppointmentIdentity): void {
   }
 }
 
-function assertCapability(
+function assertCapability<TAction extends 'read' | 'cancel'>(
   value: unknown,
   identity: GuestAppointmentIdentity,
-): GuestAppointmentReadCapability {
+  action: TAction,
+): TAction extends 'read' ? GuestAppointmentReadCapability : GuestAppointmentCancelCapability {
   if (!value || typeof value !== 'object') throw new Error('Capability guest no válida');
-  const capability = value as Partial<GuestAppointmentReadCapability>;
+  const capability = value as Partial<GuestAppointmentReadCapability | GuestAppointmentCancelCapability>;
   if (
-    capability.action !== 'read'
+    capability.action !== action
     || capability.businessId !== identity.businessId
     || capability.appointmentId !== identity.appointmentId
     || typeof capability.bearer !== 'string'
     || !isGuestBearer(capability.bearer)
     || typeof capability.expiresAt !== 'string'
   ) throw new Error('Capability guest no válida');
-  return capability as GuestAppointmentReadCapability;
+  return capability as never;
 }
 
 export function createGuestAppointmentAccessApi(options: GuestAppointmentAccessApiOptions = {}) {
@@ -99,11 +103,18 @@ export function createGuestAppointmentAccessApi(options: GuestAppointmentAccessA
       return post<GuestReadChallengeAccepted>('/guest-appointments/read/challenge', identity, 202, signal);
     },
 
+    async requestCancelChallenge(identity: GuestAppointmentIdentity, signal?: AbortSignal): Promise<GuestCancelChallengeAccepted> {
+      assertIdentity(identity);
+      return post<GuestCancelChallengeAccepted>('/guest-appointments/cancel/challenge', identity, 202, signal);
+    },
+
     async verifyReadChallenge(proof: GuestAppointmentProof, signal?: AbortSignal): Promise<GuestAppointmentReadCapability> {
       assertIdentity(proof);
-      if (!isGuestObjectId(proof.verificationId) || !isGuestBearer(proof.challengeSecret)) {
-        throw new TypeError('Proof guest no válido');
-      }
+      if (
+        proof.purpose !== 'appointment-read-bootstrap'
+        || !isGuestObjectId(proof.verificationId)
+        || !isGuestBearer(proof.challengeSecret)
+      ) throw new TypeError('Proof guest READ no válido');
       const result = await post<{ capability?: unknown }>(
         '/guest-appointments/read/verify',
         {
@@ -115,13 +126,34 @@ export function createGuestAppointmentAccessApi(options: GuestAppointmentAccessA
         200,
         signal,
       );
-      return assertCapability(result.capability, proof);
+      return assertCapability(result.capability, proof, 'read');
+    },
+
+    async verifyCancelChallenge(proof: GuestAppointmentProof, signal?: AbortSignal): Promise<GuestAppointmentCancelCapability> {
+      assertIdentity(proof);
+      if (
+        proof.purpose !== 'appointment-cancel-bootstrap'
+        || !isGuestObjectId(proof.verificationId)
+        || !isGuestBearer(proof.challengeSecret)
+      ) throw new TypeError('Proof guest CANCEL no válido');
+      const result = await post<{ capability?: unknown }>(
+        '/guest-appointments/cancel/verify',
+        {
+          businessId: proof.businessId,
+          appointmentId: proof.appointmentId,
+          verificationId: proof.verificationId,
+          challengeSecret: proof.challengeSecret,
+        },
+        200,
+        signal,
+      );
+      return assertCapability(result.capability, proof, 'cancel');
     },
 
     async consumeReadCapability(capability: GuestAppointmentReadCapability, signal?: AbortSignal): Promise<GuestAppointmentReadProjection> {
       assertIdentity(capability);
       if (capability.action !== 'read' || !isGuestBearer(capability.bearer)) {
-        throw new TypeError('Capability guest no válida');
+        throw new TypeError('Capability guest READ no válida');
       }
       const result = await post<{ appointment?: GuestAppointmentReadProjection }>(
         '/guest-appointments/read',
@@ -134,8 +166,32 @@ export function createGuestAppointmentAccessApi(options: GuestAppointmentAccessA
         signal,
       );
       if (!result.appointment || result.appointment.appointmentId !== capability.appointmentId) {
-        throw new Error('Proyección guest no válida');
+        throw new Error('Proyección guest READ no válida');
       }
+      return result.appointment;
+    },
+
+    async consumeCancelCapability(capability: GuestAppointmentCancelCapability, signal?: AbortSignal): Promise<GuestAppointmentCancelProjection> {
+      assertIdentity(capability);
+      if (capability.action !== 'cancel' || !isGuestBearer(capability.bearer)) {
+        throw new TypeError('Capability guest CANCEL no válida');
+      }
+      const result = await post<{ appointment?: GuestAppointmentCancelProjection }>(
+        '/guest-appointments/cancel',
+        {
+          businessId: capability.businessId,
+          appointmentId: capability.appointmentId,
+          bearer: capability.bearer,
+        },
+        200,
+        signal,
+      );
+      if (
+        !result.appointment
+        || result.appointment.appointmentId !== capability.appointmentId
+        || result.appointment.businessId !== capability.businessId
+        || result.appointment.status !== 'cancelled'
+      ) throw new Error('Proyección guest CANCEL no válida');
       return result.appointment;
     },
   };
