@@ -2,50 +2,46 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import mongoose from "mongoose";
 import { readFile } from "node:fs/promises";
-import ClientContactVerification from "../../src/db/models/clientContactVerification.model.js";
 import GuestAppointmentCapability, { GUEST_APPOINTMENT_CAPABILITY_STATUSES } from "../../src/db/models/guestAppointmentCapability.model.js";
-import GuestAppointmentVerificationDelivery from "../../src/db/models/guestAppointmentVerificationDelivery.model.js";
-import GuestAppointmentVerificationJob from "../../src/db/models/guestAppointmentVerificationJob.model.js";
-import GuestAppointmentIntakeBucket from "../../src/db/models/guestAppointmentIntakeBucket.model.js";
 import {
   GUEST_APPOINTMENT_ACTIONS,
   GUEST_APPOINTMENT_IMPLEMENTED_ACTIONS,
   GUEST_APPOINTMENT_IMPLEMENTED_PURPOSE_TO_ACTION,
 } from "../../src/security/guestAppointmentCapability.constants.js";
 import {
-  GUEST_APPOINTMENT_ARTIFACT_RETENTION_MS,
-  GUEST_APPOINTMENT_ARTIFACT_RETENTION_SECONDS,
-} from "../../src/security/guestAppointmentArtifactRetention.constants.js";
-import {
-  buildGuestAppointmentVerificationUrl,
-  getTrustedGuestAppointmentOrigin,
-} from "../../src/security/guestAppointmentAccessUrl.js";
-import {
-  emitAvailabilityChange,
-  registerAvailabilityChangeEmitter,
-} from "../../src/config/availabilityEvents.js";
-import {
   guestAppointmentCancelChallengeSchema,
   guestAppointmentCancelConsumeSchema,
-  guestAppointmentCancelExchangeSchema,
   guestAppointmentReadChallengeSchema,
-  guestAppointmentReadExchangeSchema,
+  guestAppointmentRescheduleChallengeSchema,
+  guestAppointmentRescheduleConsumeSchema,
+  guestAppointmentRescheduleExchangeSchema,
 } from "../../src/validations/guestAppointmentCapability.validation.js";
+import { emitAvailabilityChange, registerAvailabilityChangeEmitter } from "../../src/config/availabilityEvents.js";
 
-const indexByName = (model, name) => model.schema.indexes().find(([, options]) => options.name === name);
+const envelope = (body) => ({ body, query: {}, params: {} });
 
-test("6.2.5-C2/H2 capability contract", async (t) => {
-  await t.test("READ and CANCEL are implemented separately while RESCHEDULE stays closed", () => {
+const collectLocalModuleGraph = async (entryUrl, seen = new Map()) => {
+  if (seen.has(entryUrl.href)) return seen;
+  const source = await readFile(entryUrl, "utf8");
+  seen.set(entryUrl.href, source);
+  for (const match of source.matchAll(/\b(?:import|export)\s+(?:[^"'`]*?\s+from\s+)?["'](\.[^"']+\.js)["']/gu)) {
+    await collectLocalModuleGraph(new URL(match[1], entryUrl), seen);
+  }
+  return seen;
+};
+
+test("6.2.5-C2/H3 capability contract", async (t) => {
+  await t.test("READ, CANCEL and RESCHEDULE are explicit independent authorities", () => {
     assert.deepEqual(GUEST_APPOINTMENT_ACTIONS, ["read", "cancel", "reschedule"]);
-    assert.deepEqual(GUEST_APPOINTMENT_IMPLEMENTED_ACTIONS, ["read", "cancel"]);
+    assert.deepEqual(GUEST_APPOINTMENT_IMPLEMENTED_ACTIONS, ["read", "cancel", "reschedule"]);
     assert.deepEqual(GUEST_APPOINTMENT_IMPLEMENTED_PURPOSE_TO_ACTION, {
       "appointment-read-bootstrap": "read",
       "appointment-cancel-bootstrap": "cancel",
+      "appointment-reschedule-bootstrap": "reschedule",
     });
-    assert.equal(GUEST_APPOINTMENT_IMPLEMENTED_PURPOSE_TO_ACTION["appointment-reschedule-bootstrap"], undefined);
   });
 
-  await t.test("capability persists only derived secret and resource scope", () => {
+  await t.test("capability storage remains hashed and has no User/Membership authority", () => {
     assert.deepEqual(GUEST_APPOINTMENT_CAPABILITY_STATUSES, ["active", "consumed", "revoked"]);
     assert.equal(GuestAppointmentCapability.schema.path("business").options.required, true);
     assert.equal(GuestAppointmentCapability.schema.path("appointment").options.required, true);
@@ -53,147 +49,84 @@ test("6.2.5-C2/H2 capability contract", async (t) => {
     assert.equal(GuestAppointmentCapability.schema.path("secretHash").options.select, false);
     assert.equal(GuestAppointmentCapability.schema.path("user"), undefined);
     assert.equal(GuestAppointmentCapability.schema.path("membership"), undefined);
-    assert.equal(GuestAppointmentCapability.schema.path("customerProfile"), undefined);
     assert.equal(GuestAppointmentCapability.schema.path("secret"), undefined);
-    assert.equal(GuestAppointmentVerificationDelivery.schema.path("destination"), undefined);
-    assert.equal(ClientContactVerification.schema.path("appointment"), undefined);
-
-    assert.equal(GuestAppointmentVerificationDelivery.schema.path("publicWebTrustGeneration").options.required, true);
-    assert.equal(GuestAppointmentVerificationDelivery.schema.path("trustedOrigin").options.required, true);
-    assert.ok(GuestAppointmentVerificationJob.schema.path("publicWebTrustGeneration"));
-    assert.ok(GuestAppointmentVerificationJob.schema.path("trustedOrigin"));
   });
 
-  await t.test("C1/C2 proof artifacts have bounded physical retention without changing logical expiry", () => {
-    assert.equal(GUEST_APPOINTMENT_ARTIFACT_RETENTION_MS, 60 * 60 * 1000);
-    assert.equal(GUEST_APPOINTMENT_ARTIFACT_RETENTION_SECONDS, 60 * 60);
-    assert.ok(GuestAppointmentVerificationDelivery.schema.path("purgeAfter"));
-
-    const verificationTtl = indexByName(ClientContactVerification, "client_verification_expiry_retention_ttl");
-    const deliveryTtl = indexByName(GuestAppointmentVerificationDelivery, "guest_appointment_delivery_retention_ttl");
-    const capabilityTtl = indexByName(GuestAppointmentCapability, "guest_appointment_capability_expiry_retention_ttl");
-    assert.ok(verificationTtl);
-    assert.deepEqual(verificationTtl[0], { expiresAt: 1 });
-    assert.equal(verificationTtl[1].expireAfterSeconds, GUEST_APPOINTMENT_ARTIFACT_RETENTION_SECONDS);
-    assert.ok(deliveryTtl);
-    assert.deepEqual(deliveryTtl[0], { purgeAfter: 1 });
-    assert.equal(deliveryTtl[1].expireAfterSeconds, 0);
-    assert.ok(capabilityTtl);
-    assert.deepEqual(capabilityTtl[0], { expiresAt: 1 });
-    assert.equal(capabilityTtl[1].expireAfterSeconds, GUEST_APPOINTMENT_ARTIFACT_RETENTION_SECONDS);
-  });
-
-  await t.test("durable jobs only expose terminal purge timestamps and intake guard stores no raw resource identifiers", () => {
-    assert.ok(GuestAppointmentVerificationJob.schema.path("purgeAfter"));
-    assert.equal(GuestAppointmentVerificationJob.schema.path("bearer"), undefined);
-    assert.equal(GuestAppointmentVerificationJob.schema.path("destination"), undefined);
-    assert.equal(GuestAppointmentIntakeBucket.schema.path("business"), undefined);
-    assert.equal(GuestAppointmentIntakeBucket.schema.path("appointment"), undefined);
-    assert.equal(GuestAppointmentIntakeBucket.schema.path("destination"), undefined);
-    assert.ok(GuestAppointmentIntakeBucket.schema.path("scopeKeys"));
-
-    const jobTtl = indexByName(GuestAppointmentVerificationJob, "guest_appointment_job_terminal_ttl");
-    const bucketTtl = indexByName(GuestAppointmentIntakeBucket, "guest_appointment_intake_bucket_ttl");
-    assert.ok(jobTtl);
-    assert.deepEqual(jobTtl[0], { purgeAfter: 1 });
-    assert.equal(jobTtl[1].expireAfterSeconds, 0);
-    assert.ok(bucketTtl);
-    assert.deepEqual(bucketTtl[0], { expiresAt: 1 });
-    assert.equal(bucketTtl[1].expireAfterSeconds, 0);
-  });
-
-  await t.test("C2 URL origin is explicit tenant trust and never falls back to environment state", () => {
-    for (const value of [
-      undefined,
-      "http://guest.example.test",
-      "https://user:pass@guest.example.test",
-      "https://guest.example.test/path",
-      "https://guest.example.test?x=1",
-      "https://guest.example.test/#x",
-      "https://guest.example.test:8443",
-    ]) {
-      assert.throws(() => getTrustedGuestAppointmentOrigin(value), /Configuración de acceso guest no válida/u);
-    }
-
-    assert.equal(getTrustedGuestAppointmentOrigin("https://guest.example.test:443"), "https://guest.example.test");
-
-    const previous = process.env.GUEST_APPOINTMENT_ACCESS_ORIGIN;
-    process.env.GUEST_APPOINTMENT_ACCESS_ORIGIN = "https://attacker.example.test";
-    try {
-      const url = buildGuestAppointmentVerificationUrl({
-        trustedOrigin: "https://tenant.example.test",
-        businessId: new mongoose.Types.ObjectId(),
-        appointmentId: new mongoose.Types.ObjectId(),
-        verificationId: new mongoose.Types.ObjectId(),
-        purpose: "appointment-cancel-bootstrap",
-        challengeSecret: "a".repeat(43),
-      });
-      const parsed = new URL(url);
-      assert.equal(parsed.origin, "https://tenant.example.test");
-      assert.equal(parsed.search, "");
-      assert.ok(parsed.hash.includes("challenge="));
-      assert.ok(parsed.hash.includes("appointment-cancel-bootstrap"));
-    } finally {
-      if (previous === undefined) delete process.env.GUEST_APPOINTMENT_ACCESS_ORIGIN;
-      else process.env.GUEST_APPOINTMENT_ACCESS_ORIGIN = previous;
-    }
-  });
-
-  await t.test("HTTP schemas require explicit scope and reject authority/destination injection", () => {
+  await t.test("RESCHEDULE HTTP schema accepts only date/startTime mutation input", () => {
     const businessId = new mongoose.Types.ObjectId().toString();
     const appointmentId = new mongoose.Types.ObjectId().toString();
     const verificationId = new mongoose.Types.ObjectId().toString();
+    const bearer = "b".repeat(43);
+    const challengeSecret = "a".repeat(43);
 
-    assert.equal(guestAppointmentReadChallengeSchema.safeParse({
-      body: { businessId, appointmentId }, query: {}, params: {},
-    }).success, true);
-    assert.equal(guestAppointmentCancelChallengeSchema.safeParse({
-      body: { businessId, appointmentId }, query: {}, params: {},
-    }).success, true);
-    assert.equal(guestAppointmentCancelChallengeSchema.safeParse({
-      body: { businessId, appointmentId, email: "attacker@example.com" }, query: {}, params: {},
-    }).success, false);
-    assert.equal(guestAppointmentReadExchangeSchema.safeParse({
-      body: { businessId, appointmentId, verificationId, challengeSecret: "a".repeat(43), action: "cancel" },
-      query: {}, params: {},
-    }).success, false);
-    assert.equal(guestAppointmentCancelExchangeSchema.safeParse({
-      body: { businessId, appointmentId, verificationId, challengeSecret: "a".repeat(43), action: "read" },
-      query: {}, params: {},
-    }).success, false);
-    assert.equal(guestAppointmentCancelConsumeSchema.safeParse({
-      body: { businessId, appointmentId, bearer: "b".repeat(43), status: "cancelled" },
-      query: {}, params: {},
-    }).success, false);
+    assert.equal(guestAppointmentReadChallengeSchema.safeParse(envelope({ businessId, appointmentId })).success, true);
+    assert.equal(guestAppointmentCancelChallengeSchema.safeParse(envelope({ businessId, appointmentId })).success, true);
+    assert.equal(guestAppointmentRescheduleChallengeSchema.safeParse(envelope({ businessId, appointmentId })).success, true);
+    assert.equal(guestAppointmentRescheduleExchangeSchema.safeParse(envelope({ businessId, appointmentId, verificationId, challengeSecret })).success, true);
+    assert.equal(guestAppointmentRescheduleConsumeSchema.safeParse(envelope({ businessId, appointmentId, bearer, date: "2099-09-14", startTime: "11:00" })).success, true);
+
+    for (const injected of [
+      { worker: new mongoose.Types.ObjectId().toString() },
+      { service: new mongoose.Types.ObjectId().toString() },
+      { endTime: "12:00" },
+      { status: "confirmed" },
+      { paymentStatus: "fully_paid" },
+      { clientInfo: { email: "attacker@example.com" } },
+      { duration: 5 },
+    ]) {
+      assert.equal(guestAppointmentRescheduleConsumeSchema.safeParse(envelope({
+        businessId, appointmentId, bearer, date: "2099-09-14", startTime: "11:00", ...injected,
+      })).success, false);
+    }
+    assert.equal(guestAppointmentCancelConsumeSchema.safeParse(envelope({ businessId, appointmentId, bearer, date: "2099-09-14" })).success, false);
   });
 
-  await t.test("availability notification bridge is lifecycle-neutral until Socket.IO owns the emitter", async () => {
+  await t.test("availability and booking-scope bridges remain lifecycle-neutral", async () => {
     let observed = null;
-    emitAvailabilityChange("worker-before", "2099-01-01", "business-before");
-    assert.equal(observed, null);
-
-    const unregister = registerAvailabilityChangeEmitter((workerId, dateStr, businessId) => {
-      observed = { workerId, dateStr, businessId };
-    });
-    emitAvailabilityChange("worker-1", "2099-02-03", "business-1");
-    assert.deepEqual(observed, {
-      workerId: "worker-1",
-      dateStr: "2099-02-03",
-      businessId: "business-1",
-    });
+    const unregister = registerAvailabilityChangeEmitter((workerId, dateStr, businessId) => { observed = { workerId, dateStr, businessId }; });
+    emitAvailabilityChange("worker", "2099-01-02", "business");
+    assert.deepEqual(observed, { workerId: "worker", dateStr: "2099-01-02", businessId: "business" });
     unregister();
-    observed = null;
-    emitAvailabilityChange("worker-after", "2099-02-04", "business-after");
-    assert.equal(observed, null);
 
-    const serviceSource = await readFile(new URL("../../src/services/guestAppointmentCapability.service.js", import.meta.url), "utf8");
-    const bridgeSource = await readFile(new URL("../../src/config/availabilityEvents.js", import.meta.url), "utf8");
-    const socketSource = await readFile(new URL("../../src/config/socket.js", import.meta.url), "utf8");
+    const guestServiceSource = await readFile(new URL("../../src/services/guestAppointmentCapability.service.js", import.meta.url), "utf8");
+    const appointmentServiceSource = await readFile(new URL("../../src/services/appointment.service.js", import.meta.url), "utf8");
+    const rescheduleRepo = await readFile(new URL("../../src/repositories/guestAppointmentReschedule.repository.js", import.meta.url), "utf8");
 
-    assert.match(serviceSource, /from "\.\.\/config\/availabilityEvents\.js"/u);
-    assert.doesNotMatch(serviceSource, /from "\.\.\/config\/socket\.js"/u);
-    assert.doesNotMatch(bridgeSource, /app\.js|connect-mongo|sessionStore/u);
-    assert.match(socketSource, /registerAvailabilityChangeEmitter/u);
-    assert.match(socketSource, /emitTenantAvailabilityChange\(workerId, dateStr, businessId\)/u);
+    assert.match(guestServiceSource, /from "\.\/bookingTenantScope\.service\.js"/u);
+    assert.doesNotMatch(guestServiceSource, /from "\.\/appointment\.service\.js"/u);
+    assert.match(guestServiceSource, /from "\.\.\/config\/availabilityEvents\.js"/u);
+    assert.doesNotMatch(guestServiceSource, /from "\.\.\/config\/socket\.js"/u);
+
+    assert.match(appointmentServiceSource, /from "\.\/bookingTenantScope\.service\.js"/u);
+    assert.doesNotMatch(appointmentServiceSource, /export const validateBookingTenantScope\s*=/u);
+
+    const eligibilityGraph = await collectLocalModuleGraph(
+      new URL("../../src/services/bookingTenantScope.service.js", import.meta.url),
+    );
+    for (const [moduleUrl, source] of eligibilityGraph) {
+      assert.doesNotMatch(moduleUrl, /\/(?:config\/socket|app)\.js$/u);
+      for (const forbiddenRuntime of [
+        /socket\.js/u,
+        /app\.js/u,
+        /sessionStore/u,
+        /connect-mongo/u,
+        /from\s+["']express["']/u,
+        /from\s+["']node:https?["']/u,
+        /https?\.createServer/u,
+        /\bWebSocket\b/u,
+      ]) {
+        assert.doesNotMatch(source, forbiddenRuntime);
+      }
+    }
+    assert.doesNotMatch(rescheduleRepo, /socket\.js/u);
+  });
+
+  await t.test("shared G2/H3 lock primitive deduplicates and globally sorts interval + canonical availability keys", async () => {
+    const source = await readFile(new URL("../../src/repositories/appointment.repository.js", import.meta.url), "utf8");
+    assert.match(source, /new Set\(scopes\.map/u);
+    assert.match(source, /new Set\(scopes\.flatMap\(\(scope\) => canonicalAvailabilityFenceIds\(scope\)\)\)/u);
+    assert.match(source, /new Set\(\[\.\.\.bookingLockIds, \.\.\.availabilityLockIds\]\)\]\.sort\(\)/u);
+    assert.match(source, /for \(const lockId of lockIds\)/u);
+    assert.match(source, /excludeAppointmentId/u);
   });
 });

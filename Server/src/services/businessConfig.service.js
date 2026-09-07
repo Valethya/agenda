@@ -1,5 +1,9 @@
 import * as businessConfigRepository from "../repositories/businessConfig.repository.js";
 import * as businessRepository from "../repositories/business.repository.js";
+import {
+  businessConfigAvailabilityFenceId,
+  withAvailabilityMutationFences,
+} from "../repositories/availabilityFence.repository.js";
 import { DEFAULT_SLOT_DURATION_MINUTES } from "../config/businessConfig.defaults.js";
 import { NotFoundError } from "../utils/appError.js";
 import { serializePublicWebState } from "../security/publicWebState.js";
@@ -151,8 +155,7 @@ export const getOrInitializeConfig = async (businessId) => {
   return config;
 };
 
-export const updateConfig = async (businessId, updateData) => {
-  const config = await getOrInitializeConfig(businessId);
+const normalizeConfigUpdate = (config, updateData) => {
   const normalizedUpdate = { ...updateData };
 
   // appointmentSettings es un patch parcial por contrato. Conservar el snapshot
@@ -168,5 +171,33 @@ export const updateConfig = async (businessId, updateData) => {
     };
   }
 
-  return await businessConfigRepository.updateConfig(config._id, normalizedUpdate);
+  return normalizedUpdate;
+};
+
+export const updateConfig = async (businessId, updateData) => {
+  const config = await getOrInitializeConfig(businessId);
+  const changesSlotGrid = Object.prototype.hasOwnProperty.call(
+    updateData?.appointmentSettings ?? {},
+    "slotDuration",
+  );
+
+  if (!changesSlotGrid) {
+    return await businessConfigRepository.updateConfig(
+      config._id,
+      normalizeConfigUpdate(config, updateData),
+    );
+  }
+
+  return withAvailabilityMutationFences(
+    [businessConfigAvailabilityFenceId(businessId)],
+    async (session) => {
+      const current = await businessConfigRepository.getConfig(businessId, { session });
+      if (!current) throw new NotFoundError("El negocio asociado a la configuración no existe");
+      return businessConfigRepository.updateConfig(
+        current._id,
+        normalizeConfigUpdate(current, updateData),
+        { session },
+      );
+    },
+  );
 };

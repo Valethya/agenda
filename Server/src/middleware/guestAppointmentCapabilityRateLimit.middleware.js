@@ -15,7 +15,7 @@ const makeLimiter = (limit) => rateLimit({
 });
 
 // Independent budgets prevent challenge issuance from becoming an email
-// amplification primitive and keep READ/CANCEL mutation budgets separate.
+// amplification primitive and keep READ/CANCEL/RESCHEDULE budgets separate.
 export const guestReadChallengeLimiter = makeLimiter(5);
 export const guestReadExchangeLimiter = makeLimiter(10);
 export const guestReadConsumeLimiter = makeLimiter(20);
@@ -23,3 +23,7 @@ export const guestReadConsumeLimiter = makeLimiter(20);
 export const guestCancelChallengeLimiter = makeLimiter(5);
 export const guestCancelExchangeLimiter = makeLimiter(10);
 export const guestCancelConsumeLimiter = makeLimiter(10);
+
+export const guestRescheduleChallengeLimiter = makeLimiter(5);
+export const guestRescheduleExchangeLimiter = makeLimiter(10);
+export const guestRescheduleConsumeLimiter = makeLimiter(10);

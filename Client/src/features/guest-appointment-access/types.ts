@@ -5,7 +5,8 @@ export interface GuestAppointmentIdentity {
 
 export type GuestAppointmentPurpose =
   | 'appointment-read-bootstrap'
-  | 'appointment-cancel-bootstrap';
+  | 'appointment-cancel-bootstrap'
+  | 'appointment-reschedule-bootstrap';
 
 export interface GuestAppointmentProof extends GuestAppointmentIdentity {
   verificationId: string;
@@ -21,6 +22,12 @@ export interface GuestAppointmentReadCapability extends GuestAppointmentIdentity
 
 export interface GuestAppointmentCancelCapability extends GuestAppointmentIdentity {
   action: 'cancel';
+  bearer: string;
+  expiresAt: string;
+}
+
+export interface GuestAppointmentRescheduleCapability extends GuestAppointmentIdentity {
+  action: 'reschedule';
   bearer: string;
   expiresAt: string;
 }
@@ -44,6 +51,31 @@ export interface GuestAppointmentCancelProjection extends GuestAppointmentIdenti
   endTime: string;
 }
 
+export interface GuestAppointmentRescheduleProjection extends GuestAppointmentIdentity {
+  serviceId: string;
+  workerId: string;
+  date: string;
+  startTime: string;
+  endTime: string;
+  status: string;
+}
+
+export interface GuestRescheduleContext extends GuestAppointmentIdentity {
+  business: { id: string; name: string; slug: string };
+  service: { id: string; name: string };
+  professional: { id: string; firstName: string; lastName: string };
+  date: string;
+  startTime: string;
+  endTime: string;
+  status: string;
+}
+
+export interface GuestCanonicalSlot {
+  startTime: string;
+  endTime: string;
+  available: boolean;
+}
+
 export interface GuestChallengeAccepted {
   status: 'accepted';
   message: string;
@@ -51,3 +83,4 @@ export interface GuestChallengeAccepted {
 
 export type GuestReadChallengeAccepted = GuestChallengeAccepted;
 export type GuestCancelChallengeAccepted = GuestChallengeAccepted;
+export type GuestRescheduleChallengeAccepted = GuestChallengeAccepted;

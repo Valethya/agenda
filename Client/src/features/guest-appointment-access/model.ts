@@ -2,6 +2,7 @@ import type {
   GuestAppointmentIdentity,
   GuestAppointmentProof,
   GuestAppointmentPurpose,
+  GuestCanonicalSlot,
 } from './types.ts';
 
 const ID_RE = /^[0-9a-fA-F]{24}$/u;
@@ -10,6 +11,7 @@ const CALENDAR_DATE_RE = /^(\d{4})-(\d{2})-(\d{2})(?:T.*)?$/u;
 const IMPLEMENTED_PURPOSES = new Set<GuestAppointmentPurpose>([
   'appointment-read-bootstrap',
   'appointment-cancel-bootstrap',
+  'appointment-reschedule-bootstrap',
 ]);
 
 export const isGuestObjectId = (value: string): boolean => ID_RE.test(value);
@@ -21,23 +23,12 @@ export function formatGuestCalendarDate(
 ): string {
   const match = CALENDAR_DATE_RE.exec(value);
   if (!match) return value;
-
   const year = Number(match[1]);
   const month = Number(match[2]);
   const day = Number(match[3]);
   const calendarDate = new Date(year, month - 1, day);
-
-  if (
-    calendarDate.getFullYear() !== year
-    || calendarDate.getMonth() !== month - 1
-    || calendarDate.getDate() !== day
-  ) return value;
-
-  try {
-    return formatter.format(calendarDate);
-  } catch {
-    return value;
-  }
+  if (calendarDate.getFullYear() !== year || calendarDate.getMonth() !== month - 1 || calendarDate.getDate() !== day) return value;
+  try { return formatter.format(calendarDate); } catch { return value; }
 }
 
 export function identityKey(identity: GuestAppointmentIdentity): string {
@@ -57,67 +48,68 @@ export function parseGuestAppointmentProof(fragment: string): GuestAppointmentPr
   const params = new URLSearchParams(raw);
   const expected = new Set(['businessId', 'appointmentId', 'verificationId', 'purpose', 'challenge']);
   const seen = new Set<string>();
-
   for (const [key] of params.entries()) {
     if (!expected.has(key) || seen.has(key)) return null;
     seen.add(key);
   }
   if (seen.size !== expected.size) return null;
-
   const businessId = params.get('businessId') || '';
   const appointmentId = params.get('appointmentId') || '';
   const verificationId = params.get('verificationId') || '';
   const purpose = params.get('purpose') || '';
   const challengeSecret = params.get('challenge') || '';
-
-  if (
-    !ID_RE.test(businessId)
-    || !ID_RE.test(appointmentId)
-    || !ID_RE.test(verificationId)
-    || !IMPLEMENTED_PURPOSES.has(purpose as GuestAppointmentPurpose)
-    || !BEARER_RE.test(challengeSecret)
-  ) return null;
-
-  return {
-    businessId,
-    appointmentId,
-    verificationId,
-    purpose: purpose as GuestAppointmentPurpose,
-    challengeSecret,
-  };
+  if (!ID_RE.test(businessId) || !ID_RE.test(appointmentId) || !ID_RE.test(verificationId)
+    || !IMPLEMENTED_PURPOSES.has(purpose as GuestAppointmentPurpose) || !BEARER_RE.test(challengeSecret)) return null;
+  return { businessId, appointmentId, verificationId, purpose: purpose as GuestAppointmentPurpose, challengeSecret };
 }
 
 export class RequestIdentityGate {
   #generation = 0;
   #identity = '';
-
   reset(identity: GuestAppointmentIdentity | null): void {
     this.#generation += 1;
     this.#identity = identity ? identityKey(identity) : '';
   }
-
-  invalidate(): void {
-    this.reset(null);
-  }
-
+  invalidate(): void { this.reset(null); }
   begin(identity: GuestAppointmentIdentity): { generation: number; identity: string } {
     this.#generation += 1;
     this.#identity = identityKey(identity);
     return { generation: this.#generation, identity: this.#identity };
   }
-
   isCurrent(token: { generation: number; identity: string }): boolean {
     return token.generation === this.#generation && token.identity === this.#identity;
   }
 }
 
+export class RequestKeyGate {
+  #generation = 0;
+  #key = '';
+  invalidate(): void { this.#generation += 1; this.#key = ''; }
+  begin(key: string): { generation: number; key: string } {
+    this.#generation += 1;
+    this.#key = key;
+    return { generation: this.#generation, key };
+  }
+  isCurrent(token: { generation: number; key: string }): boolean {
+    return token.generation === this.#generation && token.key === this.#key;
+  }
+}
+
+export function selectedSlotStillAvailable(slots: GuestCanonicalSlot[], startTime: string | null): boolean {
+  return Boolean(startTime && slots.some((slot) => slot.startTime === startTime && slot.available !== false));
+}
+
 export function createGuestAccessLifecycleCleanup(
   controller: { current: AbortController | null },
   gate: RequestIdentityGate,
+  availabilityController?: { current: AbortController | null },
+  availabilityGate?: RequestKeyGate,
 ): () => void {
   return () => {
     controller.current?.abort();
+    availabilityController?.current?.abort();
     gate.invalidate();
+    availabilityGate?.invalidate();
   };
 }
 
@@ -134,33 +126,21 @@ interface GuestAccessBootstrapOptions {
 export function bootstrapGuestAppointmentAccess(options: GuestAccessBootstrapOptions): () => void {
   const proof = parseGuestAppointmentProof(options.fragment);
   const queryIdentity = parseGuestAppointmentIdentity(options.search);
-
   if (options.fragment) options.clearSensitiveFragment();
-
-  if (proof) {
-    options.onProof(proof);
-  } else {
+  if (proof) options.onProof(proof);
+  else {
     if (queryIdentity) options.onIdentity(queryIdentity);
     if (options.fragment) options.onInvalidProof();
   }
-
   return options.cleanup;
 }
 
-export function createExclusiveAsyncAction<TArgs extends unknown[], TResult>(
-  action: (...args: TArgs) => Promise<TResult>,
-) {
+export function createExclusiveAsyncAction<TArgs extends unknown[], TResult>(action: (...args: TArgs) => Promise<TResult>) {
   let active = false;
-  return async (...args: TArgs): Promise<
-    | { kind: 'started'; value: TResult }
-    | { kind: 'ignored' }
-  > => {
+  return async (...args: TArgs): Promise<{ kind: 'started'; value: TResult } | { kind: 'ignored' }> => {
     if (active) return { kind: 'ignored' };
     active = true;
-    try {
-      return { kind: 'started', value: await action(...args) };
-    } finally {
-      active = false;
-    }
+    try { return { kind: 'started', value: await action(...args) }; }
+    finally { active = false; }
   };
 }
