@@ -9,6 +9,10 @@ import { sessionMiddleware, sessionStore } from "../app.js";
 import * as membershipRepository from "../repositories/membership.repository.js";
 import * as userRepository from "../repositories/user.repository.js";
 import { findTenantAuthority } from "../services/tenantAuthority.service.js";
+import {
+  emitAvailabilityChange,
+  registerAvailabilityChangeEmitter,
+} from "./availabilityEvents.js";
 
 let io;
 
@@ -48,6 +52,12 @@ export const initSocket = (httpServer) => {
   const allowedOrigins = corsOrigins.split(",").map((o) => o.trim());
   io = new Server(httpServer, {
     cors: { origin: allowedOrigins, methods: ["GET", "POST"], credentials: true },
+  });
+
+  registerAvailabilityChangeEmitter((workerId, dateStr, businessId) => {
+    void emitTenantAvailabilityChange(workerId, dateStr, businessId).catch((error) => {
+      logger.error(`Error al emitir actualización tenant por WebSocket: ${error.message}`);
+    });
   });
 
   io.engine.use(sessionMiddleware);
@@ -151,9 +161,4 @@ const emitTenantAvailabilityChange = async (workerId, dateStr, businessId) => {
   logger.info(`WS Broadcast: calendar_update emitido a ${businessRoom}`);
 };
 
-export const emitAvailabilityChange = (workerId, dateStr, businessId) => {
-  if (!io || !businessId) return;
-  void emitTenantAvailabilityChange(workerId, dateStr, businessId).catch((error) => {
-    logger.error(`Error al emitir actualización tenant por WebSocket: ${error.message}`);
-  });
-};
+export { emitAvailabilityChange };
