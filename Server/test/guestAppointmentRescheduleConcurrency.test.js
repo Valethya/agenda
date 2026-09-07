@@ -169,7 +169,8 @@ test("H3 adversarial reschedule concurrency", async (t) => {
     const [dateA, dateB] = await nextDates(2);
     const x = await makeAppointment(dateA, "10:00");
     const y = await makeAppointment(dateB, "10:00");
-    const [capX, capY] = await Promise.all([mint(x, "reschedule"), mint(y, "reschedule")]);
+    const capX = await mint(x, "reschedule");
+    const capY = await mint(y, "reschedule");
     const result = await Promise.allSettled([
       reschedule(x, capX, dateB, "10:00"),
       reschedule(y, capY, dateA, "10:00"),
