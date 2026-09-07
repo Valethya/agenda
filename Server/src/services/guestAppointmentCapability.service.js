@@ -16,7 +16,7 @@ import {
   GUEST_APPOINTMENT_IMPLEMENTED_PURPOSE_TO_ACTION,
   GUEST_APPOINTMENT_PURPOSES,
 } from "../security/guestAppointmentCapability.constants.js";
-import { emitAvailabilityChange } from "../config/socket.js";
+import { emitAvailabilityChange } from "../config/availabilityEvents.js";
 import { notifyAppointmentCancelled } from "./appointment.notifications.js";
 import { ConflictError } from "../utils/appError.js";
 
