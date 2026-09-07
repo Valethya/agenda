@@ -20,6 +20,16 @@ import { emitAvailabilityChange, registerAvailabilityChangeEmitter } from "../..
 
 const envelope = (body) => ({ body, query: {}, params: {} });
 
+const collectLocalModuleGraph = async (entryUrl, seen = new Map()) => {
+  if (seen.has(entryUrl.href)) return seen;
+  const source = await readFile(entryUrl, "utf8");
+  seen.set(entryUrl.href, source);
+  for (const match of source.matchAll(/\b(?:import|export)\s+(?:[^"'`]*?\s+from\s+)?["'](\.[^"']+\.js)["']/gu)) {
+    await collectLocalModuleGraph(new URL(match[1], entryUrl), seen);
+  }
+  return seen;
+};
+
 test("6.2.5-C2/H3 capability contract", async (t) => {
   await t.test("READ, CANCEL and RESCHEDULE are explicit independent authorities", () => {
     assert.deepEqual(GUEST_APPOINTMENT_ACTIONS, ["read", "cancel", "reschedule"]);
@@ -79,7 +89,6 @@ test("6.2.5-C2/H3 capability contract", async (t) => {
     unregister();
 
     const guestServiceSource = await readFile(new URL("../../src/services/guestAppointmentCapability.service.js", import.meta.url), "utf8");
-    const bookingScopeSource = await readFile(new URL("../../src/services/bookingTenantScope.service.js", import.meta.url), "utf8");
     const appointmentServiceSource = await readFile(new URL("../../src/services/appointment.service.js", import.meta.url), "utf8");
     const rescheduleRepo = await readFile(new URL("../../src/repositories/guestAppointmentReschedule.repository.js", import.meta.url), "utf8");
 
@@ -91,16 +100,23 @@ test("6.2.5-C2/H3 capability contract", async (t) => {
     assert.match(appointmentServiceSource, /from "\.\/bookingTenantScope\.service\.js"/u);
     assert.doesNotMatch(appointmentServiceSource, /export const validateBookingTenantScope\s*=/u);
 
-    for (const forbiddenRuntime of [
-      /socket\.js/u,
-      /app\.js/u,
-      /sessionStore/u,
-      /connect-mongo/u,
-      /express/u,
-      /http(?:s)?\.createServer/u,
-      /WebSocket/u,
-    ]) {
-      assert.doesNotMatch(bookingScopeSource, forbiddenRuntime);
+    const eligibilityGraph = await collectLocalModuleGraph(
+      new URL("../../src/services/bookingTenantScope.service.js", import.meta.url),
+    );
+    for (const [moduleUrl, source] of eligibilityGraph) {
+      assert.doesNotMatch(moduleUrl, /\/(?:config\/socket|app)\.js$/u);
+      for (const forbiddenRuntime of [
+        /socket\.js/u,
+        /app\.js/u,
+        /sessionStore/u,
+        /connect-mongo/u,
+        /from\s+["']express["']/u,
+        /from\s+["']node:https?["']/u,
+        /https?\.createServer/u,
+        /\bWebSocket\b/u,
+      ]) {
+        assert.doesNotMatch(source, forbiddenRuntime);
+      }
     }
     assert.doesNotMatch(rescheduleRepo, /socket\.js/u);
   });
