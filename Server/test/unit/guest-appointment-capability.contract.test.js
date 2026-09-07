@@ -71,17 +71,37 @@ test("6.2.5-C2/H3 capability contract", async (t) => {
     assert.equal(guestAppointmentCancelConsumeSchema.safeParse(envelope({ businessId, appointmentId, bearer, date: "2099-09-14" })).success, false);
   });
 
-  await t.test("availability bridge remains lifecycle-neutral and guest domain never imports socket.js", async () => {
+  await t.test("availability and booking-scope bridges remain lifecycle-neutral", async () => {
     let observed = null;
     const unregister = registerAvailabilityChangeEmitter((workerId, dateStr, businessId) => { observed = { workerId, dateStr, businessId }; });
     emitAvailabilityChange("worker", "2099-01-02", "business");
     assert.deepEqual(observed, { workerId: "worker", dateStr: "2099-01-02", businessId: "business" });
     unregister();
 
-    const serviceSource = await readFile(new URL("../../src/services/guestAppointmentCapability.service.js", import.meta.url), "utf8");
+    const guestServiceSource = await readFile(new URL("../../src/services/guestAppointmentCapability.service.js", import.meta.url), "utf8");
+    const bookingScopeSource = await readFile(new URL("../../src/services/bookingTenantScope.service.js", import.meta.url), "utf8");
+    const appointmentServiceSource = await readFile(new URL("../../src/services/appointment.service.js", import.meta.url), "utf8");
     const rescheduleRepo = await readFile(new URL("../../src/repositories/guestAppointmentReschedule.repository.js", import.meta.url), "utf8");
-    assert.match(serviceSource, /from "\.\.\/config\/availabilityEvents\.js"/u);
-    assert.doesNotMatch(serviceSource, /from "\.\.\/config\/socket\.js"/u);
+
+    assert.match(guestServiceSource, /from "\.\/bookingTenantScope\.service\.js"/u);
+    assert.doesNotMatch(guestServiceSource, /from "\.\/appointment\.service\.js"/u);
+    assert.match(guestServiceSource, /from "\.\.\/config\/availabilityEvents\.js"/u);
+    assert.doesNotMatch(guestServiceSource, /from "\.\.\/config\/socket\.js"/u);
+
+    assert.match(appointmentServiceSource, /from "\.\/bookingTenantScope\.service\.js"/u);
+    assert.doesNotMatch(appointmentServiceSource, /export const validateBookingTenantScope\s*=/u);
+
+    for (const forbiddenRuntime of [
+      /socket\.js/u,
+      /app\.js/u,
+      /sessionStore/u,
+      /connect-mongo/u,
+      /express/u,
+      /http(?:s)?\.createServer/u,
+      /WebSocket/u,
+    ]) {
+      assert.doesNotMatch(bookingScopeSource, forbiddenRuntime);
+    }
     assert.doesNotMatch(rescheduleRepo, /socket\.js/u);
   });
 
