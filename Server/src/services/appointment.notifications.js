@@ -36,6 +36,7 @@ const getNotificationContext = async (appointmentId) => {
     detail,
     recipient: guestContact?.destination || firstEmail(populated.client?.email),
     auditUserId: populated.client?._id || null,
+    isGuest: Boolean(guestContact && !populated.client),
   };
 };
 
@@ -44,6 +45,10 @@ export const notifyBookingCreated = (appointmentId, clientId, initialStatus) => 
     try {
       const context = await getNotificationContext(appointmentId);
       if (!context?.recipient) return;
+      // Phase I owns guest lifecycle delivery through its durable outbox. Keep
+      // this legacy helper only for authenticated-client flows to avoid a second,
+      // non-idempotent email for the same guest lifecycle event.
+      if (context.isGuest && !clientId) return;
 
       const { detail, recipient } = context;
       if (initialStatus === "confirmed") {
@@ -130,6 +135,7 @@ export const notifyAppointmentCancelled = (appointmentId, userId) => {
     try {
       const context = await getNotificationContext(appointmentId);
       if (!context?.recipient) return;
+      if (context.isGuest && !userId) return;
 
       await mailer.sendAppointmentCancelledEmail(context.recipient, context.detail);
       await logEvent({
