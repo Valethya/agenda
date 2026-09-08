@@ -188,10 +188,12 @@ test("H4 integrated MVP booking journey", async (t) => {
       notes: "H4 integrated journey",
       clientInfo: { firstName: "Guest", lastName: "H4", email: "h4-flow@example.com", phone: "+56970000002" },
     };
-    const [first, second] = await Promise.all([
-      json(await fetch(`${baseUrl}/appointments`, { method: "POST", headers: { ...publicHeaders, "Content-Type": "application/json" }, body: JSON.stringify(payload) })),
-      json(await fetch(`${baseUrl}/appointments`, { method: "POST", headers: { ...publicHeaders, "Content-Type": "application/json" }, body: JSON.stringify(payload) })),
-    ]);
+    const bookingRequest = () => fetch(`${baseUrl}/appointments`, {
+      method: "POST",
+      headers: { ...publicHeaders, "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    }).then(json);
+    const [first, second] = await Promise.all([bookingRequest(), bookingRequest()]);
     const winners = [first, second].filter(({ response }) => response.status === 201);
     assert.equal(winners.length, 1);
     appointmentId = winners[0].body.payload.appointmentId;
@@ -201,7 +203,7 @@ test("H4 integrated MVP booking journey", async (t) => {
 
     const admin = await adminGet(appointmentId, adminCookie);
     assert.equal(admin._id, appointmentId);
-    assert.equal(admin.businessId, seed.business._id.toString());
+    assert.equal(admin.business, seed.business._id.toString());
     assert.equal(admin.startTime, "10:00");
   });
 
