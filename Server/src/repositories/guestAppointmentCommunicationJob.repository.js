@@ -153,7 +153,6 @@ export const beginDelivery = async ({ jobId, workerId, now = new Date(), leaseMs
         status: "delivering",
         leaseExpiresAt: new Date(scopedNow.getTime() + leaseMs),
       },
-      $setOnInsert: {},
     },
     { new: true, runValidators: true },
   ).select("+leaseOwner +deliveryPayload +providerIdempotencyKey");
@@ -161,11 +160,15 @@ export const beginDelivery = async ({ jobId, workerId, now = new Date(), leaseMs
 
 export const recordProviderAttempt = async ({ jobId, workerId, now = new Date() }) => {
   const scopedNow = validDate(now, "now");
-  return GuestAppointmentCommunicationJob.findOneAndUpdate(
-    { _id: validJobId(jobId), status: "delivering", leaseOwner: validWorker(workerId) },
+  const scope = { _id: validJobId(jobId), status: "delivering", leaseOwner: validWorker(workerId) };
+  const first = await GuestAppointmentCommunicationJob.findOneAndUpdate(
+    { ...scope, providerFirstAttemptAt: null },
     { $set: { providerFirstAttemptAt: scopedNow } },
     { new: true, runValidators: true },
   ).select("+leaseOwner +deliveryPayload +providerIdempotencyKey");
+  if (first) return first;
+  return GuestAppointmentCommunicationJob.findOne(scope)
+    .select("+leaseOwner +deliveryPayload +providerIdempotencyKey");
 };
 
 export const markDelivered = async ({ jobId, workerId, providerMessageId = null, now = new Date() }) => (
@@ -177,7 +180,6 @@ export const markDelivered = async ({ jobId, workerId, providerMessageId = null,
         providerMessageId: providerMessageId || null,
         deliveredAt: validDate(now, "now"),
         lastFailureCode: null,
-        ambiguousOutcome: false,
         leaseOwner: null,
         leaseExpiresAt: null,
       },
@@ -217,7 +219,7 @@ export const markDeliveryFailure = async ({
         status: nextStatus,
         nextAttemptAt: canRetry ? new Date(scopedNow.getTime() + retryDelayForAttempt(current.attempts)) : scopedNow,
         lastFailureCode: typeof failureCode === "string" ? failureCode.slice(0, 96) : "DELIVERY_FAILED",
-        ambiguousOutcome: Boolean(ambiguous),
+        ambiguousOutcome: Boolean(current.ambiguousOutcome || ambiguous),
         failedAt: canRetry ? null : scopedNow,
         leaseOwner: null,
         leaseExpiresAt: null,
