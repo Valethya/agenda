@@ -110,12 +110,54 @@ const currentTrustMatchesPreparedPayload = async (job) => {
   return trust;
 };
 
+const startDeliveryLeaseHeartbeat = ({ jobId, workerId, leaseMs, intervalMs }) => {
+  let stopped = false;
+  let timer = null;
+  let inFlight = null;
+
+  const schedule = () => {
+    if (stopped) return;
+    timer = setTimeout(pulse, intervalMs);
+    timer.unref?.();
+  };
+  const pulse = () => {
+    if (stopped) return;
+    inFlight = communicationRepository.renewDeliveryLease({
+      jobId,
+      workerId,
+      now: new Date(),
+      leaseMs,
+    })
+      .then((renewed) => {
+        if (!renewed) stopped = true;
+      })
+      .catch(() => {
+        stopped = true;
+        logger.warn("Guest lifecycle communication delivery lease heartbeat failed.");
+      })
+      .finally(() => {
+        inFlight = null;
+        schedule();
+      });
+  };
+
+  schedule();
+  return async () => {
+    stopped = true;
+    if (timer) clearTimeout(timer);
+    if (inFlight) await inFlight;
+  };
+};
+
 export const processNextGuestAppointmentCommunicationJob = async ({
   workerId,
   deliver = sendGuestAppointmentLifecycleEmail,
   now = new Date(),
   beforeExternalSend = null,
+  deliveryLeaseMs = communicationRepository.GUEST_COMMUNICATION_DELIVERY_LEASE_MS,
+  deliveryHeartbeatIntervalMs = Math.max(10, Math.floor(deliveryLeaseMs / 3)),
 }) => {
+  await communicationRepository.recoverExpiredDelivery({ now });
   const claimed = await communicationRepository.claimNext({ workerId, now });
   if (!claimed) return null;
   let job = claimed;
@@ -131,10 +173,16 @@ export const processNextGuestAppointmentCommunicationJob = async ({
   const trust = await currentTrustMatchesPreparedPayload(job);
   if (!trust) return failBeforeSend({ job, workerId, code: "PUBLIC_WEB_TRUST_CHANGED" });
 
-  job = await communicationRepository.beginDelivery({ jobId: job._id, workerId, now: new Date() });
+  job = await communicationRepository.beginDelivery({
+    jobId: job._id,
+    workerId,
+    now: new Date(),
+    leaseMs: deliveryLeaseMs,
+  });
   if (!job) return { status: "ownership-lost" };
 
   let fence = null;
+  let stopHeartbeat = null;
   try {
     fence = await acquirePublicWebSendFence({ businessId: job.business, trust, now: new Date() });
     if (!fence) throw new Error("PUBLIC_WEB_SEND_FENCE_UNAVAILABLE");
@@ -148,6 +196,20 @@ export const processNextGuestAppointmentCommunicationJob = async ({
       now: new Date(),
     });
     if (!job) throw new Error("JOB_OWNERSHIP_LOST");
+
+    job = await communicationRepository.renewDeliveryLease({
+      jobId: job._id,
+      workerId,
+      now: new Date(),
+      leaseMs: deliveryLeaseMs,
+    });
+    if (!job) throw new Error("JOB_OWNERSHIP_LOST");
+    stopHeartbeat = startDeliveryLeaseHeartbeat({
+      jobId: job._id,
+      workerId,
+      leaseMs: deliveryLeaseMs,
+      intervalMs: deliveryHeartbeatIntervalMs,
+    });
 
     let result;
     try {
@@ -164,9 +226,12 @@ export const processNextGuestAppointmentCommunicationJob = async ({
       const delivered = await communicationRepository.markDelivered({
         jobId: job._id,
         workerId,
+        providerIdempotencyKey: job.providerIdempotencyKey,
         providerMessageId: result.providerMessageId || null,
         now: new Date(),
       });
+      if (stopHeartbeat) await stopHeartbeat();
+      stopHeartbeat = null;
       return { status: delivered ? "delivered" : "ownership-lost", jobId: job._id };
     }
 
@@ -178,8 +243,14 @@ export const processNextGuestAppointmentCommunicationJob = async ({
       retryable: result?.retryable !== false,
       now: new Date(),
     });
+    if (stopHeartbeat) await stopHeartbeat();
+    stopHeartbeat = null;
     return { status: failed?.status || "ownership-lost", jobId: job._id };
   } catch (error) {
+    if (stopHeartbeat) {
+      try { await stopHeartbeat(); } catch {}
+      stopHeartbeat = null;
+    }
     if (fence) {
       try { await releasePublicWebSendFence({ businessId: job.business, fence }); } catch {}
     }
