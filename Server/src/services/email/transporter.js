@@ -4,6 +4,12 @@ import logger from "../../config/logger.js";
 
 let transporter;
 
+export const resolveConfiguredFromEmail = () => process.env.SMTP_FROM_EMAIL
+  || process.env["SMTP-FROM-EMAIL"]
+  || process.env.SMTP_USER
+  || process.env["SMTP-USER"]
+  || "noreply@atmosferastudio.cl";
+
 /**
  * Obtener o inicializar el transportador SMTP.
  * Soporta SMTP de producción y Ethereal (desarrollo).
@@ -64,11 +70,7 @@ const deliverMail = async ({
   const recipient = Array.isArray(to) ? to[0] : to;
 
   try {
-    const fromEmail = process.env.SMTP_FROM_EMAIL
-      || process.env["SMTP-FROM-EMAIL"]
-      || process.env.SMTP_USER
-      || process.env["SMTP-USER"]
-      || "noreply@atmosferastudio.cl";
+    const fromEmail = resolveConfiguredFromEmail();
 
     if (process.env.RESEND_API_KEY) {
       if (!sensitive) {
@@ -156,6 +158,85 @@ const deliverMail = async ({
     logger.error(`Error enviando email a ${recipient}: ${error.message}`);
     return undefined;
   }
+};
+
+/**
+ * Phase I lifecycle delivery uses Resend directly because the selected MVP
+ * provider supports request idempotency. SMTP is deliberately not used here:
+ * after a network timeout it cannot prove whether the provider accepted a
+ * message, so a blind retry could duplicate a transactional email.
+ *
+ * No recipient, subject, HTML, provider body or authorization material is logged.
+ */
+export const sendIdempotentTransactionalMail = async ({
+  destination,
+  fromName,
+  fromEmail,
+  replyTo = null,
+  subject,
+  html,
+  idempotencyKey,
+}) => {
+  if (typeof idempotencyKey !== "string" || idempotencyKey.length < 1 || idempotencyKey.length > 256) {
+    return { accepted: false, retryable: false, ambiguous: false, code: "INVALID_IDEMPOTENCY_KEY" };
+  }
+  if (!process.env.RESEND_API_KEY) {
+    logger.error("Mailer: Proveedor transaccional idempotente no configurado.");
+    return { accepted: false, retryable: true, ambiguous: false, code: "RESEND_NOT_CONFIGURED" };
+  }
+
+  const payload = {
+    from: `"${fromName}" <${fromEmail}>`,
+    to: [destination],
+    subject,
+    html,
+  };
+  if (replyTo) payload.reply_to = replyTo;
+
+  let response;
+  try {
+    response = await fetch("https://api.resend.com/emails", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${process.env.RESEND_API_KEY}`,
+        "Idempotency-Key": idempotencyKey,
+      },
+      body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(15_000),
+    });
+  } catch {
+    logger.error("Mailer: Resultado transaccional ambiguo; se conservará el mismo payload e idempotency key para retry.");
+    return { accepted: false, retryable: true, ambiguous: true, code: "PROVIDER_OUTCOME_AMBIGUOUS" };
+  }
+
+  let responseBody = {};
+  try { responseBody = await response.json(); } catch { responseBody = {}; }
+
+  if (response.ok) {
+    logger.info("Mailer: Comunicación transaccional aceptada por el proveedor idempotente.");
+    return {
+      accepted: true,
+      retryable: false,
+      ambiguous: false,
+      code: "ACCEPTED",
+      providerMessageId: typeof responseBody.id === "string" ? responseBody.id : null,
+    };
+  }
+
+  const providerCode = typeof responseBody.name === "string"
+    ? responseBody.name
+    : typeof responseBody.code === "string" ? responseBody.code : "PROVIDER_REJECTED";
+  const concurrent = response.status === 409 && providerCode === "concurrent_idempotent_requests";
+  const payloadMismatch = response.status === 409 && providerCode === "invalid_idempotent_request";
+  const retryable = concurrent || response.status === 408 || response.status === 429 || response.status >= 500;
+  logger.error("Mailer: Comunicación transaccional rechazada por el proveedor.");
+  return {
+    accepted: false,
+    retryable: payloadMismatch ? false : retryable,
+    ambiguous: false,
+    code: payloadMismatch ? "IDEMPOTENT_PAYLOAD_MISMATCH" : concurrent ? "IDEMPOTENT_REQUEST_IN_PROGRESS" : `PROVIDER_${response.status}`,
+  };
 };
 
 /**
