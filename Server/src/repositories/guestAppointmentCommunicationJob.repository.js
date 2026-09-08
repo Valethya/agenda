@@ -97,7 +97,7 @@ export const claimNext = async ({ workerId, now = new Date(), leaseMs = GUEST_CO
     {
       $or: [
         { status: { $in: ["queued", "retry"] }, nextAttemptAt: { $lte: scopedNow } },
-        { status: { $in: ["processing", "delivering"] }, leaseExpiresAt: { $lte: scopedNow } },
+        { status: "processing", leaseExpiresAt: { $lte: scopedNow } },
       ],
     },
     {
@@ -158,6 +158,68 @@ export const beginDelivery = async ({ jobId, workerId, now = new Date(), leaseMs
   ).select("+leaseOwner +deliveryPayload +providerIdempotencyKey");
 };
 
+export const renewDeliveryLease = async ({
+  jobId,
+  workerId,
+  now = new Date(),
+  leaseMs = GUEST_COMMUNICATION_DELIVERY_LEASE_MS,
+}) => {
+  const scopedNow = validDate(now, "now");
+  return GuestAppointmentCommunicationJob.findOneAndUpdate(
+    {
+      _id: validJobId(jobId),
+      status: "delivering",
+      leaseOwner: validWorker(workerId),
+    },
+    { $set: { leaseExpiresAt: new Date(scopedNow.getTime() + leaseMs) } },
+    { new: true, runValidators: true },
+  ).select("+leaseOwner +deliveryPayload +providerIdempotencyKey");
+};
+
+const retryDelayForAttempt = (attempts) => RETRY_DELAYS_MS[Math.min(Math.max(attempts - 1, 0), RETRY_DELAYS_MS.length - 1)];
+
+export const recoverExpiredDelivery = async ({ now = new Date() } = {}) => {
+  const scopedNow = validDate(now, "now");
+  const current = await GuestAppointmentCommunicationJob.findOne({
+    status: "delivering",
+    leaseExpiresAt: { $lte: scopedNow },
+  })
+    .sort({ leaseExpiresAt: 1, createdAt: 1, _id: 1 })
+    .select("+leaseOwner +deliveryPayload +providerIdempotencyKey");
+  if (!current) return null;
+
+  const attempted = current.providerFirstAttemptAt instanceof Date;
+  const providerWindowOpen = !attempted
+    || scopedNow.getTime() - current.providerFirstAttemptAt.getTime() < GUEST_COMMUNICATION_PROVIDER_WINDOW_MS;
+  const canRetry = current.attempts < GUEST_COMMUNICATION_MAX_ATTEMPTS && providerWindowOpen;
+  const nextStatus = canRetry ? "retry" : "failed";
+  const recovered = await GuestAppointmentCommunicationJob.findOneAndUpdate(
+    {
+      _id: current._id,
+      status: "delivering",
+      leaseOwner: current.leaseOwner,
+      leaseExpiresAt: { $lte: scopedNow },
+    },
+    {
+      $set: {
+        status: nextStatus,
+        nextAttemptAt: canRetry
+          ? (attempted ? new Date(scopedNow.getTime() + retryDelayForAttempt(current.attempts)) : scopedNow)
+          : scopedNow,
+        lastFailureCode: attempted
+          ? "DELIVERY_LEASE_EXPIRED_AMBIGUOUS"
+          : "DELIVERY_LEASE_EXPIRED_BEFORE_PROVIDER",
+        ambiguousOutcome: Boolean(current.ambiguousOutcome || attempted),
+        failedAt: canRetry ? null : scopedNow,
+        leaseOwner: null,
+        leaseExpiresAt: null,
+      },
+    },
+    { new: true, runValidators: true },
+  ).select("+deliveryPayload +providerIdempotencyKey");
+  return recovered;
+};
+
 export const recordProviderAttempt = async ({ jobId, workerId, now = new Date() }) => {
   const scopedNow = validDate(now, "now");
   const scope = { _id: validJobId(jobId), status: "delivering", leaseOwner: validWorker(workerId) };
@@ -171,24 +233,45 @@ export const recordProviderAttempt = async ({ jobId, workerId, now = new Date() 
     .select("+leaseOwner +deliveryPayload +providerIdempotencyKey");
 };
 
-export const markDelivered = async ({ jobId, workerId, providerMessageId = null, now = new Date() }) => (
-  GuestAppointmentCommunicationJob.findOneAndUpdate(
-    { _id: validJobId(jobId), status: "delivering", leaseOwner: validWorker(workerId) },
-    {
-      $set: {
-        status: "delivered",
-        providerMessageId: providerMessageId || null,
-        deliveredAt: validDate(now, "now"),
-        lastFailureCode: null,
-        leaseOwner: null,
-        leaseExpiresAt: null,
-      },
+export const markDelivered = async ({
+  jobId,
+  workerId,
+  providerIdempotencyKey = null,
+  providerMessageId = null,
+  now = new Date(),
+}) => {
+  const id = validJobId(jobId);
+  const owner = validWorker(workerId);
+  const deliveredAt = validDate(now, "now");
+  const update = {
+    $set: {
+      status: "delivered",
+      providerMessageId: providerMessageId || null,
+      deliveredAt,
+      lastFailureCode: null,
+      leaseOwner: null,
+      leaseExpiresAt: null,
     },
+  };
+  const owned = await GuestAppointmentCommunicationJob.findOneAndUpdate(
+    { _id: id, status: "delivering", leaseOwner: owner },
+    update,
     { new: true, runValidators: true },
-  )
-);
+  );
+  if (owned) return owned;
 
-const retryDelayForAttempt = (attempts) => RETRY_DELAYS_MS[Math.min(Math.max(attempts - 1, 0), RETRY_DELAYS_MS.length - 1)];
+  if (typeof providerIdempotencyKey !== "string" || providerIdempotencyKey.length === 0) return null;
+  return GuestAppointmentCommunicationJob.findOneAndUpdate(
+    {
+      _id: id,
+      status: { $in: ["delivering", "retry", "processing"] },
+      providerIdempotencyKey,
+      providerFirstAttemptAt: { $ne: null },
+    },
+    update,
+    { new: true, runValidators: true },
+  );
+};
 
 export const markDeliveryFailure = async ({
   jobId,
