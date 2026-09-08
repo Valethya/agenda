@@ -8,6 +8,8 @@ Validate the production-ready MVP with one controlled real-business pilot before
 
 Start only after J is merged, reviewed and the production readiness criteria are satisfied.
 
+Before implementation begins, the phase K PR must record the exact reviewed merge commit that is being used as its baseline. If `master` advanced after the J merge, review the complete delta first and explicitly record the accepted replacement baseline rather than assuming the previous SHA still applies.
+
 ## In scope
 
 - configure one real pilot business using the supported admin flows and production configuration;
