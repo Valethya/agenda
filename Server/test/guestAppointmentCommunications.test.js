@@ -286,4 +286,131 @@ test("I guest communications", async (t) => {
     assert.equal(deliveries.length, 1);
     assert.equal([left?.status, right?.status].filter((value) => value === "delivered").length, 1);
   });
+
+  await t.test("expired delivering ownership cannot start a concurrent provider call and recovers safely", async () => {
+    await GuestAppointmentCommunicationJob.deleteMany({});
+    const appointment = await directGuestAppointment({ date: "2099-10-10", email: "lease-i@example.com" });
+    const operationId = new mongoose.Types.ObjectId();
+    const jobId = communicationRepository.buildCommunicationJobId({ event: "cancel", appointmentId: appointment._id, operationId });
+    const t0 = new Date("2099-01-01T00:00:00.000Z");
+    const session = await mongoose.startSession();
+    try {
+      await session.withTransaction(async () => {
+        await communicationRepository.enqueueInSession({
+          jobId,
+          businessId: appointment.business,
+          appointmentId: appointment._id,
+          event: "cancel",
+          now: t0,
+          session,
+        });
+      });
+    } finally {
+      await session.endSession();
+    }
+
+    const workerA = "phase-i-expired-worker-a";
+    let owned = await communicationRepository.claimNext({ workerId: workerA, now: t0, leaseMs: 20 });
+    assert.ok(owned);
+    const preparedPayload = {
+      destination: "lease-i@example.com",
+      fromName: "Agenda",
+      fromEmail: "agenda@example.com",
+      replyTo: null,
+      subject: "Reserva actualizada",
+      html: "<p>Reserva actualizada</p>",
+    };
+    const providerIdempotencyKey = `agenda-i/${jobId}`;
+    owned = await communicationRepository.attachPreparedDelivery({
+      jobId,
+      workerId: workerA,
+      publicWebTrustGeneration: 1,
+      trustedOrigin: origin,
+      deliveryPayload: preparedPayload,
+      providerIdempotencyKey,
+    });
+    owned = await communicationRepository.beginDelivery({ jobId, workerId: workerA, now: t0, leaseMs: 20 });
+    owned = await communicationRepository.recordProviderAttempt({ jobId, workerId: workerA, now: t0 });
+    assert.ok(owned);
+
+    let providerCalls = 1; // Worker A already has an external call in flight.
+    const afterExpiry = new Date(t0.getTime() + 25);
+    const workerB = await processNextGuestAppointmentCommunicationJob({
+      workerId: "phase-i-expired-worker-b",
+      now: afterExpiry,
+      deliver: async () => {
+        providerCalls += 1;
+        return { accepted: true, providerMessageId: "unexpected-second-send" };
+      },
+    });
+    assert.equal(workerB, null);
+    assert.equal(providerCalls, 1, "expired delivery must not become an immediate concurrent provider send");
+
+    const recovered = await communicationRepository.findByIdForTests(jobId);
+    assert.equal(recovered.status, "retry");
+    assert.equal(recovered.ambiguousOutcome, true);
+    assert.deepEqual(recovered.deliveryPayload.toObject(), preparedPayload);
+    assert.equal(recovered.providerIdempotencyKey, providerIdempotencyKey);
+
+    const lateSuccess = await communicationRepository.markDelivered({
+      jobId,
+      workerId: workerA,
+      providerIdempotencyKey,
+      providerMessageId: "provider-late-success",
+      now: new Date(t0.getTime() + 30),
+    });
+    assert.ok(lateSuccess, "provider success must not be ignored only because the delivery lease expired");
+    assert.equal(lateSuccess.status, "delivered");
+    assert.equal(lateSuccess.providerMessageId, "provider-late-success");
+
+    const crashAppointment = await directGuestAppointment({ date: "2099-10-11", email: "lease-recovery-i@example.com" });
+    const crashOperationId = new mongoose.Types.ObjectId();
+    const crashJobId = communicationRepository.buildCommunicationJobId({ event: "cancel", appointmentId: crashAppointment._id, operationId: crashOperationId });
+    const recoverySession = await mongoose.startSession();
+    try {
+      await recoverySession.withTransaction(async () => {
+        await communicationRepository.enqueueInSession({
+          jobId: crashJobId,
+          businessId: crashAppointment.business,
+          appointmentId: crashAppointment._id,
+          event: "cancel",
+          now: t0,
+          session: recoverySession,
+        });
+      });
+    } finally {
+      await recoverySession.endSession();
+    }
+    const deadWorker = "phase-i-dead-delivery-worker";
+    await communicationRepository.claimNext({ workerId: deadWorker, now: t0, leaseMs: 20 });
+    await communicationRepository.attachPreparedDelivery({
+      jobId: crashJobId,
+      workerId: deadWorker,
+      publicWebTrustGeneration: 1,
+      trustedOrigin: origin,
+      deliveryPayload: preparedPayload,
+      providerIdempotencyKey: `agenda-i/${crashJobId}`,
+    });
+    await communicationRepository.beginDelivery({ jobId: crashJobId, workerId: deadWorker, now: t0, leaseMs: 20 });
+    await communicationRepository.recordProviderAttempt({ jobId: crashJobId, workerId: deadWorker, now: t0 });
+
+    const recoveredCrash = await communicationRepository.recoverExpiredDelivery({ now: afterExpiry });
+    assert.equal(recoveredCrash.status, "retry");
+    assert.equal(recoveredCrash.ambiguousOutcome, true);
+    const recoveryAt = new Date(afterExpiry.getTime() + 2 * 60 * 1000);
+    const retryDeliveries = [];
+    const retryResult = await processNextGuestAppointmentCommunicationJob({
+      workerId: "phase-i-recovery-worker",
+      now: recoveryAt,
+      deliver: async (payload) => {
+        retryDeliveries.push(structuredClone(payload));
+        return { accepted: true, providerMessageId: "provider-recovered" };
+      },
+    });
+    assert.equal(retryResult.status, "delivered");
+    assert.equal(retryDeliveries.length, 1);
+    assert.deepEqual(retryDeliveries[0].deliveryPayload, preparedPayload);
+    assert.equal(retryDeliveries[0].idempotencyKey, `agenda-i/${crashJobId}`);
+    assert.equal((await Appointment.findById(crashAppointment._id)).status, "confirmed");
+  });
 });
