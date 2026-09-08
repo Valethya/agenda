@@ -7,6 +7,7 @@ import ClientContactVerification, {
 import GuestAppointmentVerificationDelivery from "../db/models/guestAppointmentVerificationDelivery.model.js";
 import GuestAppointmentVerificationJob from "../db/models/guestAppointmentVerificationJob.model.js";
 import GuestAppointmentCapability from "../db/models/guestAppointmentCapability.model.js";
+import * as communicationRepository from "./guestAppointmentCommunicationJob.repository.js";
 import {
   GUEST_APPOINTMENT_ACTIONS,
   GUEST_APPOINTMENT_IMPLEMENTED_PURPOSE_TO_ACTION,
@@ -119,9 +120,9 @@ export const consumeForScope = async ({ businessId, appointmentId, action, secre
 };
 
 /**
- * H2 sensitive mutation boundary. Capability consumption, Appointment status
- * transition and guest actor audit share one MongoDB transaction. A state
- * conflict or process failure aborts all three writes together.
+ * H2/I sensitive mutation boundary. Capability consumption, Appointment status
+ * transition, guest actor audit and communication intent share one MongoDB
+ * transaction. External delivery only observes the outbox after commit.
  */
 export const consumeAndCancelForScope = async ({ businessId, appointmentId, action, secretHash, now }) => {
   const business = requireStrictObjectId(businessId, "businessId");
@@ -181,6 +182,20 @@ export const consumeAndCancelForScope = async ({ businessId, appointmentId, acti
           businessId: business,
         },
       }], { session });
+
+      const jobId = communicationRepository.buildCommunicationJobId({
+        event: "cancel",
+        appointmentId: appointment,
+        operationId: capability._id,
+      });
+      await communicationRepository.enqueueInSession({
+        jobId,
+        businessId: business,
+        appointmentId: appointment,
+        event: "cancel",
+        now: scopedNow,
+        session,
+      });
 
       result = { kind: "cancelled", appointment: cancelled };
     }, {
