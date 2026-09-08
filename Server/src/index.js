@@ -14,9 +14,19 @@ import { assertTenantOnboardingRuntimeStorageReady } from "./db/tenant-onboardin
 import logger from "./config/logger.js";
 import { initSocket } from "./config/socket.js";
 import { startGuestAppointmentVerificationWorker } from "./services/guestAppointmentVerification.worker.js";
+import { startGuestAppointmentCommunicationWorker } from "./services/guestAppointmentCommunication.worker.js";
 import { getConnectedDatabase, startServerLifecycle } from "./server/startServer.js";
 
 export { getConnectedDatabase } from "./server/startServer.js";
+
+const startGuestWorkers = () => {
+  const stopVerification = startGuestAppointmentVerificationWorker();
+  const stopCommunication = startGuestAppointmentCommunicationWorker();
+  return () => {
+    stopCommunication();
+    stopVerification();
+  };
+};
 
 export const startServer = (overrides = {}) => startServerLifecycle({
   connect: connectDB,
@@ -29,7 +39,7 @@ export const startServer = (overrides = {}) => startServerLifecycle({
   appInstance: app,
   listenPort: port,
   socketInit: initSocket,
-  workerStart: startGuestAppointmentVerificationWorker,
+  workerStart: startGuestWorkers,
   processEnvironment: process.env,
   runtimeLogger: logger,
   ...overrides,
