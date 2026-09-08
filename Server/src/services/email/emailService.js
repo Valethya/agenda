@@ -6,9 +6,15 @@
 import logger from "../../config/logger.js";
 import * as businessConfigRepository from "../../repositories/businessConfig.repository.js";
 import * as businessRepository from "../../repositories/business.repository.js";
-import { sendMail, sendSensitiveMail } from "./transporter.js";
+import {
+  resolveConfiguredFromEmail,
+  sendIdempotentTransactionalMail,
+  sendMail,
+  sendSensitiveMail,
+} from "./transporter.js";
 import * as templates from "./templates.js";
 import { guestAppointmentVerificationTemplate } from "./guestAppointmentVerification.template.js";
+import { guestAppointmentLifecycleTemplate } from "./guestAppointmentLifecycle.template.js";
 import { tenantOnboardingTemplate } from "./tenantOnboarding.template.js";
 import { frontendUrl } from "../../config/env.js";
 
@@ -98,6 +104,27 @@ export const sendWorkerPendingApprovalEmail = async (workerEmail, appointmentDet
   const meta = getMailMeta(branding);
   await sendMail({ to: workerEmail, ...template, ...meta, businessId });
 };
+
+/**
+ * Phase I builds the complete provider payload once and persists it in the
+ * outbox before the first external attempt. Later retries therefore reuse the
+ * exact same body together with the same provider idempotency key.
+ */
+export const buildGuestAppointmentLifecycleDelivery = ({ event, appointment, destination, manageUrl }) => {
+  const template = guestAppointmentLifecycleTemplate({ event, appointment, manageUrl });
+  return {
+    destination,
+    fromName: appointment.business?.name || process.env.SMTP_FROM_NAME || process.env["SMTP-FROM-NAME"] || "Agenda App",
+    fromEmail: resolveConfiguredFromEmail(),
+    replyTo: null,
+    subject: template.subject,
+    html: template.html,
+  };
+};
+
+export const sendGuestAppointmentLifecycleEmail = async ({ deliveryPayload, idempotencyKey }) => (
+  sendIdempotentTransactionalMail({ ...deliveryPayload, idempotencyKey })
+);
 
 /**
  * Trusted C2 delivery. The caller must pass the destination persisted by C1;
