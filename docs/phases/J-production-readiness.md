@@ -8,6 +8,8 @@ Prepare Agenda to operate as a real production service with the minimum required
 
 Start only after phase I is merged and reviewed.
 
+Before implementation begins, the phase J PR must record the exact reviewed merge commit that is being used as its baseline. If `master` advanced after the phase I merge, review the complete delta first and explicitly record the accepted replacement baseline rather than assuming the previous SHA still applies.
+
 ## In scope
 
 - production configuration contract and required environment variables;
@@ -70,4 +72,6 @@ J is complete only when:
 
 ## Production change rule
 
-Unlike earlier product phases, J may require explicit changes to deployment infrastructure and production configuration. Those changes must be separately reviewed, minimal, reversible and never performed implicitly as part of unrelated code work.
+Unlike earlier product phases, J may require explicit changes to deployment infrastructure and production configuration. Read-only inspection, planning and non-production rehearsal may proceed within the reviewed phase scope, but any operation that mutates production infrastructure, production configuration, production database indexes/schema, production data, deployment state, Railway, Vercel or equivalent production services requires separate explicit authorization for that concrete operation.
+
+Execution of phase J must never be interpreted as blanket authorization to modify production. Any authorized production change must be minimal, reviewed, reversible, scoped to the stated objective and recorded sufficiently to reconstruct what changed and how to roll it back. No production mutation may be performed implicitly as part of unrelated code or documentation work.
