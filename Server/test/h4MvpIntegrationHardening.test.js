@@ -203,7 +203,7 @@ test("H4 integrated MVP booking journey", async (t) => {
 
     const admin = await adminGet(appointmentId, adminCookie);
     assert.equal(admin._id, appointmentId);
-    assert.equal(admin.business, seed.business._id.toString());
+    assert.equal(admin.business?._id, seed.business._id.toString());
     assert.equal(admin.startTime, "10:00");
   });
 
