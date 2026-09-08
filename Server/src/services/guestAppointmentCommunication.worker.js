@@ -214,7 +214,7 @@ export const processNextGuestAppointmentCommunicationJob = async ({
     let result;
     try {
       result = await deliver({
-        deliveryPayload: job.deliveryPayload,
+        deliveryPayload: JSON.parse(JSON.stringify(job.deliveryPayload)),
         idempotencyKey: job.providerIdempotencyKey,
       });
     } finally {
