@@ -39,7 +39,7 @@
     "test:availability-worker-lifecycle": "node --test test/availabilityWorkerLifecycle.test.js",
     "test:availability-tenantization": "node --test test/availabilityTenantization.test.js",
     "test:admin-availability-schedule": "node --test test/adminAvailabilitySchedule.test.js",
-    "test:h4-mvp-integration": "node --test test/h4MvpIntegrationHardening.test.js",
+    "test:h4-mvp-integration": "node --test test/h4TemporalCorrectness.test.js test/h4MvpIntegrationHardening.test.js",
     "test:api": "node --test test/api.test.js",
     "test:panel-surface-compatibility": "node --test test/panelSurfaceCompatibility.test.js",
     "test:internal-surface-boundary": "node --test test/internalSurfaceAuthorityBoundary.test.js",
