@@ -1,5 +1,6 @@
 import AuditLog from "../db/models/auditLog.model.js";
 import GuestAppointmentCapability from "../db/models/guestAppointmentCapability.model.js";
+import * as communicationRepository from "./guestAppointmentCommunicationJob.repository.js";
 import { GUEST_APPOINTMENT_IMPLEMENTED_PURPOSE_TO_ACTION } from "../security/guestAppointmentCapability.constants.js";
 
 export const consumeRescheduleCapabilityInSession = async ({
@@ -49,5 +50,20 @@ export const createGuestRescheduleAuditInSession = async ({
       newEndTime: newWindow.endTime,
     },
   }], { session });
+
+  // The audit record and communication intent share the same transaction as the
+  // moved Appointment. External delivery cannot observe this job until commit.
+  const jobId = communicationRepository.buildCommunicationJobId({
+    event: "reschedule",
+    appointmentId,
+    operationId: audit._id,
+  });
+  await communicationRepository.enqueueInSession({
+    jobId,
+    businessId,
+    appointmentId,
+    event: "reschedule",
+    session,
+  });
   return audit;
 };
