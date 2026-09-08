@@ -189,11 +189,8 @@ export const recoverExpiredDelivery = async ({ now = new Date() } = {}) => {
   if (!current) return null;
 
   const attempted = current.providerFirstAttemptAt instanceof Date;
-  const providerWindowOpen = !attempted
-    || scopedNow.getTime() - current.providerFirstAttemptAt.getTime() < GUEST_COMMUNICATION_PROVIDER_WINDOW_MS;
-  const canRetry = current.attempts < GUEST_COMMUNICATION_MAX_ATTEMPTS && providerWindowOpen;
-  const nextStatus = canRetry ? "retry" : "failed";
-  const recovered = await GuestAppointmentCommunicationJob.findOneAndUpdate(
+  const safePreProviderRetry = !attempted && current.attempts < GUEST_COMMUNICATION_MAX_ATTEMPTS;
+  return GuestAppointmentCommunicationJob.findOneAndUpdate(
     {
       _id: current._id,
       status: "delivering",
@@ -202,22 +199,23 @@ export const recoverExpiredDelivery = async ({ now = new Date() } = {}) => {
     },
     {
       $set: {
-        status: nextStatus,
-        nextAttemptAt: canRetry
-          ? (attempted ? new Date(scopedNow.getTime() + retryDelayForAttempt(current.attempts)) : scopedNow)
-          : scopedNow,
+        // Once the provider call began, lease expiry is an unknown external
+        // outcome, not ordinary retryable work. Quarantine it until either the
+        // original owner records a late success or an explicit operational
+        // reconciliation requeues the exact payload/key inside the 23h window.
+        status: safePreProviderRetry ? "retry" : "failed",
+        nextAttemptAt: scopedNow,
         lastFailureCode: attempted
           ? "DELIVERY_LEASE_EXPIRED_AMBIGUOUS"
           : "DELIVERY_LEASE_EXPIRED_BEFORE_PROVIDER",
         ambiguousOutcome: Boolean(current.ambiguousOutcome || attempted),
-        failedAt: canRetry ? null : scopedNow,
+        failedAt: safePreProviderRetry ? null : scopedNow,
         leaseOwner: null,
         leaseExpiresAt: null,
       },
     },
     { new: true, runValidators: true },
   ).select("+deliveryPayload +providerIdempotencyKey");
-  return recovered;
 };
 
 export const recordProviderAttempt = async ({ jobId, workerId, now = new Date() }) => {
@@ -264,7 +262,10 @@ export const markDelivered = async ({
   return GuestAppointmentCommunicationJob.findOneAndUpdate(
     {
       _id: id,
-      status: { $in: ["delivering", "retry", "processing"] },
+      $or: [
+        { status: { $in: ["delivering", "retry", "processing"] } },
+        { status: "failed", lastFailureCode: "DELIVERY_LEASE_EXPIRED_AMBIGUOUS" },
+      ],
       providerIdempotencyKey,
       providerFirstAttemptAt: { $ne: null },
     },
