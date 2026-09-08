@@ -1,4 +1,5 @@
 import mongoose from "mongoose";
+import GuestAppointmentCommunicationJob from "./guestAppointmentCommunicationJob.model.js";
 
 const appointmentGuestContactSchema = new mongoose.Schema(
   {
@@ -128,6 +129,33 @@ appointmentSchema.pre("validate", function () {
   if (!this.client && !this.guestContact) {
     this.invalidate("client", "La cita requiere client autenticado o guestContact");
   }
+});
+
+// Phase I transactional outbox. The real public booking path creates the
+// Appointment inside the G2 MongoDB transaction. Co-writing this deterministic
+// intent closes the crash window after lifecycle commit without performing any
+// external delivery before commit. Direct fixture writes without a session keep
+// their historical behavior and are not treated as public booking lifecycle.
+appointmentSchema.pre("save", async function () {
+  if (!this.isNew || !this.guestContact) return;
+  const session = this.$session();
+  if (!session) return;
+  const appointmentId = this._id.toString();
+  const jobId = `guest-lifecycle:booking:${appointmentId}:${appointmentId}`;
+  await GuestAppointmentCommunicationJob.updateOne(
+    { _id: jobId },
+    {
+      $setOnInsert: {
+        business: this.business,
+        appointment: this._id,
+        event: "booking",
+        status: "queued",
+        attempts: 0,
+        nextAttemptAt: new Date(),
+      },
+    },
+    { upsert: true, runValidators: true, session },
+  );
 });
 
 // La colisión de una cita activa es local al tenant. Citas canceladas quedan fuera.
