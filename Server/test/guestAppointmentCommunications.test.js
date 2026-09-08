@@ -344,10 +344,11 @@ test("I guest communications", async (t) => {
       },
     });
     assert.equal(workerB, null);
-    assert.equal(providerCalls, 1, "expired delivery must not become an immediate concurrent provider send");
+    assert.equal(providerCalls, 1, "expired delivery must never become an automatic concurrent provider send");
 
     const recovered = await communicationRepository.findByIdForTests(jobId);
-    assert.equal(recovered.status, "retry");
+    assert.equal(recovered.status, "failed");
+    assert.equal(recovered.lastFailureCode, "DELIVERY_LEASE_EXPIRED_AMBIGUOUS");
     assert.equal(recovered.ambiguousOutcome, true);
     assert.deepEqual(recovered.deliveryPayload.toObject(), preparedPayload);
     assert.equal(recovered.providerIdempotencyKey, providerIdempotencyKey);
@@ -395,13 +396,24 @@ test("I guest communications", async (t) => {
     await communicationRepository.recordProviderAttempt({ jobId: crashJobId, workerId: deadWorker, now: t0 });
 
     const recoveredCrash = await communicationRepository.recoverExpiredDelivery({ now: afterExpiry });
-    assert.equal(recoveredCrash.status, "retry");
+    assert.equal(recoveredCrash.status, "failed");
+    assert.equal(recoveredCrash.lastFailureCode, "DELIVERY_LEASE_EXPIRED_AMBIGUOUS");
     assert.equal(recoveredCrash.ambiguousOutcome, true);
-    const recoveryAt = new Date(afterExpiry.getTime() + 2 * 60 * 1000);
+
+    // Once operations have established that the old worker/provider call is no
+    // longer live, recovery is explicit. It stays inside the same provider
+    // idempotency window and never changes payload or logical identity.
+    const reconciliationAt = new Date(afterExpiry.getTime() + 1_000);
+    const requeued = await communicationRepository.retryFailedWithinProviderWindow({
+      jobId: crashJobId,
+      now: reconciliationAt,
+    });
+    assert.equal(requeued.status, "retry");
+
     const retryDeliveries = [];
     const retryResult = await processNextGuestAppointmentCommunicationJob({
       workerId: "phase-i-recovery-worker",
-      now: recoveryAt,
+      now: reconciliationAt,
       deliver: async (payload) => {
         retryDeliveries.push(structuredClone(payload));
         return { accepted: true, providerMessageId: "provider-recovered" };
