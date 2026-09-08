@@ -116,14 +116,16 @@ export const processNextGuestAppointmentCommunicationJob = async ({
   now = new Date(),
   beforeExternalSend = null,
 }) => {
-  let job = await communicationRepository.claimNext({ workerId, now });
-  if (!job) return null;
+  const claimed = await communicationRepository.claimNext({ workerId, now });
+  if (!claimed) return null;
+  let job = claimed;
 
   try {
-    job = await prepareDelivery({ job, workerId, now });
-    if (!job) return failBeforeSend({ job: { _id: job?._id || "unknown" }, workerId, code: "COMMUNICATION_SCOPE_UNAVAILABLE" });
+    const prepared = await prepareDelivery({ job, workerId, now });
+    if (!prepared) return failBeforeSend({ job: claimed, workerId, code: "COMMUNICATION_SCOPE_UNAVAILABLE" });
+    job = prepared;
   } catch {
-    return failBeforeSend({ job, workerId, code: "COMMUNICATION_PREPARE_FAILED" });
+    return failBeforeSend({ job: claimed, workerId, code: "COMMUNICATION_PREPARE_FAILED" });
   }
 
   const trust = await currentTrustMatchesPreparedPayload(job);
