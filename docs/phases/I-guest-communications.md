@@ -8,6 +8,8 @@ Close the customer journey with minimal transactional email so a guest can under
 
 Start only after H4 is merged and reviewed.
 
+Before implementation begins, the phase I PR must record the exact reviewed merge commit that is being used as its baseline. If `master` advanced after the H4 merge, review the complete delta first and explicitly record the accepted replacement baseline rather than assuming the previous SHA still applies.
+
 ## In scope
 
 - transactional booking confirmation email;
