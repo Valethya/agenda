@@ -3,6 +3,7 @@ import dns from "dns";
 import logger from "../../config/logger.js";
 
 let transporter;
+const production = process.env.NODE_ENV === "production";
 
 export const resolveConfiguredFromEmail = () => process.env.SMTP_FROM_EMAIL
   || process.env["SMTP-FROM-EMAIL"]
@@ -25,11 +26,15 @@ const getTransporter = async () => {
 
   const hasSmtpConfig = smtpHost && smtpPort && smtpUser && smtpPass;
   const smtpKeys = Object.keys(process.env).filter((key) => key.toUpperCase().includes("SMTP"));
-  logger.info(`Mailer: Llaves SMTP encontradas en process.env: ${JSON.stringify(smtpKeys)}`);
+  logger.info("Mailer: SMTP configuration keys detected.", { configuredKeys: smtpKeys });
 
   if (hasSmtpConfig) {
     const isSecure = smtpSecure === "true" || smtpSecure === "1" || Number(smtpPort) === 465;
-    logger.info(`Mailer: Configurando transportador SMTP de producción (host=${smtpHost}, port=${smtpPort}, secure=${isSecure}, user=${smtpUser})...`);
+    logger.info("Mailer: Configuring SMTP transport.", {
+      host: smtpHost,
+      port: Number(smtpPort),
+      secure: isSecure,
+    });
     transporter = nodemailer.createTransport({
       host: smtpHost,
       port: Number(smtpPort),
@@ -43,7 +48,7 @@ const getTransporter = async () => {
       },
     });
   } else {
-    logger.info("Mailer: Configurando transportador SMTP de prueba (Ethereal)...");
+    logger.info("Mailer: Configuring development/test Ethereal transport.");
     const testAccount = await nodemailer.createTestAccount();
     transporter = nodemailer.createTransport({
       host: "smtp.ethereal.email",
@@ -74,7 +79,7 @@ const deliverMail = async ({
 
     if (process.env.RESEND_API_KEY) {
       if (!sensitive) {
-        logger.info(`Mailer: Enviando email a ${recipient} usando la API de Resend (HTTPS)...`);
+        logger.info("Mailer: Sending operational email through configured Resend provider.");
       }
 
       const payload = {
@@ -109,9 +114,11 @@ const deliverMail = async ({
       }
 
       if (sensitive) {
-        logger.info("Mailer: Email sensible entregado al proveedor configurado.");
+        logger.info("Mailer: Sensitive email accepted by configured provider.");
       } else {
-        logger.info(`Email enviado con éxito a ${recipient} vía Resend. ID: ${resData.id}`);
+        logger.info("Mailer: Operational email accepted by configured provider.", {
+          providerMessageId: typeof resData.id === "string" ? resData.id : null,
+        });
       }
       return resData;
     }
@@ -130,11 +137,15 @@ const deliverMail = async ({
     const info = await activeTransporter.sendMail(mailOptions);
 
     if (sensitive) {
-      logger.info("Mailer: Email sensible entregado al transportador configurado.");
+      logger.info("Mailer: Sensitive email accepted by configured transport.");
     } else {
-      logger.info(`Email enviado con éxito a ${recipient}. MessageId: ${info.messageId}`);
+      logger.info("Mailer: Operational email accepted by configured transport.", {
+        providerMessageId: info.messageId || null,
+      });
 
-      if (activeTransporter.options.host === "smtp.ethereal.email") {
+      // Developer-only diagnostic output. Production never prints recipient,
+      // sender, subject or preview URLs.
+      if (!production && activeTransporter.options.host === "smtp.ethereal.email") {
         console.log("\n=================== EMAIL ENVIADO (PRUEBAS) ===================");
         console.log(`De: "${fromName}" <${fromEmail}>`);
         console.log(`Para: ${recipient}`);
@@ -151,11 +162,15 @@ const deliverMail = async ({
     if (sensitive) {
       // Never include recipient, provider payload, bearer URL, HTML or provider
       // error text in logs for bearer-bearing messages.
-      logger.error("Mailer: Error al entregar email sensible.");
+      logger.error("Mailer: Error delivering sensitive email.");
       return undefined;
     }
 
-    logger.error(`Error enviando email a ${recipient}: ${error.message}`);
+    if (production) {
+      logger.error("Mailer: Error delivering operational email.");
+    } else {
+      logger.error(`Error enviando email a ${recipient}: ${error.message}`);
+    }
     return undefined;
   }
 };
@@ -181,7 +196,7 @@ export const sendIdempotentTransactionalMail = async ({
     return { accepted: false, retryable: false, ambiguous: false, code: "INVALID_IDEMPOTENCY_KEY" };
   }
   if (!process.env.RESEND_API_KEY) {
-    logger.error("Mailer: Proveedor transaccional idempotente no configurado.");
+    logger.error("Mailer: Idempotent transactional provider is not configured.");
     return { accepted: false, retryable: true, ambiguous: false, code: "RESEND_NOT_CONFIGURED" };
   }
 
@@ -206,7 +221,7 @@ export const sendIdempotentTransactionalMail = async ({
       signal: AbortSignal.timeout(15_000),
     });
   } catch {
-    logger.error("Mailer: Resultado transaccional ambiguo; se conservará el mismo payload e idempotency key para retry.");
+    logger.error("Mailer: Transactional provider outcome ambiguous; retry will preserve payload and idempotency key.");
     return { accepted: false, retryable: true, ambiguous: true, code: "PROVIDER_OUTCOME_AMBIGUOUS" };
   }
 
@@ -214,7 +229,7 @@ export const sendIdempotentTransactionalMail = async ({
   try { responseBody = await response.json(); } catch { responseBody = {}; }
 
   if (response.ok) {
-    logger.info("Mailer: Comunicación transaccional aceptada por el proveedor idempotente.");
+    logger.info("Mailer: Transactional communication accepted by idempotent provider.");
     return {
       accepted: true,
       retryable: false,
@@ -230,7 +245,10 @@ export const sendIdempotentTransactionalMail = async ({
   const concurrent = response.status === 409 && providerCode === "concurrent_idempotent_requests";
   const payloadMismatch = response.status === 409 && providerCode === "invalid_idempotent_request";
   const retryable = concurrent || response.status === 408 || response.status === 429 || response.status >= 500;
-  logger.error("Mailer: Comunicación transaccional rechazada por el proveedor.");
+  logger.error("Mailer: Transactional communication rejected by provider.", {
+    providerStatus: response.status,
+    providerCode,
+  });
   return {
     accepted: false,
     retryable: payloadMismatch ? false : retryable,
