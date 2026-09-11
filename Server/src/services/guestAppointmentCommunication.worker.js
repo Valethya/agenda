@@ -42,22 +42,6 @@ const coherentAppointment = (appointment, businessId) => Boolean(
   && appointment.worker,
 );
 
-const communicationProjection = (appointment) => ({
-  business: appointment.business
-    ? { id: appointment.business._id, name: appointment.business.name, slug: appointment.business.slug }
-    : null,
-  service: appointment.service
-    ? { id: appointment.service._id, name: appointment.service.name }
-    : null,
-  professional: appointment.worker
-    ? { id: appointment.worker._id, firstName: appointment.worker.firstName, lastName: appointment.worker.lastName }
-    : null,
-  date: appointment.date,
-  startTime: appointment.startTime,
-  endTime: appointment.endTime,
-  status: appointment.status,
-});
-
 const failBeforeSend = async ({ job, workerId, code }) => {
   await communicationRepository.markFailedBeforeSend({
     jobId: job._id,
@@ -71,6 +55,7 @@ const failBeforeSend = async ({ job, workerId, code }) => {
 
 const prepareDelivery = async ({ job, workerId, now }) => {
   if (job.deliveryPayload && job.providerIdempotencyKey) return job;
+  if (!job.lifecycleSnapshot) return null;
 
   const trust = await resolveFreshPublicWebTrust({ businessId: job.business, now });
   if (!trust) return null;
@@ -87,7 +72,7 @@ const prepareDelivery = async ({ job, workerId, now }) => {
   });
   const deliveryPayload = buildGuestAppointmentLifecycleDelivery({
     event: job.event,
-    appointment: communicationProjection(appointment),
+    appointment: job.lifecycleSnapshot.toObject ? job.lifecycleSnapshot.toObject() : job.lifecycleSnapshot,
     destination,
     manageUrl,
   });
