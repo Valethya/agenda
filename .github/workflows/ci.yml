@@ -37,6 +37,9 @@ jobs:
       - name: Run unit tests
         run: npm run test:unit
 
+      - name: Run production-readiness contract tests
+        run: node --test test/unit/production-readiness.test.js
+
       - name: Audit production dependencies
         run: npm audit --omit=dev --audit-level=critical
 
