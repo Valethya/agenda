@@ -59,8 +59,11 @@ export const buildLifecycleSnapshotInSession = async ({
   if (!session) throw new TypeError("session requerida para snapshot lifecycle");
   const business = objectId(businessId, "businessId");
   let source = appointment;
-  if (!source?._id) {
-    source = await mongoose.model("Appointment").findOne({ _id: objectId(appointment, "appointmentId"), business }).session(session);
+  const hasAppointmentFacts = Boolean(source?.business && source?.service && source?.worker);
+  if (!hasAppointmentFacts) {
+    source = await mongoose.model("Appointment")
+      .findOne({ _id: objectId(appointment, "appointmentId"), business })
+      .session(session);
   }
   if (!source || source.business?.toString() !== business.toString()) throw new Error("GUEST_COMMUNICATION_SCOPE_UNAVAILABLE");
 
