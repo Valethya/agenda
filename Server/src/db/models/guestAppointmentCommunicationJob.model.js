@@ -6,6 +6,41 @@ export const GUEST_APPOINTMENT_COMMUNICATION_EVENTS = Object.freeze([
   "reschedule",
 ]);
 
+const lifecycleEntitySchema = new mongoose.Schema(
+  {
+    id: { type: mongoose.Schema.Types.ObjectId, required: true, immutable: true },
+    name: { type: String, required: true, trim: true, maxlength: 240, immutable: true },
+  },
+  { _id: false, versionKey: false },
+);
+
+const lifecycleProfessionalSchema = new mongoose.Schema(
+  {
+    id: { type: mongoose.Schema.Types.ObjectId, required: true, immutable: true },
+    firstName: { type: String, required: true, trim: true, maxlength: 120, immutable: true },
+    lastName: { type: String, default: "", trim: true, maxlength: 120, immutable: true },
+  },
+  { _id: false, versionKey: false },
+);
+
+const lifecycleSnapshotSchema = new mongoose.Schema(
+  {
+    business: { type: lifecycleEntitySchema, required: true, immutable: true },
+    service: { type: lifecycleEntitySchema, required: true, immutable: true },
+    professional: { type: lifecycleProfessionalSchema, required: true, immutable: true },
+    date: { type: Date, required: true, immutable: true },
+    startTime: { type: String, required: true, match: /^([01]\d|2[0-3]):[0-5]\d$/, immutable: true },
+    endTime: { type: String, required: true, match: /^([01]\d|2[0-3]):[0-5]\d$/, immutable: true },
+    status: {
+      type: String,
+      enum: ["pending_payment", "pending", "confirmed", "cancelled", "completed"],
+      required: true,
+      immutable: true,
+    },
+  },
+  { _id: false, versionKey: false },
+);
+
 const deliveryPayloadSchema = new mongoose.Schema(
   {
     destination: { type: String, required: true, trim: true, maxlength: 320 },
@@ -36,6 +71,11 @@ const guestAppointmentCommunicationJobSchema = new mongoose.Schema(
     event: {
       type: String,
       enum: GUEST_APPOINTMENT_COMMUNICATION_EVENTS,
+      required: true,
+      immutable: true,
+    },
+    lifecycleSnapshot: {
+      type: lifecycleSnapshotSchema,
       required: true,
       immutable: true,
     },
