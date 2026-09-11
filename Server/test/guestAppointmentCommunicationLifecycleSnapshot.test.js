@@ -148,14 +148,14 @@ test("I lifecycle communication snapshots", async (t) => {
 
   await t.test("successive reschedules retain distinct committed windows", async () => {
     await GuestAppointmentCommunicationJob.deleteMany({});
-    const appointment = await createBooking({ date: "2099-11-07", email: "snapshot-two-reschedules@example.com" });
+    const appointment = await createBooking({ date: "2099-11-09", email: "snapshot-two-reschedules@example.com" });
 
     const firstSecret = await createCapability({ appointment, action: "reschedule" });
     await consumeGuestAppointmentRescheduleCapability({
       businessId: appointment.business,
       appointmentId: appointment._id,
       bearer: firstSecret,
-      date: "2099-11-07",
+      date: "2099-11-09",
       startTime: "11:00",
     });
 
@@ -164,7 +164,7 @@ test("I lifecycle communication snapshots", async (t) => {
       businessId: appointment.business,
       appointmentId: appointment._id,
       bearer: secondSecret,
-      date: "2099-11-07",
+      date: "2099-11-09",
       startTime: "13:00",
     });
 
@@ -181,7 +181,7 @@ test("I lifecycle communication snapshots", async (t) => {
 
   await t.test("prepared delivery retry remains identical", async () => {
     await GuestAppointmentCommunicationJob.deleteMany({});
-    await createBooking({ date: "2099-11-08", email: "snapshot-retry@example.com" });
+    await createBooking({ date: "2099-11-10", email: "snapshot-retry@example.com" });
     const attempts = [];
     const first = await processNextGuestAppointmentCommunicationJob({
       workerId: "snapshot-retry-first",
