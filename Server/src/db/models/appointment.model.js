@@ -1,5 +1,5 @@
 import mongoose from "mongoose";
-import GuestAppointmentCommunicationJob from "./guestAppointmentCommunicationJob.model.js";
+import * as communicationRepository from "../../repositories/guestAppointmentCommunicationJob.repository.js";
 
 const appointmentGuestContactSchema = new mongoose.Schema(
   {
@@ -51,8 +51,6 @@ const appointmentGuestContactSchema = new mongoose.Schema(
 
 const appointmentSchema = new mongoose.Schema(
   {
-    // Appointment.client es una relación operacional opcional, nunca authority.
-    // Las reservas guest se representan sin fabricar un User autenticable.
     client: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
@@ -98,8 +96,6 @@ const appointmentSchema = new mongoose.Schema(
       required: [true, "El negocio para la cita es obligatorio"],
       index: true,
     },
-    // Provenance operacional capturada desde el request de booking. Es scope de
-    // esta Appointment, no identidad, ownership ni grant de Client.
     guestContact: {
       type: appointmentGuestContactSchema,
       default: null,
@@ -123,42 +119,38 @@ const appointmentSchema = new mongoose.Schema(
   }
 );
 
-// Todo Appointment nuevo debe tener una identidad autenticada real o provenance
-// guest Appointment-scoped. Nunca se rellena client mediante matching de contacto.
 appointmentSchema.pre("validate", function () {
   if (!this.client && !this.guestContact) {
     this.invalidate("client", "La cita requiere client autenticado o guestContact");
   }
 });
 
-// Phase I transactional outbox. The real public booking path creates the
-// Appointment inside the G2 MongoDB transaction. Co-writing this deterministic
-// intent closes the crash window after lifecycle commit without performing any
-// external delivery before commit. Direct fixture writes without a session keep
-// their historical behavior and are not treated as public booking lifecycle.
 appointmentSchema.pre("save", async function () {
   if (!this.isNew || !this.guestContact) return;
   const session = this.$session();
   if (!session) return;
-  const appointmentId = this._id.toString();
-  const jobId = `guest-lifecycle:booking:${appointmentId}:${appointmentId}`;
-  await GuestAppointmentCommunicationJob.updateOne(
-    { _id: jobId },
-    {
-      $setOnInsert: {
-        business: this.business,
-        appointment: this._id,
-        event: "booking",
-        status: "queued",
-        attempts: 0,
-        nextAttemptAt: new Date(),
-      },
-    },
-    { upsert: true, runValidators: true, session },
-  );
+  const lifecycleSnapshot = await communicationRepository.buildLifecycleSnapshotInSession({
+    businessId: this.business,
+    appointment: this,
+    lifecycleState: this.status,
+    session,
+  });
+  const jobId = communicationRepository.buildCommunicationJobId({
+    event: "booking",
+    appointmentId: this._id,
+    operationId: this._id,
+  });
+  await communicationRepository.enqueueInSession({
+    jobId,
+    businessId: this.business,
+    appointmentId: this._id,
+    event: "booking",
+    lifecycleSnapshot,
+    now: new Date(),
+    session,
+  });
 });
 
-// La colisión de una cita activa es local al tenant. Citas canceladas quedan fuera.
 appointmentSchema.index(
   { business: 1, worker: 1, date: 1, startTime: 1 },
   {
