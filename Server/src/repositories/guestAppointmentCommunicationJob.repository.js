@@ -42,6 +42,60 @@ const validJobId = (value) => {
   return value;
 };
 
+const stringFact = (value, field, { allowEmpty = false } = {}) => {
+  if (typeof value !== "string") throw new TypeError(`${field} inválido`);
+  const normalized = value.trim();
+  if (!allowEmpty && normalized.length === 0) throw new TypeError(`${field} inválido`);
+  return normalized;
+};
+
+export const buildLifecycleSnapshotInSession = async ({
+  businessId,
+  appointment,
+  lifecycleState = null,
+  window = null,
+  session,
+}) => {
+  if (!session) throw new TypeError("session requerida para snapshot lifecycle");
+  const business = objectId(businessId, "businessId");
+  let source = appointment;
+  if (!source?._id) {
+    source = await mongoose.model("Appointment").findOne({ _id: objectId(appointment, "appointmentId"), business }).session(session);
+  }
+  if (!source || source.business?.toString() !== business.toString()) throw new Error("GUEST_COMMUNICATION_SCOPE_UNAVAILABLE");
+
+  const serviceId = objectId(source.service, "serviceId");
+  const professionalId = objectId(source.worker, "professionalId");
+  const [businessDoc, serviceDoc, professionalDoc] = await Promise.all([
+    mongoose.model("Business").findById(business).session(session).select("_id name"),
+    mongoose.model("Service").findOne({ _id: serviceId, business }).session(session).select("_id name"),
+    mongoose.model("User").findById(professionalId).session(session).select("_id firstName lastName"),
+  ]);
+  if (!businessDoc || !serviceDoc || !professionalDoc) throw new Error("GUEST_COMMUNICATION_SCOPE_UNAVAILABLE");
+
+  const committedWindow = window || source;
+  const date = committedWindow.date instanceof Date ? committedWindow.date : new Date(committedWindow.date);
+  return {
+    business: {
+      id: businessDoc._id,
+      name: stringFact(businessDoc.name, "business.name"),
+    },
+    service: {
+      id: serviceDoc._id,
+      name: stringFact(serviceDoc.name, "service.name"),
+    },
+    professional: {
+      id: professionalDoc._id,
+      firstName: stringFact(professionalDoc.firstName, "professional.firstName"),
+      lastName: stringFact(professionalDoc.lastName || "", "professional.lastName", { allowEmpty: true }),
+    },
+    date: validDate(date, "snapshot.date"),
+    startTime: stringFact(committedWindow.startTime, "snapshot.startTime"),
+    endTime: stringFact(committedWindow.endTime, "snapshot.endTime"),
+    status: lifecycleState || source.status,
+  };
+};
+
 export const buildCommunicationJobId = ({ event, appointmentId, operationId }) => {
   const scopedEvent = validEvent(event);
   const appointment = objectId(appointmentId, "appointmentId").toHexString();
@@ -54,10 +108,12 @@ export const enqueueInSession = async ({
   businessId,
   appointmentId,
   event,
+  lifecycleSnapshot,
   now = new Date(),
   session,
 }) => {
   if (!session) throw new TypeError("session requerida para outbox lifecycle");
+  if (!lifecycleSnapshot) throw new TypeError("lifecycleSnapshot requerido para outbox lifecycle");
   const scopedNow = validDate(now, "now");
   const id = validJobId(jobId);
   const scoped = {
@@ -71,6 +127,7 @@ export const enqueueInSession = async ({
     {
       $setOnInsert: {
         ...scoped,
+        lifecycleSnapshot,
         status: "queued",
         attempts: 0,
         nextAttemptAt: scopedNow,
@@ -199,10 +256,6 @@ export const recoverExpiredDelivery = async ({ now = new Date() } = {}) => {
     },
     {
       $set: {
-        // Once the provider call began, lease expiry is an unknown external
-        // outcome, not ordinary retryable work. Quarantine it until either the
-        // original owner records a late success or an explicit operational
-        // reconciliation requeues the exact payload/key inside the 23h window.
         status: safePreProviderRetry ? "retry" : "failed",
         nextAttemptAt: scopedNow,
         lastFailureCode: attempted
