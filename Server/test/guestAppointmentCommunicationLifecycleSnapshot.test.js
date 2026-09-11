@@ -165,7 +165,7 @@ test("I lifecycle communication snapshots", async (t) => {
       appointmentId: appointment._id,
       bearer: secondSecret,
       date: "2099-11-09",
-      startTime: "13:00",
+      startTime: "14:00",
     });
 
     const deliveries = await deliverAll();
@@ -174,9 +174,10 @@ test("I lifecycle communication snapshots", async (t) => {
     assert.equal(reschedules.length, 2);
     assert.match(html(reschedules[0]), />11:00</);
     assert.match(html(reschedules[0]), />12:00</);
-    assert.doesNotMatch(html(reschedules[0]), />13:00</);
-    assert.match(html(reschedules[1]), />13:00</);
+    assert.doesNotMatch(html(reschedules[0]), />14:00</);
+    assert.doesNotMatch(html(reschedules[0]), />15:00</);
     assert.match(html(reschedules[1]), />14:00</);
+    assert.match(html(reschedules[1]), />15:00</);
   });
 
   await t.test("prepared delivery retry remains identical", async () => {
