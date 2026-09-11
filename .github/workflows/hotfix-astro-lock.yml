@@ -8,6 +8,10 @@ on:
 permissions:
   contents: read
 
+env:
+  ASTRO_TELEMETRY_DISABLED: 1
+  PUBLIC_API_URL: http://localhost:3000/api
+
 jobs:
   generate-lockfile:
     runs-on: ubuntu-latest
@@ -36,6 +40,7 @@ jobs:
           npm audit --omit=dev --audit-level=critical
 
       - name: Upload generated dependency files
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: astro-security-dependencies
