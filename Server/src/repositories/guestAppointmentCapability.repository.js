@@ -119,11 +119,6 @@ export const consumeForScope = async ({ businessId, appointmentId, action, secre
   );
 };
 
-/**
- * H2/I sensitive mutation boundary. Capability consumption, Appointment status
- * transition, guest actor audit and communication intent share one MongoDB
- * transaction. External delivery only observes the outbox after commit.
- */
 export const consumeAndCancelForScope = async ({ businessId, appointmentId, action, secretHash, now }) => {
   const business = requireStrictObjectId(businessId, "businessId");
   const appointment = requireStrictObjectId(appointmentId, "appointmentId");
@@ -183,6 +178,12 @@ export const consumeAndCancelForScope = async ({ businessId, appointmentId, acti
         },
       }], { session });
 
+      const lifecycleSnapshot = await communicationRepository.buildLifecycleSnapshotInSession({
+        businessId: business,
+        appointment: cancelled,
+        lifecycleState: "cancelled",
+        session,
+      });
       const jobId = communicationRepository.buildCommunicationJobId({
         event: "cancel",
         appointmentId: appointment,
@@ -193,6 +194,7 @@ export const consumeAndCancelForScope = async ({ businessId, appointmentId, acti
         businessId: business,
         appointmentId: appointment,
         event: "cancel",
+        lifecycleSnapshot,
         now: scopedNow,
         session,
       });
