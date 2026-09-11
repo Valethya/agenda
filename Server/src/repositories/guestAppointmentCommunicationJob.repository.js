@@ -108,12 +108,11 @@ export const enqueueInSession = async ({
   businessId,
   appointmentId,
   event,
-  lifecycleSnapshot,
+  lifecycleSnapshot = null,
   now = new Date(),
   session,
 }) => {
   if (!session) throw new TypeError("session requerida para outbox lifecycle");
-  if (!lifecycleSnapshot) throw new TypeError("lifecycleSnapshot requerido para outbox lifecycle");
   const scopedNow = validDate(now, "now");
   const id = validJobId(jobId);
   const scoped = {
@@ -121,13 +120,18 @@ export const enqueueInSession = async ({
     appointment: objectId(appointmentId, "appointmentId"),
     event: validEvent(event),
   };
+  const snapshot = lifecycleSnapshot || await buildLifecycleSnapshotInSession({
+    businessId: scoped.business,
+    appointment: scoped.appointment,
+    session,
+  });
 
   await GuestAppointmentCommunicationJob.updateOne(
     { _id: id },
     {
       $setOnInsert: {
         ...scoped,
-        lifecycleSnapshot,
+        lifecycleSnapshot: snapshot,
         status: "queued",
         attempts: 0,
         nextAttemptAt: scopedNow,
