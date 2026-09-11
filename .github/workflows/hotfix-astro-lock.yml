@@ -1,0 +1,44 @@
+name: Generate Astro security lockfile
+
+on:
+  push:
+    branches:
+      - hotfix/frontend-astro-security
+
+permissions:
+  contents: read
+
+jobs:
+  generate-lockfile:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout hotfix branch
+        uses: actions/checkout@v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: Client/package-lock.json
+
+      - name: Update Astro security dependencies
+        working-directory: Client
+        run: npm install astro@^7.3.2 @astrojs/react@^6.0.5 @astrojs/check@^0.9.10 --save
+
+      - name: Verify frontend
+        working-directory: Client
+        run: |
+          npm run test:frontend
+          npm run check
+          npm run typecheck
+          npm run build
+          npm audit --omit=dev --audit-level=critical
+
+      - name: Upload generated dependency files
+        uses: actions/upload-artifact@v4
+        with:
+          name: astro-security-dependencies
+          path: |
+            Client/package.json
+            Client/package-lock.json
