@@ -1,5 +1,6 @@
 import { Router } from "express";
 import mongoose from "mongoose";
+import { getHealth } from "../controllers/health.controller.js";
 
 const router = Router();
 
@@ -12,6 +13,9 @@ export const readinessState = async ({ connection = mongoose.connection } = {}) 
     return { ready: false };
   }
 };
+
+// Preserve the historical /api/health contract while adding explicit probes.
+router.get("/", getHealth);
 
 router.get("/live", (_req, res) => {
   res.status(200).json({ status: "ok" });
