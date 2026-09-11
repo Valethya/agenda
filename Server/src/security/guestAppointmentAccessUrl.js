@@ -20,6 +20,18 @@ export const getTrustedGuestAppointmentOrigin = (trustedOrigin) => {
   }
 };
 
+export const buildGuestAppointmentManageUrl = ({ trustedOrigin, businessId, appointmentId }) => {
+  const origin = getTrustedGuestAppointmentOrigin(trustedOrigin);
+  const query = new URLSearchParams({
+    businessId: businessId.toString(),
+    appointmentId: appointmentId.toString(),
+  });
+
+  // These identifiers only prefill the existing challenge flow. They grant no
+  // READ/CANCEL/RESCHEDULE authority and deliberately contain no bearer secret.
+  return `${origin}/appointment-access?${query.toString()}`;
+};
+
 export const buildGuestAppointmentVerificationUrl = ({
   trustedOrigin,
   businessId,

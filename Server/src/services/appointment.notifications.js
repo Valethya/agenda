@@ -36,10 +36,17 @@ const getNotificationContext = async (appointmentId) => {
     detail,
     recipient: guestContact?.destination || firstEmail(populated.client?.email),
     auditUserId: populated.client?._id || null,
+    isGuest: Boolean(guestContact && !populated.client),
   };
 };
 
 export const notifyBookingCreated = (appointmentId, clientId, initialStatus) => {
+  // Phase I owns every guest booking lifecycle email through its durable outbox.
+  // Do not even schedule the legacy async helper for a guest operation: besides
+  // avoiding a second delivery path, this keeps no redundant DB/email work alive
+  // after the committed lifecycle has returned.
+  if (!clientId) return;
+
   setImmediate(async () => {
     try {
       const context = await getNotificationContext(appointmentId);
@@ -126,6 +133,11 @@ export const notifyAppointmentConfirmed = (appointmentId, userId) => {
 };
 
 export const notifyAppointmentCancelled = (appointmentId, userId) => {
+  // Guest cancellation is delivered exclusively by the Phase I outbox. A null
+  // userId is the existing guest call-site signal; authenticated/internal paths
+  // retain the legacy notification behavior unchanged.
+  if (!userId) return;
+
   setImmediate(async () => {
     try {
       const context = await getNotificationContext(appointmentId);

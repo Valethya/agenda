@@ -1,5 +1,6 @@
 import AuditLog from "../db/models/auditLog.model.js";
 import GuestAppointmentCapability from "../db/models/guestAppointmentCapability.model.js";
+import * as communicationRepository from "./guestAppointmentCommunicationJob.repository.js";
 import { GUEST_APPOINTMENT_IMPLEMENTED_PURPOSE_TO_ACTION } from "../security/guestAppointmentCapability.constants.js";
 
 export const consumeRescheduleCapabilityInSession = async ({
@@ -49,5 +50,25 @@ export const createGuestRescheduleAuditInSession = async ({
       newEndTime: newWindow.endTime,
     },
   }], { session });
+
+  const lifecycleSnapshot = await communicationRepository.buildLifecycleSnapshotInSession({
+    businessId,
+    appointment: appointmentId,
+    window: newWindow,
+    session,
+  });
+  const jobId = communicationRepository.buildCommunicationJobId({
+    event: "reschedule",
+    appointmentId,
+    operationId: audit._id,
+  });
+  await communicationRepository.enqueueInSession({
+    jobId,
+    businessId,
+    appointmentId,
+    event: "reschedule",
+    lifecycleSnapshot,
+    session,
+  });
   return audit;
 };
