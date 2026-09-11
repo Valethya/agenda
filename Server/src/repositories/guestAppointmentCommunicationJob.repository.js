@@ -153,12 +153,37 @@ export const enqueueInSession = async ({
   return stored;
 };
 
+const failExpiredProcessingAtAttemptLimit = async (scopedNow) => {
+  await GuestAppointmentCommunicationJob.updateMany(
+    {
+      status: "processing",
+      attempts: { $gte: GUEST_COMMUNICATION_MAX_ATTEMPTS },
+      leaseExpiresAt: { $lte: scopedNow },
+    },
+    {
+      $set: {
+        status: "failed",
+        nextAttemptAt: scopedNow,
+        lastFailureCode: "PROCESSING_LEASE_ATTEMPTS_EXHAUSTED",
+        failedAt: scopedNow,
+        leaseOwner: null,
+        leaseExpiresAt: null,
+      },
+    },
+    { runValidators: true },
+  );
+};
+
 export const claimNext = async ({ workerId, now = new Date(), leaseMs = GUEST_COMMUNICATION_PROCESSING_LEASE_MS }) => {
   const owner = validWorker(workerId);
   const scopedNow = validDate(now, "now");
   const leaseExpiresAt = new Date(scopedNow.getTime() + leaseMs);
+
+  await failExpiredProcessingAtAttemptLimit(scopedNow);
+
   return GuestAppointmentCommunicationJob.findOneAndUpdate(
     {
+      attempts: { $lt: GUEST_COMMUNICATION_MAX_ATTEMPTS },
       $or: [
         { status: { $in: ["queued", "retry"] }, nextAttemptAt: { $lte: scopedNow } },
         { status: "processing", leaseExpiresAt: { $lte: scopedNow } },
