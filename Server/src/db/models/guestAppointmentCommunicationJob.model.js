@@ -74,9 +74,12 @@ const guestAppointmentCommunicationJobSchema = new mongoose.Schema(
       required: true,
       immutable: true,
     },
+    // Production enqueue boundaries always persist this snapshot transactionally.
+    // A malformed/directly-written job without one is tolerated only so the
+    // worker can fail it closed before any external delivery.
     lifecycleSnapshot: {
       type: lifecycleSnapshotSchema,
-      required: true,
+      default: null,
       immutable: true,
     },
     status: {
