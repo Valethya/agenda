@@ -51,8 +51,12 @@ export const createGuestRescheduleAuditInSession = async ({
     },
   }], { session });
 
-  // The audit record and communication intent share the same transaction as the
-  // moved Appointment. External delivery cannot observe this job until commit.
+  const lifecycleSnapshot = await communicationRepository.buildLifecycleSnapshotInSession({
+    businessId,
+    appointment: appointmentId,
+    window: newWindow,
+    session,
+  });
   const jobId = communicationRepository.buildCommunicationJobId({
     event: "reschedule",
     appointmentId,
@@ -63,6 +67,7 @@ export const createGuestRescheduleAuditInSession = async ({
     businessId,
     appointmentId,
     event: "reschedule",
+    lifecycleSnapshot,
     session,
   });
   return audit;
