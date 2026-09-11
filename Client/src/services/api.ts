@@ -20,14 +20,9 @@ import {
   ADMIN_SERVICES_ENDPOINT,
   SERVICE_MUTATION_ENDPOINT
 } from '../features/services/serviceRules';
+import { resolveClientApiUrl } from './apiUrlPolicy';
 
-const configuredApiUrl = import.meta.env.PUBLIC_API_URL;
-
-if (!configuredApiUrl) {
-  throw new Error("PUBLIC_API_URL no está definida");
-}
-
-const API_URL = configuredApiUrl.replace(/\/+$/, '');
+const API_URL = resolveClientApiUrl(import.meta.env.PUBLIC_API_URL, import.meta.env.PROD);
 type JsonBody = object;
 
 export interface ApiRequestInit extends Omit<RequestInit, 'body'> {
