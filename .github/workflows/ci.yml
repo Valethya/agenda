@@ -81,6 +81,20 @@ jobs:
       - name: Run integration tests
         run: npm run test:integration
 
+      - name: Run controlled production-readiness smoke
+        run: node --test --test-force-exit test/jProductionSmoke.test.js
+
+      - name: Rehearse Mongo backup and isolated restore
+        run: |
+          set -euo pipefail
+          docker exec agenda-mongo mongosh --quiet agenda_ci_test --eval 'db.j_backup_rehearsal.updateOne({_id:"phase-j"},{$set:{marker:"safe-non-production"}},{upsert:true})'
+          docker exec agenda-mongo mongodump --quiet --db agenda_ci_test --archive=/tmp/agenda-j-rehearsal.archive
+          docker exec agenda-mongo mongorestore --quiet --archive=/tmp/agenda-j-rehearsal.archive --nsFrom='agenda_ci_test.*' --nsTo='agenda_j_restore_rehearsal.*' --drop
+          RESTORED_MARKER="$(docker exec agenda-mongo mongosh --quiet agenda_j_restore_rehearsal --eval 'db.j_backup_rehearsal.countDocuments({_id:"phase-j",marker:"safe-non-production"})')"
+          test "$RESTORED_MARKER" = "1"
+          docker exec agenda-mongo mongosh --quiet agenda_j_restore_rehearsal --eval 'db.dropDatabase()'
+          docker exec agenda-mongo mongosh --quiet agenda_ci_test --eval 'db.j_backup_rehearsal.deleteOne({_id:"phase-j"})'
+
   frontend:
     name: Frontend checks and build
     runs-on: ubuntu-latest

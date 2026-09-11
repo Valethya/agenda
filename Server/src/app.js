@@ -1,17 +1,22 @@
 import express from "express";
-import morgan from "morgan";
 import cors from "cors";
 import helmet from "helmet";
 import path from "path";
 import __dirname from "./utils/dirname.js";
 import routes from "./routes/index.js";
 import healthRoutes from "./routes/health.routes.js";
-import logger from "./config/logger.js";
 import handleError from "./middleware/handleError.js";
 import session from "express-session";
 import rateLimit from "express-rate-limit";
 import MongoStore from "connect-mongo";
 import { urlMongo, sessionSecret, corsOrigins, frontendUrl, nodeEnv, trustProxyHops } from "./config/env.js";
+import { sessionCookieOptionsFor } from "./config/sessionPolicy.js";
+import {
+  normalizeOrigin,
+  isBearerAuthorizedGuestConsumeRoute,
+  isBearerAuthorizedGuestReadRoute,
+  isDynamicPublicHeadlessRoute,
+} from "./config/corsPolicy.js";
 import {
   PUBLIC_WEB_CORS_LOOKUP_RATE_LIMIT,
   PUBLIC_WEB_CORS_LOOKUP_RATE_WINDOW_MS,
@@ -19,52 +24,15 @@ import {
 import { publicOriginHasFreshTrust } from "./services/publicWeb.service.js";
 import { AppError } from "./utils/appError.js";
 
+export { isBearerAuthorizedGuestConsumeRoute, isBearerAuthorizedGuestReadRoute, isDynamicPublicHeadlessRoute };
+
 export const app = express();
 app.use("/agenda", express.static(path.resolve(__dirname, "../../client/build")));
 app.use("/public", express.static(path.join(__dirname, "/public")));
-
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-if (nodeEnv === "production") {
-  app.set("trust proxy", trustProxyHops);
-}
-
-const normalizeOrigin = (value) => {
-  if (!value) return null;
-  try { return new URL(value).origin; } catch { return null; }
-};
-
-const normalizePath = (value = "") => {
-  if (value.length > 1 && value.endsWith("/")) return value.slice(0, -1);
-  return value;
-};
-
-const requestedCorsMethod = (req) => (
-  req.method === "OPTIONS"
-    ? (req.get("access-control-request-method") || "").toUpperCase()
-    : req.method.toUpperCase()
-);
-
-const requestPath = (req) => normalizePath(
-  req.path || new URL(req.originalUrl || "/", "http://local").pathname,
-);
-
-export const isBearerAuthorizedGuestReadRoute = (req) => (
-  requestedCorsMethod(req) === "POST"
-  && requestPath(req) === "/api/guest-appointments/read"
-);
-
-export const isDynamicPublicHeadlessRoute = (req) => {
-  const pathName = requestPath(req);
-  const requestedMethod = requestedCorsMethod(req);
-  if (requestedMethod === "GET" && /^\/api\/services(?:\/[^/]+)?$/u.test(pathName)) return true;
-  if (requestedMethod === "GET" && pathName === "/api/users/workers") return true;
-  if (requestedMethod === "GET" && pathName === "/api/availability/slots") return true;
-  if (requestedMethod === "POST" && pathName === "/api/appointments") return true;
-  if (requestedMethod === "POST" && /^\/api\/guest-appointments\/read\/(?:challenge|verify)$/u.test(pathName)) return true;
-  return false;
-};
+if (nodeEnv === "production") app.set("trust proxy", trustProxyHops);
 
 const trustedPanelOrigin = normalizeOrigin(frontendUrl);
 const compatibilityOrigins = new Set(
@@ -97,18 +65,12 @@ export const publicWebCorsLookupLimiter = rateLimit({
 app.use(publicWebCorsLookupLimiter);
 
 export const sessionStore = MongoStore.create({ mongoUrl: urlMongo });
-
 export const sessionMiddleware = session({
   secret: sessionSecret,
   resave: false,
   saveUninitialized: false,
   store: sessionStore,
-  cookie: {
-    httpOnly: true,
-    maxAge: 1000 * 60 * 60 * 24,
-    secure: nodeEnv === "production",
-    sameSite: nodeEnv === "production" ? "none" : "lax",
-  },
+  cookie: sessionCookieOptionsFor(nodeEnv),
 });
 app.use(sessionMiddleware);
 
@@ -126,7 +88,7 @@ app.use(
     const requestOrigin = normalizeOrigin(rawOrigin);
     if (!requestOrigin) return callback(corsDenied());
 
-    if (isBearerAuthorizedGuestReadRoute(req)) {
+    if (isBearerAuthorizedGuestConsumeRoute(req)) {
       return callback(null, { origin: true, credentials: false });
     }
 
@@ -149,8 +111,6 @@ app.use(
 );
 
 app.use(helmet());
-
-// Health endpoints stay outside /api rate limiting and expose only coarse state.
 app.use("/health", healthRoutes);
 
 const globalLimiter = rateLimit({
@@ -167,11 +127,7 @@ const globalLimiter = rateLimit({
 });
 
 app.use("/api", globalLimiter, routes);
-
-app.use((req, res) => {
-  res.status(404).json({ error: "Route not found" });
-});
-
+app.use((req, res) => res.status(404).json({ error: "Route not found" }));
 app.use(handleError);
 
 export default app;
