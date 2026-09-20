@@ -166,6 +166,15 @@ Rollback application code when readiness fails, error rate materially increases,
 - **Provider failure:** keep lifecycle DB authoritative; delivery failure must not mutate appointment lifecycle.
 - **Rate-limit anomalies:** validate trusted proxy hop count and client-IP resolution before tuning limits.
 
+## Production acceptance gates
+
+Repository/non-production readiness is **COMPLETE**, but phase J formal acceptance is **PENDING**. Green CI, the controlled non-production smoke, injected/fake delivery, and the isolated backup/restore rehearsal do **not** satisfy the production-only evidence required by the authoritative J acceptance criteria.
+
+- **Acceptance criterion #6 — transactional email against the selected production provider: PENDING EXPLICIT AUTHORIZATION.** No real transactional delivery through the production Resend configuration has been executed or evidenced. The injected non-production provider used by the J smoke is not evidence for criterion #6.
+- **Acceptance criterion #9 — MVP production smoke: PENDING EXPLICIT AUTHORIZATION.** The existing J smoke is deliberately non-production and has not been executed against production. It is not evidence for criterion #9.
+
+Each production verification requires separate explicit authorization for that concrete operation before execution. Until both gates have real evidence conforming to `docs/phases/J-production-readiness.md`, **phase J is not formally complete and must not be treated as accepted or merge-ready**.
+
 ## Production mutations still requiring separate authorization
 
-This repository work does not change Railway/Vercel/Atlas/provider configuration, secrets, DNS, production indexes/data, deployment state, production backups or real email delivery. Those actions remain pending until specifically authorized and should be recorded with impact, rollback and verification evidence.
+This repository work does not change Railway/Vercel/Atlas/provider configuration, secrets, DNS, production indexes/data, deployment state, production backups or real email delivery. Those actions remain pending until specifically authorized and should be recorded with impact, rollback and verification evidence. In particular, production-provider email verification (#6) and the real production MVP smoke (#9) remain acceptance blockers; repository/non-production readiness being complete does not close phase J.
