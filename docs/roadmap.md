@@ -4,9 +4,12 @@ GitHub is the source of truth for the product roadmap. This document records the
 
 ## Current baseline
 
-- `master`: `1d95f52f3d0d89cbdf65d18af2b0a313c450c4f2`
-- Last completed phase: **H3 — Guest reschedule**
-- Status after merge: CI green
+- `master`: `bacfdb022b403850a41f6a0922c620197cf5233e` (merge of Phase I, PR #52)
+- Last completed and merged phase: **I — Guest communications** (H4 and I merged)
+- Phase J: implementation under Draft PR #54; repository/non-production checks green on recorded CI run #590, but production acceptance criteria #6 (real Resend delivery) and #9 (production MVP smoke) remain pending separately authorized verification
+- Phase K: not started; requires reviewed and accepted J
+- Tracking: [PR #54](https://github.com/Valethya/agenda/pull/54) and [issue #55](https://github.com/Valethya/agenda/issues/55)
+- This baseline is documentary, not an approval to merge or deploy
 
 ## MVP definition
 
@@ -42,28 +45,18 @@ The business side must continue to support the already-implemented tenant admini
 - H1 — guest appointment access
 - H2 — guest cancellation
 - H3 — guest reschedule
+- H4 — MVP integration hardening
+- I — Guest communications
 
 ## Remaining MVP phases
 
-### H4 — MVP integration hardening
-
-Validate the already-built A–H3 product as one integrated system. Fix only defects and integration gaps required for the defined MVP; do not introduce unrelated product scope.
-
-Specification: [`phases/H4-mvp-integration-hardening.md`](./phases/H4-mvp-integration-hardening.md)
-
-### I — Guest communications
-
-Close the guest journey with transactional email for booking confirmation and subsequent booking lifecycle changes, using secure access flows rather than exposing bearer secrets.
-
-Specification: [`phases/I-guest-communications.md`](./phases/I-guest-communications.md)
-
-### J — Production readiness
+### J — Production readiness (implementation in Draft PR #54; acceptance pending)
 
 Prepare the application and operating contract for a real production launch: configuration, security, persistence, observability, recovery and production smoke verification.
 
 Specification: [`phases/J-production-readiness.md`](./phases/J-production-readiness.md)
 
-### K — Pilot launch
+### K — Pilot launch (not started)
 
 Run a controlled launch with a real business and real booking journeys. Only defects required to make the defined MVP reliable should feed back into code before public launch.
 
