@@ -70,7 +70,7 @@ const getMailMeta = (branding) => ({
 export const sendResetPasswordEmail = async (email, token) => {
   const resetUrl = `${frontendUrl}/reset-password?token=${token}`;
   const template = templates.resetPassword(resetUrl);
-  await sendMail({ to: email, ...template });
+  await sendSensitiveMail({ to: email, ...template });
 };
 
 export const sendAppointmentBookedEmail = async (email, appointmentDetail) => {
