@@ -51,10 +51,10 @@ export const resetPasswordSchema = z.object({
   body: z.object({
     token: z
       .string({ required_error: "El token de recuperación es obligatorio" })
-      .min(1, "El token no puede estar vacío"),
+      .regex(/^[a-f0-9]{64}$/, "El token de recuperación es inválido"),
     newPassword: z
       .string({ required_error: "La nueva contraseña es obligatoria" })
-      .min(6, "La nueva contraseña debe tener al menos 6 caracteres"),
+      .min(12, "La nueva contraseña debe tener al menos 12 caracteres"),
   }),
 });
 
