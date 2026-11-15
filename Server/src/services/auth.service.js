@@ -6,7 +6,7 @@ import {
   findByEmailPassword,
   findByIdWithPassword,
   updateUser,
-  findByResetToken,
+  consumeResetToken,
   findByPhone,
 } from "../repositories/user.repository.js";
 import * as userRepository from "../repositories/user.repository.js";
@@ -113,23 +113,20 @@ export const updatePassword = async (userId, currentPassword, newPassword) => {
 
 export const sendResetPasswordEmail = async (email) => {
   const user = await findByEmail(email);
-  if (!user) return;
-  const resetToken = crypto.randomBytes(20).toString("hex");
+  if (!user || user.isActive !== true) return;
+  const resetToken = crypto.randomBytes(32).toString("hex");
   await updateUser(user._id, {
-    resetPasswordToken: resetToken,
+    resetPasswordToken: crypto.createHash("sha256").update(resetToken).digest("hex"),
     resetPasswordExpires: Date.now() + 3600000,
   });
   await mailer.sendResetPasswordEmail(email, resetToken);
 };
 
 export const resetPassword = async (token, newPassword) => {
-  const user = await findByResetToken(token);
+  const tokenHash = crypto.createHash("sha256").update(token).digest("hex");
+  const hashedPassword = await createHash(newPassword);
+  const user = await consumeResetToken(tokenHash, hashedPassword);
   if (!user) throw new ValidationError("El enlace de recuperación es inválido o ha expirado");
-  await updateUser(user._id, {
-    password: await createHash(newPassword),
-    resetPasswordToken: null,
-    resetPasswordExpires: null,
-  });
 };
 
 export const getOrCreateGuestUser = async (clientInfo) => {
