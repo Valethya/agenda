@@ -70,6 +70,7 @@ export const login = async (email, password) => {
     lastName: user.lastName,
     email: Array.isArray(user.email) ? user.email[0] : user.email,
     role: user.role,
+    sessionRevision: user.sessionRevision ?? 0,
     memberships: memberships.map(membershipPayload),
   };
 };
@@ -99,6 +100,7 @@ export const loginWithGoogle = async (idToken) => {
     lastName: user.lastName,
     email: Array.isArray(user.email) ? user.email[0] : user.email,
     role: user.role,
+    sessionRevision: user.sessionRevision ?? 0,
     memberships: memberships.map(membershipPayload),
   };
 };
@@ -189,6 +191,7 @@ export const resolveSessionFromUser = (user) => {
         lastName: user.lastName,
         email: user.email,
         role: "superadmin",
+        sessionRevision: user.sessionRevision ?? 0,
       },
     };
   }
@@ -207,6 +210,7 @@ export const resolveSessionFromUser = (user) => {
         lastName: user.lastName,
         email: user.email,
         role: active.role,
+        sessionRevision: user.sessionRevision ?? 0,
         businessId: active.businessId,
         businessSlug: active.businessSlug,
       },
@@ -220,6 +224,7 @@ export const resolveSessionFromUser = (user) => {
       firstName: user.firstName,
       lastName: user.lastName,
       email: user.email,
+      sessionRevision: user.sessionRevision ?? 0,
       memberships: user.memberships,
     },
     memberships: user.memberships,
@@ -245,6 +250,7 @@ export const selectMembership = async (userId, membershipId) => {
     lastName: user.lastName,
     email: Array.isArray(user.email) ? user.email[0] : user.email,
     role: membership.role,
+    sessionRevision: user.sessionRevision ?? 0,
     businessId: membership.business._id,
     businessSlug: membership.business.slug,
   };
@@ -289,7 +295,8 @@ export const switchBusiness = async (userId, businessId) => {
  */
 export const getCurrentUser = async (sessionUser) => {
   const user = await userRepository.findById(sessionUser.id);
-  if (!user || user.isActive !== true) return { type: "invalid_identity" };
+  if (!user || user.isActive !== true ||
+      (sessionUser.sessionRevision ?? 0) !== (user.sessionRevision ?? 0)) return { type: "invalid_identity" };
 
   const memberships = await activeMembershipsForUser(user._id);
   const membershipsPayload = memberships.map(membershipPayload);
