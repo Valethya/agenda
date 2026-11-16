@@ -23,7 +23,7 @@ describe("password recovery contract",()=>{
   const service=read("../../src/services/auth.service.js");
   assert.match(model,/sessionRevision:/);
   assert.match(repo,/\$inc: \{ sessionRevision: 1 \}/);
-  assert.match(middleware,/req\.session\.user\.sessionRevision/);
+  assert.match(middleware,/isSessionRevisionCurrent\(req\.session\.user, user\)/);
   assert.match(service,/sessionUser\.sessionRevision/);
  });
  it("does not disclose account existence on mail provider failure",()=>{
