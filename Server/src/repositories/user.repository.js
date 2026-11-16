@@ -51,11 +51,12 @@ export const updateUser = async (id, updateData) => {
   }
 };
 
-export const findByResetToken = async (token) => {
-  return await User.findOne({
-    resetPasswordToken: token,
-    resetPasswordExpires: { $gt: Date.now() },
-  }).select("+password");
+export const consumeResetToken = async (tokenHash, hashedPassword) => {
+  return await User.findOneAndUpdate(
+    { resetPasswordToken: tokenHash, resetPasswordExpires: { $gt: new Date() }, isActive: true },
+    { $set: { password: hashedPassword }, $inc: { sessionRevision: 1 }, $unset: { resetPasswordToken: "", resetPasswordExpires: "" } },
+    { new: true },
+  );
 };
 
 export const findAll = async (query = {}) => {

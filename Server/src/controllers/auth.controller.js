@@ -70,6 +70,9 @@ export const selectMembership = async (req, res, next) => {
       req.body.membershipId,
     );
 
+    if ((req.session.tempUser.sessionRevision ?? 0) !== (sessionUser.sessionRevision ?? 0)) {
+      throw new UnauthorizedError("La sesión temporal ya no es válida");
+    }
     req.session.user = sessionUser;
     delete req.session.tempUser;
 
@@ -135,6 +138,7 @@ export const getCurrentUser = async (req, res, next) => {
       lastName: userPayload.lastName,
       email: userPayload.email,
       role: userPayload.role,
+      sessionRevision: req.session.user.sessionRevision ?? 0,
       businessId: userPayload.businessId,
       businessSlug: userPayload.businessSlug,
     };
@@ -150,7 +154,13 @@ export const forgotPassword = async (req, res, next) => {
       status: "success",
       message: "Si el correo está registrado en nuestro sistema, recibirás un correo de recuperación en breve.",
     });
-  } catch (error) { next(error); }
+  } catch (_error) {
+    // Do not reveal whether an account exists through provider delivery failures.
+    res.status(200).json({
+      status: "success",
+      message: "Si el correo está registrado en nuestro sistema, recibirás un correo de recuperación en breve.",
+    });
+  }
 };
 
 export const resetPassword = async (req, res, next) => {

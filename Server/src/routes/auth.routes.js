@@ -52,7 +52,7 @@ router.post("/google", requireTrustedAuthenticatedOrigin, validate(googleLoginSc
 router.post("/logout", requireTrustedAuthenticatedOrigin, isAuthenticated, logout);
 router.get("/me", requireTrustedAuthenticatedOrigin, getCurrentUser);
 router.post("/forgot-password", authLimiter, validate(forgotPasswordSchema), forgotPassword);
-router.post("/reset-password", validate(resetPasswordSchema), resetPassword);
+router.post("/reset-password", authLimiter, validate(resetPasswordSchema), resetPassword);
 router.post("/change-password", requireTrustedAuthenticatedOrigin, isAuthenticated, validate(changePasswordSchema), changePassword);
 
 export default router;

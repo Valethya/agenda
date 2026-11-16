@@ -6,7 +6,7 @@ import {
   findByEmailPassword,
   findByIdWithPassword,
   updateUser,
-  findByResetToken,
+  consumeResetToken,
   findByPhone,
 } from "../repositories/user.repository.js";
 import * as userRepository from "../repositories/user.repository.js";
@@ -70,6 +70,7 @@ export const login = async (email, password) => {
     lastName: user.lastName,
     email: Array.isArray(user.email) ? user.email[0] : user.email,
     role: user.role,
+    sessionRevision: user.sessionRevision ?? 0,
     memberships: memberships.map(membershipPayload),
   };
 };
@@ -99,6 +100,7 @@ export const loginWithGoogle = async (idToken) => {
     lastName: user.lastName,
     email: Array.isArray(user.email) ? user.email[0] : user.email,
     role: user.role,
+    sessionRevision: user.sessionRevision ?? 0,
     memberships: memberships.map(membershipPayload),
   };
 };
@@ -113,23 +115,20 @@ export const updatePassword = async (userId, currentPassword, newPassword) => {
 
 export const sendResetPasswordEmail = async (email) => {
   const user = await findByEmail(email);
-  if (!user) return;
-  const resetToken = crypto.randomBytes(20).toString("hex");
+  if (!user || user.isActive !== true) return;
+  const resetToken = crypto.randomBytes(32).toString("hex");
   await updateUser(user._id, {
-    resetPasswordToken: resetToken,
+    resetPasswordToken: crypto.createHash("sha256").update(resetToken).digest("hex"),
     resetPasswordExpires: Date.now() + 3600000,
   });
   await mailer.sendResetPasswordEmail(email, resetToken);
 };
 
 export const resetPassword = async (token, newPassword) => {
-  const user = await findByResetToken(token);
+  const tokenHash = crypto.createHash("sha256").update(token).digest("hex");
+  const hashedPassword = await createHash(newPassword);
+  const user = await consumeResetToken(tokenHash, hashedPassword);
   if (!user) throw new ValidationError("El enlace de recuperación es inválido o ha expirado");
-  await updateUser(user._id, {
-    password: await createHash(newPassword),
-    resetPasswordToken: null,
-    resetPasswordExpires: null,
-  });
 };
 
 export const getOrCreateGuestUser = async (clientInfo) => {
@@ -192,6 +191,7 @@ export const resolveSessionFromUser = (user) => {
         lastName: user.lastName,
         email: user.email,
         role: "superadmin",
+        sessionRevision: user.sessionRevision ?? 0,
       },
     };
   }
@@ -210,6 +210,7 @@ export const resolveSessionFromUser = (user) => {
         lastName: user.lastName,
         email: user.email,
         role: active.role,
+        sessionRevision: user.sessionRevision ?? 0,
         businessId: active.businessId,
         businessSlug: active.businessSlug,
       },
@@ -223,6 +224,7 @@ export const resolveSessionFromUser = (user) => {
       firstName: user.firstName,
       lastName: user.lastName,
       email: user.email,
+      sessionRevision: user.sessionRevision ?? 0,
       memberships: user.memberships,
     },
     memberships: user.memberships,
@@ -248,6 +250,7 @@ export const selectMembership = async (userId, membershipId) => {
     lastName: user.lastName,
     email: Array.isArray(user.email) ? user.email[0] : user.email,
     role: membership.role,
+    sessionRevision: user.sessionRevision ?? 0,
     businessId: membership.business._id,
     businessSlug: membership.business.slug,
   };
@@ -292,7 +295,8 @@ export const switchBusiness = async (userId, businessId) => {
  */
 export const getCurrentUser = async (sessionUser) => {
   const user = await userRepository.findById(sessionUser.id);
-  if (!user || user.isActive !== true) return { type: "invalid_identity" };
+  if (!user || user.isActive !== true ||
+      (sessionUser.sessionRevision ?? 0) !== (user.sessionRevision ?? 0)) return { type: "invalid_identity" };
 
   const memberships = await activeMembershipsForUser(user._id);
   const membershipsPayload = memberships.map(membershipPayload);

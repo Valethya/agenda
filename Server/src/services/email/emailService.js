@@ -70,7 +70,8 @@ const getMailMeta = (branding) => ({
 export const sendResetPasswordEmail = async (email, token) => {
   const resetUrl = `${frontendUrl}/reset-password?token=${token}`;
   const template = templates.resetPassword(resetUrl);
-  await sendMail({ to: email, ...template });
+  const delivery = await sendSensitiveMail({ to: email, ...template });
+  if (!delivery) throw new Error("PASSWORD_RESET_DELIVERY_FAILED");
 };
 
 export const sendAppointmentBookedEmail = async (email, appointmentDetail) => {

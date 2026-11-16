@@ -44,6 +44,7 @@ const userSchema = new mongoose.Schema(
       type: Boolean,
       default: true,
     },
+    sessionRevision: { type: Number, default: 0 },
     resetPasswordToken: {
       type: String,
       select: false, // No se incluye por defecto en las consultas

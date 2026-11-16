@@ -25,6 +25,7 @@ describe("resolveSessionFromUser", () => {
       lastName: "Super",
       email: "admin@test.com",
       role: "superadmin",
+      sessionRevision: 0,
     });
     assert.equal(result.tempUser, undefined);
     assert.equal(result.memberships, undefined);
