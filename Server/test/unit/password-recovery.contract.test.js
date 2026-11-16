@@ -22,14 +22,14 @@ describe("password recovery contract",()=>{
   const middleware=read("../../src/middleware/auth.middleware.js");
   const service=read("../../src/services/auth.service.js");
   assert.match(model,/sessionRevision:/);
-  assert.match(repo,/\\$inc: \\{ sessionRevision: 1 \\}/);
-  assert.match(middleware,/req\\.session\\.user\\.sessionRevision/);
-  assert.match(service,/sessionUser\\.sessionRevision/);
+  assert.match(repo,/\$inc: \{ sessionRevision: 1 \}/);
+  assert.match(middleware,/req\.session\.user\.sessionRevision/);
+  assert.match(service,/sessionUser\.sessionRevision/);
  });
  it("does not disclose account existence on mail provider failure",()=>{
   const controller=read("../../src/controllers/auth.controller.js");
   assert.match(controller,/export const forgotPassword/);
-  assert.match(controller,/catch \\(_error\\)/);
+  assert.match(controller,/catch \(_error\)/);
   assert.match(controller,/Si el correo está registrado/);
  });
  it("uses sensitive email delivery and rate limits both public endpoints",()=>{
