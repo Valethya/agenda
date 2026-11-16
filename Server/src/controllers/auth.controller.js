@@ -70,6 +70,9 @@ export const selectMembership = async (req, res, next) => {
       req.body.membershipId,
     );
 
+    if ((req.session.tempUser.sessionRevision ?? 0) !== (sessionUser.sessionRevision ?? 0)) {
+      throw new UnauthorizedError("La sesión temporal ya no es válida");
+    }
     req.session.user = sessionUser;
     delete req.session.tempUser;
 
@@ -135,6 +138,7 @@ export const getCurrentUser = async (req, res, next) => {
       lastName: userPayload.lastName,
       email: userPayload.email,
       role: userPayload.role,
+      sessionRevision: req.session.user.sessionRevision ?? 0,
       businessId: userPayload.businessId,
       businessSlug: userPayload.businessSlug,
     };
