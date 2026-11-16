@@ -150,7 +150,13 @@ export const forgotPassword = async (req, res, next) => {
       status: "success",
       message: "Si el correo está registrado en nuestro sistema, recibirás un correo de recuperación en breve.",
     });
-  } catch (error) { next(error); }
+  } catch (_error) {
+    // Do not reveal whether an account exists through provider delivery failures.
+    res.status(200).json({
+      status: "success",
+      message: "Si el correo está registrado en nuestro sistema, recibirás un correo de recuperación en breve.",
+    });
+  }
 };
 
 export const resetPassword = async (req, res, next) => {
