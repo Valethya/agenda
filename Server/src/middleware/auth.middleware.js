@@ -7,7 +7,8 @@ export const isAuthenticated = async (req, res, next) => {
 
   try {
     const user = req.tenantAuthority?.user || await userRepository.findById(req.session.user.id);
-    if (!user || user.isActive !== true) {
+    if (!user || user.isActive !== true ||
+      (req.session.user.sessionRevision ?? 0) !== (user.sessionRevision ?? 0)) {
       return res.status(401).json({ message: "No autorizado" });
     }
 
